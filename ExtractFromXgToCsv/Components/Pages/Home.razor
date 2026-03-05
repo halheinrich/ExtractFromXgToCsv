@@ -1,0 +1,168 @@
+@page "/"
+@rendermode InteractiveServer
+@inject XgProcessingService Processor
+@inject CsvDownloadService Downloader
+@inject IWebHostEnvironment Env
+
+<PageTitle>ExtractFromXgToCsv</PageTitle>
+
+<h1>Extract XG Decisions to CSV</h1>
+
+@* ── LOCAL MODE ─────────────────────────────────────────────────────────────── *@
+@if (Processor.IsLocalEnvironment)
+{
+    <section class="mb-4">
+        <h4>Local Mode — Folder Input</h4>
+        <div class="input-group mb-2" style="max-width:600px">
+            <input class="form-control" placeholder="e.g. C:\XG\Matches"
+                   @bind="_folderPath" @bind:event="oninput" />
+            <button class="btn btn-primary" @onclick="ProcessFolderAsync"
+                    disabled="@_busy">
+                @(_busy ? "Processing…" : "Process Folder")
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_localOutputPath))
+        {
+            <div class="alert alert-success">
+                CSV written to: <code>@_localOutputPath</code>
+            </div>
+        }
+    </section>
+}
+
+@* ── AZURE / BROWSER MODE ────────────────────────────────────────────────────── *@
+@if (!Processor.IsLocalEnvironment)
+{
+    <section class="mb-4">
+        <h4>Upload .xg / .xgp Files</h4>
+        <InputFile OnChange="HandleFileUploadAsync" multiple
+                   accept=".xg,.xgp" class="form-control mb-2" style="max-width:500px" />
+    </section>
+}
+
+@* ── SHARED: status + download + preview ────────────────────────────────────── *@
+@if (!string.IsNullOrEmpty(_statusMessage))
+{
+    <div class="alert @(_hasError ? "alert-danger" : "alert-info")">@_statusMessage</div>
+}
+
+@if (_rows.Count > 0)
+{
+    <div class="mb-3">
+        <button class="btn btn-success me-2" @onclick="DownloadCsvAsync">
+            ⬇ Download CSV (@_rows.Count rows)
+        </button>
+        <span class="text-muted small">@_rows.Count decision(s) extracted</span>
+    </div>
+
+    <h5>Preview (first 20 rows)</h5>
+    <div style="overflow-x:auto">
+        <table class="table table-sm table-striped table-bordered">
+            <thead class="table-dark">
+                <tr>
+                    <th>Xgid</th><th>Error</th><th>MatchScore</th><th>MatchLength</th>
+                    <th>Player</th><th>Match</th><th>Game</th><th>MoveNum</th>
+                    <th>Roll</th><th>AnalysisDepth</th><th>Equity</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _rows.Take(20))
+                {
+                    <tr>
+                        <td><code style="font-size:.75em">@r.Xgid</code></td>
+                        <td>@r.Error</td>
+                        <td>@r.MatchScore</td>
+                        <td>@r.MatchLength</td>
+                        <td>@r.Player</td>
+                        <td>@r.Match</td>
+                        <td>@r.Game</td>
+                        <td>@r.MoveNum</td>
+                        <td>@r.Roll</td>
+                        <td>@r.AnalysisDepth</td>
+                        <td>@r.Equity</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private string _folderPath     = string.Empty;
+    private string _statusMessage  = string.Empty;
+    private string _localOutputPath = string.Empty;
+    private bool   _busy           = false;
+    private bool   _hasError       = false;
+    private List<DecisionRow> _rows = new();
+    private string _csvContent     = string.Empty;
+
+    // ── LOCAL: process every .xg/.xgp in the chosen folder ───────────────────
+    private async Task ProcessFolderAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_folderPath)) return;
+
+        _busy = true; _hasError = false; _statusMessage = "Scanning folder…";
+        _rows.Clear(); _csvContent = string.Empty; _localOutputPath = string.Empty;
+
+        try
+        {
+            var files = Processor.GetXgFilesInFolder(_folderPath);
+            _statusMessage = $"Found {files.Count} file(s). Processing…";
+            StateHasChanged();
+
+            foreach (var path in files)
+            {
+                var bytes = await File.ReadAllBytesAsync(path);
+                _rows.AddRange(Processor.ExtractDecisions(bytes, Path.GetFileName(path)));
+            }
+
+            _csvContent = Processor.BuildCsv(_rows);
+
+            // Write to same folder as input, timestamped
+            var outFile = Path.Combine(_folderPath,
+                $"decisions_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+            await Processor.WriteLocalCsvAsync(outFile, _csvContent);
+            _localOutputPath = outFile;
+
+            _statusMessage = $"Done — {_rows.Count} decisions from {files.Count} file(s).";
+        }
+        catch (Exception ex)
+        {
+            _hasError = true;
+            _statusMessage = $"Error: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    // ── AZURE / BROWSER: handle uploaded files ────────────────────────────────
+    private async Task HandleFileUploadAsync(InputFileChangeEventArgs e)
+    {
+        _hasError = false; _statusMessage = "Reading uploaded files…";
+        _rows.Clear(); _csvContent = string.Empty;
+
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(50))
+            {
+                using var ms = new MemoryStream();
+                await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
+                _rows.AddRange(Processor.ExtractDecisions(ms.ToArray(), file.Name));
+            }
+
+            _csvContent = Processor.BuildCsv(_rows);
+            _statusMessage = $"Done — {_rows.Count} decisions extracted. Click Download to save.";
+        }
+        catch (Exception ex)
+        {
+            _hasError = true;
+            _statusMessage = $"Error: {ex.Message}";
+        }
+    }
+
+    // ── SHARED: browser download ───────────────────────────────────────────────
+    private async Task DownloadCsvAsync()
+    {
+        if (string.IsNullOrEmpty(_csvContent)) return;
+        await Downloader.DownloadAsync(_csvContent, $"decisions_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+    }
+}

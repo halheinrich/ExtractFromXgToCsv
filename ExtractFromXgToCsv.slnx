@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="ExtractFromXgToCsv\ExtractFromXgToCsv.csproj" />
+  <Project Path="ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
+</Solution>
