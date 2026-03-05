@@ -1,9 +1,8 @@
-@using ConvertXgToJson_Lib.Models 
+@using ConvertXgToJson_Lib.Models
 @page "/"
 @rendermode InteractiveServer
 @inject XgProcessingService Processor
-@inject CsvDownloadService Downloader
-@inject IWebHostEnvironment Env
+@inject IJSRuntime JS
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
 
@@ -13,19 +12,33 @@
 @if (Processor.IsLocalEnvironment)
 {
     <section class="mb-4">
-        <h4>Local Mode — Folder Input</h4>
-        <div class="mb-2" style="max-width:800px">
+        <div style="max-width:800px">
+            <label class="form-label">Input Folder</label>
             <input class="form-control mb-2" placeholder="e.g. C:\XG\Matches"
-                   @bind="_folderPath" @bind:event="oninput" />
+                   value="@_folderPath"
+                   @oninput="OnInputFolderChanged" />
+
+            <label class="form-label">Output Folder</label>
+            <input class="form-control mb-2" placeholder="Defaults to input folder"
+                   value="@_outputFolder"
+                   @oninput="OnOutputFolderChanged" />
+
+            <label class="form-label">CSV Filename</label>
+            <input class="form-control mb-3" placeholder="decisions.csv"
+                   value="@_csvFileName"
+                   @oninput="OnCsvFileNameChanged" />
+
             <button class="btn btn-primary" @onclick="ProcessFolderAsync"
                     disabled="@_busy">
-                @(_busy ? "Processing…" : "Process Folder")
+                @(_busy ? "Processing…" : "Extract decisions")
             </button>
         </div>
+
         @if (!string.IsNullOrEmpty(_localOutputPath))
         {
-            <div class="alert alert-success">
+            <div class="alert alert-success mt-3">
                 CSV written to: <code>@_localOutputPath</code>
+                &nbsp;(@_rows.Count rows)
             </div>
         }
     </section>
@@ -41,29 +54,31 @@
     </section>
 }
 
-@* ── SHARED: status + download + preview ────────────────────────────────────── *@
-@if (!string.IsNullOrEmpty(_statusMessage))
+@* ── ERROR ───────────────────────────────────────────────────────────────────── *@
+@if (_hasError && !string.IsNullOrEmpty(_statusMessage))
 {
-    <div class="alert @(_hasError ? "alert-danger" : "alert-info")">@_statusMessage</div>
+    <div class="alert alert-danger mt-2">@_statusMessage</div>
 }
 
+@* ── PREVIEW ─────────────────────────────────────────────────────────────────── *@
 @if (_rows.Count > 0)
 {
-    <div class="mb-3">
-        <button class="btn btn-success me-2" @onclick="DownloadCsvAsync">
-            ⬇ Download CSV (@_rows.Count rows)
-        </button>
-        <span class="text-muted small">@_rows.Count decision(s) extracted</span>
-    </div>
-
-    <h5>Preview (first 20 rows)</h5>
+    <h5>Preview (first 20 of @_rows.Count rows)</h5>
     <div style="overflow-x:auto">
         <table class="table table-sm table-striped table-bordered">
             <thead class="table-dark">
                 <tr>
-                    <th>Xgid</th><th>Error</th><th>MatchScore</th><th>MatchLength</th>
-                    <th>Player</th><th>Match</th><th>Game</th><th>MoveNum</th>
-                    <th>Roll</th><th>AnalysisDepth</th><th>Equity</th>
+                    <th>Xgid</th>
+                    <th>Error</th>
+                    <th>MatchScore</th>
+                    <th>MatchLength</th>
+                    <th>Player</th>
+                    <th>Match</th>
+                    <th>Game</th>
+                    <th>MoveNum</th>
+                    <th>Roll</th>
+                    <th>AnalysisDepth</th>
+                    <th>Equity</th>
                 </tr>
             </thead>
             <tbody>
@@ -89,26 +104,64 @@
 }
 
 @code {
-    private string _folderPath     = string.Empty;
-    private string _statusMessage  = string.Empty;
+    private string _folderPath = string.Empty;
+    private string _outputFolder = string.Empty;
+    private string _csvFileName = "decisions.csv";
+    private string _statusMessage = string.Empty;
     private string _localOutputPath = string.Empty;
-    private bool   _busy           = false;
-    private bool   _hasError       = false;
-    private List<ConvertXgToJson_Lib.Models.DecisionRow> _rows = new();
-    private string _csvContent     = string.Empty;
+    private bool _busy = false;
+    private bool _hasError = false;
+    private List<DecisionRow> _rows = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _folderPath = await JS.InvokeAsync<string>("localStorage.getItem", "xg_inputFolder") ?? string.Empty;
+            _outputFolder = await JS.InvokeAsync<string>("localStorage.getItem", "xg_outputFolder") ?? string.Empty;
+            _csvFileName = await JS.InvokeAsync<string>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
+            StateHasChanged();
+        }
+    }
+
+    private async Task SavePrefsAsync()
+    {
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_inputFolder", _folderPath);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputFolder", _outputFolder);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+    }
+
+    private async Task OnInputFolderChanged(ChangeEventArgs e)
+    {
+        _folderPath = e.Value?.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(_outputFolder))
+            _outputFolder = _folderPath;
+        await SavePrefsAsync();
+    }
+
+    private async Task OnOutputFolderChanged(ChangeEventArgs e)
+    {
+        _outputFolder = e.Value?.ToString() ?? string.Empty;
+        await SavePrefsAsync();
+    }
+
+    private async Task OnCsvFileNameChanged(ChangeEventArgs e)
+    {
+        _csvFileName = e.Value?.ToString() ?? string.Empty;
+        await SavePrefsAsync();
+    }
 
     // ── LOCAL: process every .xg/.xgp in the chosen folder ───────────────────
     private async Task ProcessFolderAsync()
     {
         if (string.IsNullOrWhiteSpace(_folderPath)) return;
 
-        _busy = true; _hasError = false; _statusMessage = "Scanning folder…";
-        _rows.Clear(); _csvContent = string.Empty; _localOutputPath = string.Empty;
+        _busy = true; _hasError = false; _statusMessage = string.Empty;
+        _rows.Clear(); _localOutputPath = string.Empty;
 
         try
         {
             var files = Processor.GetXgFilesInFolder(_folderPath);
-            _statusMessage = $"Found {files.Count} file(s). Processing…";
             StateHasChanged();
 
             foreach (var path in files)
@@ -117,15 +170,13 @@
                 _rows.AddRange(Processor.ExtractDecisions(bytes, Path.GetFileName(path)));
             }
 
-            _csvContent = Processor.BuildCsv(_rows);
+            var csv = Processor.BuildCsv(_rows);
+            var outDir = string.IsNullOrWhiteSpace(_outputFolder) ? _folderPath : _outputFolder;
+            var outName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
+            var outFile = Path.Combine(outDir, outName);
 
-            // Write to same folder as input, timestamped
-            var outFile = Path.Combine(_folderPath,
-                $"decisions_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
-            await Processor.WriteLocalCsvAsync(outFile, _csvContent);
+            await Processor.WriteLocalCsvAsync(outFile, csv);
             _localOutputPath = outFile;
-
-            _statusMessage = $"Done — {_rows.Count} decisions from {files.Count} file(s).";
         }
         catch (Exception ex)
         {
@@ -138,8 +189,8 @@
     // ── AZURE / BROWSER: handle uploaded files ────────────────────────────────
     private async Task HandleFileUploadAsync(InputFileChangeEventArgs e)
     {
-        _hasError = false; _statusMessage = "Reading uploaded files…";
-        _rows.Clear(); _csvContent = string.Empty;
+        _hasError = false; _statusMessage = string.Empty;
+        _rows.Clear();
 
         try
         {
@@ -149,21 +200,11 @@
                 await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
                 _rows.AddRange(Processor.ExtractDecisions(ms.ToArray(), file.Name));
             }
-
-            _csvContent = Processor.BuildCsv(_rows);
-            _statusMessage = $"Done — {_rows.Count} decisions extracted. Click Download to save.";
         }
         catch (Exception ex)
         {
             _hasError = true;
             _statusMessage = $"Error: {ex.Message}";
         }
-    }
-
-    // ── SHARED: browser download ───────────────────────────────────────────────
-    private async Task DownloadCsvAsync()
-    {
-        if (string.IsNullOrEmpty(_csvContent)) return;
-        await Downloader.DownloadAsync(_csvContent, $"decisions_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
     }
 }

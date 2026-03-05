@@ -9,7 +9,6 @@ builder.Services.AddRazorComponents()
     .AddInteractiveWebAssemblyComponents();
 
 builder.Services.AddScoped<XgProcessingService>();
-builder.Services.AddScoped<CsvDownloadService>();
 
 var app = builder.Build();
 
