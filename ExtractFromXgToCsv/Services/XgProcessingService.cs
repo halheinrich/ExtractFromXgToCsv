@@ -1,4 +1,5 @@
-using ExtractFromXgToCsv.Models;
+using ConvertXgToJson_Lib;
+using ConvertXgToJson_Lib.Models;
 using Microsoft.AspNetCore.Hosting;
 using System.Text;
 
@@ -13,7 +14,10 @@ public class XgProcessingService
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<XgProcessingService> _logger;
 
-    // True when running on a developer machine (not Azure App Service / Azure Functions)
+    /// <summary>
+    /// True when running on a developer machine (not Azure App Service).
+    /// Azure App Service always sets WEBSITE_INSTANCE_ID.
+    /// </summary>
     public bool IsLocalEnvironment =>
         !_env.IsProduction() ||
         string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID"));
@@ -24,14 +28,6 @@ public class XgProcessingService
         _logger = logger;
     }
 
-    // -------------------------------------------------------------------------
-    // LOCAL: scan a folder for .xg / .xgp files
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Returns all .xg and .xgp file paths under <paramref name="folderPath"/>.
-    /// Only available in local (non-Azure) mode.
-    /// </summary>
     public IReadOnlyList<string> GetXgFilesInFolder(string folderPath)
     {
         if (!IsLocalEnvironment)
@@ -48,47 +44,17 @@ public class XgProcessingService
             .ToList();
     }
 
-    // -------------------------------------------------------------------------
-    // CORE: process one file (bytes) → list of DecisionRow
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Parses a single .xg/.xgp file and returns all decision rows.
-    /// Delegates to ConvertXgToJson_Lib.XgDecisionIterator once the lib is wired up.
-    /// </summary>
     public IReadOnlyList<DecisionRow> ExtractDecisions(byte[] fileBytes, string fileName)
     {
         _logger.LogInformation("Extracting decisions from {FileName} ({Bytes} bytes)", fileName, fileBytes.Length);
 
-        // TODO: replace stub with real call once ConvertXgToJson_Lib submodule is linked:
-        //
-        //   var iterator = new XgDecisionIterator(fileBytes);
-        //   return iterator.ToList();
+        using var ms = new MemoryStream(fileBytes);
+        var xgFile = XgFileReader.ReadStream(ms);
 
-        // --- STUB: returns a single placeholder row so the UI is exercisable ---
-        return new List<DecisionRow>
-        {
-            new DecisionRow(
-                Xgid:          "XGID=-b----E-C---eE---c-e----B-:0:0:1:00:0:0:0:5:10",
-                Error:         0.042,
-                MatchScore:    "0-0",
-                MatchLength:   5,
-                Player:        "Player1",
-                Match:         Path.GetFileNameWithoutExtension(fileName),
-                Game:          1,
-                MoveNum:       1,
-                Roll:          "31",
-                AnalysisDepth: 3,
-                Equity:        0.153
-            )
-        };
+        string matchId = Path.GetFileNameWithoutExtension(fileName);
+        return XgDecisionIterator.Iterate(xgFile, matchId).ToList();
     }
 
-    // -------------------------------------------------------------------------
-    // CSV builder
-    // -------------------------------------------------------------------------
-
-    /// <summary>Renders a collection of DecisionRows as a UTF-8 CSV string.</summary>
     public string BuildCsv(IEnumerable<DecisionRow> rows)
     {
         var sb = new StringBuilder();
@@ -98,14 +64,6 @@ public class XgProcessingService
         return sb.ToString();
     }
 
-    // -------------------------------------------------------------------------
-    // LOCAL: write CSV to disk
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Writes <paramref name="csvContent"/> to <paramref name="outputPath"/>.
-    /// Only available in local mode.
-    /// </summary>
     public async Task WriteLocalCsvAsync(string outputPath, string csvContent)
     {
         if (!IsLocalEnvironment)

@@ -1,3 +1,4 @@
+@using ConvertXgToJson_Lib.Models 
 @page "/"
 @rendermode InteractiveServer
 @inject XgProcessingService Processor
@@ -93,7 +94,7 @@
     private string _localOutputPath = string.Empty;
     private bool   _busy           = false;
     private bool   _hasError       = false;
-    private List<DecisionRow> _rows = new();
+    private List<ConvertXgToJson_Lib.Models.DecisionRow> _rows = new();
     private string _csvContent     = string.Empty;
 
     // ── LOCAL: process every .xg/.xgp in the chosen folder ───────────────────
