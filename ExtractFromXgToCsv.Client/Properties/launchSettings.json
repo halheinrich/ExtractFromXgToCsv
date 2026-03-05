@@ -1,8 +1,11 @@
 {
+  // ExtractFromXgToCsv.Client — WebAssembly client project.
+  // This project is NOT launched directly. It is hosted by the server project.
+  // Launch the server project (ExtractFromXgToCsv) instead.
   "profiles": {
     "ExtractFromXgToCsv.Client": {
       "commandName": "Project",
-      "launchBrowser": true,
+      "launchBrowser": false,
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },

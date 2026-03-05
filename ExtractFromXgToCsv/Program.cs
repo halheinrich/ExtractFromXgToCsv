@@ -1,14 +1,13 @@
+// *** SERVER PROJECT — ExtractFromXgToCsv ***
 using ExtractFromXgToCsv.Components;
 using ExtractFromXgToCsv.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Blazor Web App (Auto) — SSR + interactive WebAssembly
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
-// Application services
 builder.Services.AddScoped<XgProcessingService>();
 builder.Services.AddScoped<CsvDownloadService>();
 
@@ -22,6 +21,7 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
+app.MapStaticAssets();
 app.UseAntiforgery();
 
 app.MapRazorComponents<App>()

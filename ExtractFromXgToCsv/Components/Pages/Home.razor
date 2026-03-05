@@ -14,8 +14,8 @@
 {
     <section class="mb-4">
         <h4>Local Mode — Folder Input</h4>
-        <div class="input-group mb-2" style="max-width:600px">
-            <input class="form-control" placeholder="e.g. C:\XG\Matches"
+        <div class="mb-2" style="max-width:800px">
+            <input class="form-control mb-2" placeholder="e.g. C:\XG\Matches"
                    @bind="_folderPath" @bind:event="oninput" />
             <button class="btn btn-primary" @onclick="ProcessFolderAsync"
                     disabled="@_busy">

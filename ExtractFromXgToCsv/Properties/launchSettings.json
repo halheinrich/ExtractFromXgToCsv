@@ -1,4 +1,6 @@
 {
+  // ExtractFromXgToCsv — Server project (Kestrel/ASP.NET Core host).
+  // This is the startup project. Launch this one with F5.
   "profiles": {
     "ExtractFromXgToCsv": {
       "commandName": "Project",
@@ -6,7 +8,7 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:61600;http://localhost:61601"
+      "applicationUrl": "https://localhost:7195;http://localhost:5195"
     }
   }
 }
