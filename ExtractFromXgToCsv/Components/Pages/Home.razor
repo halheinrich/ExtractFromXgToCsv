@@ -1,4 +1,5 @@
 @using ConvertXgToJson_Lib.Models
+@using XgFilter_Lib.Filtering
 @page "/"
 @rendermode InteractiveServer
 @inject XgProcessingService Processor
@@ -38,7 +39,7 @@
         {
             <div class="alert alert-success mt-3">
                 CSV written to: <code>@_localOutputPath</code>
-                &nbsp;(@_rows.Count rows)
+                &nbsp;(@_filteredCount of @_rows.Count rows)
             </div>
         }
     </section>
@@ -60,10 +61,18 @@
     <div class="alert alert-danger mt-2">@_statusMessage</div>
 }
 
+@* ── FILTERS ─────────────────────────────────────────────────────────────────── *@
+@if (_rows.Count > 0)
+{
+    <FilterPanel OnFiltersChanged="OnFiltersChanged" />
+}
+
 @* ── PREVIEW ─────────────────────────────────────────────────────────────────── *@
 @if (_rows.Count > 0)
 {
-    <h5>Preview (first 20 of @_rows.Count rows)</h5>
+    var filtered = _filterSet.Apply(_rows).ToList();
+
+    <h5>Preview (first 20 of @filtered.Count filtered rows, @_rows.Count total)</h5>
     <div style="overflow-x:auto">
         <table class="table table-sm table-striped table-bordered">
             <thead class="table-dark">
@@ -82,7 +91,7 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var r in _rows.Take(20))
+                @foreach (var r in filtered.Take(20))
                 {
                     <tr>
                         <td><code style="font-size:.75em">@r.Xgid</code></td>
@@ -111,8 +120,19 @@
     private string _localOutputPath = string.Empty;
     private bool _busy = false;
     private bool _hasError = false;
-    private List<DecisionRow> _rows = new();
+    private int _filteredCount = 0;
 
+    private List<DecisionRow> _rows = new();
+    private DecisionFilterSet _filterSet = new();
+
+    // ── Filter callback ───────────────────────────────────────────────────────
+    private void OnFiltersChanged(DecisionFilterSet fs)
+    {
+        _filterSet = fs;
+        StateHasChanged();
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -157,7 +177,8 @@
         if (string.IsNullOrWhiteSpace(_folderPath)) return;
 
         _busy = true; _hasError = false; _statusMessage = string.Empty;
-        _rows.Clear(); _localOutputPath = string.Empty;
+        _rows.Clear(); _localOutputPath = string.Empty; _filteredCount = 0;
+        _filterSet = new();
 
         try
         {
@@ -170,7 +191,10 @@
                 _rows.AddRange(Processor.ExtractDecisions(bytes, Path.GetFileName(path)));
             }
 
-            var csv = Processor.BuildCsv(_rows);
+            var filtered = _filterSet.Apply(_rows).ToList();
+            _filteredCount = filtered.Count;
+
+            var csv = Processor.BuildCsv(filtered);
             var outDir = string.IsNullOrWhiteSpace(_outputFolder) ? _folderPath : _outputFolder;
             var outName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
             var outFile = Path.Combine(outDir, outName);
@@ -191,6 +215,7 @@
     {
         _hasError = false; _statusMessage = string.Empty;
         _rows.Clear();
+        _filterSet = new();
 
         try
         {

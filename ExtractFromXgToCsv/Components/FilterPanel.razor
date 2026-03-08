@@ -1,0 +1,264 @@
+﻿@using XgFilter_Lib.Filtering
+@using XgFilter_Lib.Enums
+
+@* ── FilterPanel.razor ───────────────────────────────────────────────────────
+   Owns all filter state. Raises OnFiltersChanged with a rebuilt DecisionFilterSet
+   whenever any control changes. Home.razor applies the set to _rows before CSV output.
+   Location: ExtractFromXgToCsv/Components/FilterPanel.razor
+──────────────────────────────────────────────────────────────────────────── *@
+
+<div class="card mb-4" style="max-width:800px">
+    <div class="card-header">
+        <strong>Filters</strong>
+    </div>
+    <div class="card-body">
+
+        @* ── Player ──────────────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">
+                Player names
+                <small class="text-muted">(comma-separated; blank = all players)</small>
+            </label>
+            <input class="form-control"
+                   placeholder="e.g. Hal, Magriel"
+                   value="@_playerText"
+                   @oninput="OnPlayerChanged" />
+        </div>
+
+        @* ── Decision type ────────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">Decision type</label>
+            <div>
+                @foreach (var opt in Enum.GetValues<DecisionTypeOption>())
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio"
+                               name="decisionType"
+                               id="dt_@opt"
+                               checked="@(_decisionType == opt)"
+                               @onchange="() => OnDecisionTypeChanged(opt)" />
+                        <label class="form-check-label" for="dt_@opt">
+                            @DecisionTypeLabel(opt)
+                        </label>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ── Match score ──────────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">
+                Match scores
+                <small class="text-muted">(comma-separated; blank = all scores)</small>
+            </label>
+            <input class="form-control"
+                   placeholder="e.g. 5a5a, DMP, money"
+                   value="@_matchScoreText"
+                   @oninput="OnMatchScoreChanged" />
+        </div>
+
+        @* ── Error range ──────────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">
+                Error range
+                <small class="text-muted">(inclusive; blank = no bound)</small>
+            </label>
+            <div class="d-flex gap-2 align-items-center">
+                <input class="form-control" style="max-width:140px"
+                       type="number" step="0.001" placeholder="Min"
+                       value="@_errorMinText"
+                       @oninput="OnErrorMinChanged" />
+                <span>–</span>
+                <input class="form-control" style="max-width:140px"
+                       type="number" step="0.001" placeholder="Max"
+                       value="@_errorMaxText"
+                       @oninput="OnErrorMaxChanged" />
+            </div>
+        </div>
+
+        @* ── Position type ────────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">
+                Position type
+                <small class="text-muted">(none checked = all types)</small>
+            </label>
+            @* STUB: PositionTypeFilter.ClassifyPosition always returns Contact
+                     until the XGID decoder is implemented in XgFilter_Lib. *@
+            <div>
+                @foreach (var pt in Enum.GetValues<PositionType>())
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox"
+                               id="pt_@pt"
+                               checked="@_positionTypes.Contains(pt)"
+                               @onchange="(e) => OnPositionTypeChanged(pt, e)" />
+                        <label class="form-check-label" for="pt_@pt">@pt</label>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ── Play type ────────────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">
+                Play type
+                <small class="text-muted">(checker plays only; none checked = all types)</small>
+            </label>
+            @* STUB: PlayTypeFilter.ClassifyPlay always returns RunningPlay
+                     until move-analysis logic is implemented in XgFilter_Lib. *@
+            <div>
+                @foreach (var pt in Enum.GetValues<PlayType>())
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox"
+                               id="plt_@pt"
+                               checked="@_playTypes.Contains(pt)"
+                               @onchange="(e) => OnPlayTypeChanged(pt, e)" />
+                        <label class="form-check-label" for="plt_@pt">@PlayTypeLabel(pt)</label>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ── Reset ────────────────────────────────────────────────────────────── *@
+        <button class="btn btn-outline-secondary btn-sm" @onclick="ResetAsync">
+            Reset filters
+        </button>
+
+    </div>
+</div>
+
+@code {
+    // ── Parameter ─────────────────────────────────────────────────────────────
+    [Parameter] public EventCallback<DecisionFilterSet> OnFiltersChanged { get; set; }
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private string _playerText = string.Empty;
+    private DecisionTypeOption _decisionType = DecisionTypeOption.Both;
+    private string _matchScoreText = string.Empty;
+    private string _errorMinText = string.Empty;
+    private string _errorMaxText = string.Empty;
+    private HashSet<PositionType> _positionTypes = new();
+    private HashSet<PlayType> _playTypes = new();
+
+    // ── Event handlers ────────────────────────────────────────────────────────
+    private async Task OnPlayerChanged(ChangeEventArgs e)
+    {
+        _playerText = e.Value?.ToString() ?? string.Empty;
+        await RaiseAsync();
+    }
+
+    private async Task OnDecisionTypeChanged(DecisionTypeOption opt)
+    {
+        _decisionType = opt;
+        await RaiseAsync();
+    }
+
+    private async Task OnMatchScoreChanged(ChangeEventArgs e)
+    {
+        _matchScoreText = e.Value?.ToString() ?? string.Empty;
+        await RaiseAsync();
+    }
+
+    private async Task OnErrorMinChanged(ChangeEventArgs e)
+    {
+        _errorMinText = e.Value?.ToString() ?? string.Empty;
+        await RaiseAsync();
+    }
+
+    private async Task OnErrorMaxChanged(ChangeEventArgs e)
+    {
+        _errorMaxText = e.Value?.ToString() ?? string.Empty;
+        await RaiseAsync();
+    }
+
+    private async Task OnPositionTypeChanged(PositionType pt, ChangeEventArgs e)
+    {
+        if (e.Value is bool b && b) _positionTypes.Add(pt);
+        else _positionTypes.Remove(pt);
+        await RaiseAsync();
+    }
+
+    private async Task OnPlayTypeChanged(PlayType pt, ChangeEventArgs e)
+    {
+        if (e.Value is bool b && b) _playTypes.Add(pt);
+        else _playTypes.Remove(pt);
+        await RaiseAsync();
+    }
+
+    private async Task ResetAsync()
+    {
+        _playerText = string.Empty;
+        _decisionType = DecisionTypeOption.Both;
+        _matchScoreText = string.Empty;
+        _errorMinText = string.Empty;
+        _errorMaxText = string.Empty;
+        _positionTypes = new();
+        _playTypes = new();
+        await RaiseAsync();
+    }
+
+    // ── Build and raise DecisionFilterSet ─────────────────────────────────────
+    private async Task RaiseAsync()
+    {
+        var set = new DecisionFilterSet();
+
+        // PlayerFilter — only add if at least one name provided
+        var players = SplitTokens(_playerText);
+        if (players.Count > 0)
+            set.Add(new PlayerFilter(players));
+
+        // DecisionTypeFilter — always add (Both is a no-op but explicit)
+        set.Add(new DecisionTypeFilter(_decisionType));
+
+        // MatchScoreFilter — only add if at least one score provided
+        var scores = SplitTokens(_matchScoreText);
+        if (scores.Count > 0)
+            set.Add(new MatchScoreFilter(scores));
+
+        // ErrorRangeFilter — only add if at least one bound provided
+        var min = ParseDouble(_errorMinText);
+        var max = ParseDouble(_errorMaxText);
+        if (min.HasValue || max.HasValue)
+            set.Add(new ErrorRangeFilter(min, max));
+
+        // PositionTypeFilter — only add if at least one type checked
+        if (_positionTypes.Count > 0)
+            set.Add(new PositionTypeFilter(_positionTypes));
+
+        // PlayTypeFilter — only add if at least one type checked
+        if (_playTypes.Count > 0)
+            set.Add(new PlayTypeFilter(_playTypes));
+
+        await OnFiltersChanged.InvokeAsync(set);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static List<string> SplitTokens(string raw) =>
+        raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+           .Where(s => s.Length > 0)
+           .ToList();
+
+    private static double? ParseDouble(string raw) =>
+        double.TryParse(raw, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var v)
+            ? v : null;
+
+    private static string DecisionTypeLabel(DecisionTypeOption opt) => opt switch
+    {
+        DecisionTypeOption.Both => "Both",
+        DecisionTypeOption.CheckerPlaysOnly => "Checker plays only",
+        DecisionTypeOption.CubeOnly => "Cube only",
+        _ => opt.ToString(),
+    };
+
+    private static string PlayTypeLabel(PlayType pt) => pt switch
+    {
+        PlayType.Hit => "Hit",
+        PlayType.MakePoint => "Make point",
+        PlayType.HitAndMakePoint => "Hit and make point",
+        PlayType.SlotAndGo => "Slot and go",
+        PlayType.RunningPlay => "Running play",
+        _ => pt.ToString(),
+    };
+}
