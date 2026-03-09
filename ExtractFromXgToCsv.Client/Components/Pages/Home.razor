@@ -2,7 +2,7 @@
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Services
 @page "/"
-@rendermode InteractiveWebAssembly
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
 @inject XgProcessingService Processor
 @inject IJSRuntime JS
 
