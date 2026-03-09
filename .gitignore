@@ -29,3 +29,5 @@ Thumbs.db
 # User secrets
 secrets.json
 appsettings.local.json
+
+*.Backup.tmp
