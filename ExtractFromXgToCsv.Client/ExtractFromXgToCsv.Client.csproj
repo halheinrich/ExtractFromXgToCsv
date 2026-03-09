@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -9,6 +9,11 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ConvertXgToJson_Lib\ConvertXgToJson_Lib\ConvertXgToJson_Lib.csproj" />
+    <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
   </ItemGroup>
 
 </Project>

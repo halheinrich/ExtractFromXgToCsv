@@ -1,0 +1,165 @@
+@using ConvertXgToJson_Lib.Models
+@using XgFilter_Lib.Filtering
+@using ExtractFromXgToCsv.Client.Services
+@page "/"
+@rendermode InteractiveWebAssembly
+@inject XgProcessingService Processor
+@inject IJSRuntime JS
+
+<PageTitle>ExtractFromXgToCsv</PageTitle>
+
+<h1>Extract XG Decisions to CSV</h1>
+
+@* ── FILE PICKER ──────────────────────────────────────────────────────────────── *@
+<section class="mb-4">
+    <div style="max-width:800px">
+        <label class="form-label">Select .xg / .xgp files</label>
+        <InputFile OnChange="HandleFileSelectionAsync" multiple
+                   accept=".xg,.xgp" class="form-control mb-3" />
+    </div>
+</section>
+
+@* ── ERROR ───────────────────────────────────────────────────────────────────── *@
+@if (_hasError && !string.IsNullOrEmpty(_statusMessage))
+{
+    <div class="alert alert-danger mt-2">@_statusMessage</div>
+}
+
+@* ── FILTERS + EXTRACT ───────────────────────────────────────────────────────── *@
+@if (_rows.Count > 0)
+{
+    <FilterPanel OnFiltersChanged="OnFiltersChanged" />
+
+    <div class="mb-4" style="max-width:800px">
+        <div class="mb-2 text-muted">
+            @_filterSet.Apply(_rows).Count() of @_rows.Count rows match current filters
+        </div>
+
+        <label class="form-label">CSV Filename</label>
+        <input class="form-control mb-3" style="max-width:400px"
+               placeholder="decisions.csv"
+               value="@_csvFileName"
+               @oninput="OnCsvFileNameChanged" />
+
+        <button class="btn btn-primary" @onclick="DownloadCsvAsync" disabled="@_busy">
+            @(_busy ? "Building…" : "Download CSV")
+        </button>
+    </div>
+}
+
+@* ── PREVIEW ─────────────────────────────────────────────────────────────────── *@
+@if (_rows.Count > 0)
+{
+    var filtered = _filterSet.Apply(_rows).ToList();
+
+    <h5>Preview (first 20 of @filtered.Count filtered rows, @_rows.Count total)</h5>
+    <div style="overflow-x:auto">
+        <table class="table table-sm table-striped table-bordered">
+            <thead class="table-dark">
+                <tr>
+                    <th>Xgid</th>
+                    <th>Error</th>
+                    <th>MatchScore</th>
+                    <th>MatchLength</th>
+                    <th>Player</th>
+                    <th>Match</th>
+                    <th>Game</th>
+                    <th>MoveNum</th>
+                    <th>Roll</th>
+                    <th>AnalysisDepth</th>
+                    <th>Equity</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in filtered.Take(20))
+                {
+                    <tr>
+                        <td><code style="font-size:.75em">@r.Xgid</code></td>
+                        <td>@r.Error</td>
+                        <td>@r.MatchScore</td>
+                        <td>@r.MatchLength</td>
+                        <td>@r.Player</td>
+                        <td>@r.Match</td>
+                        <td>@r.Game</td>
+                        <td>@r.MoveNum</td>
+                        <td>@r.Roll</td>
+                        <td>@r.AnalysisDepth</td>
+                        <td>@r.Equity</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private string _csvFileName   = "decisions.csv";
+    private string _statusMessage = string.Empty;
+    private bool _busy     = false;
+    private bool _hasError = false;
+
+    private List<DecisionRow> _rows      = new();
+    private DecisionFilterSet _filterSet = new();
+
+    // ── Lifecycle — restore prefs from localStorage ───────────────────────────
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _csvFileName = await JS.InvokeAsync<string>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
+            StateHasChanged();
+        }
+    }
+
+    // ── File picker ───────────────────────────────────────────────────────────
+    private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
+    {
+        _hasError = false; _statusMessage = string.Empty;
+        _rows.Clear();
+        _filterSet = new();
+
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(200))
+            {
+                using var ms = new MemoryStream();
+                await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
+                _rows.AddRange(Processor.ExtractDecisions(ms.ToArray(), file.Name));
+            }
+        }
+        catch (Exception ex)
+        {
+            _hasError = true;
+            _statusMessage = $"Error: {ex.Message}";
+        }
+    }
+
+    // ── Filter callback ───────────────────────────────────────────────────────
+    private void OnFiltersChanged(DecisionFilterSet fs)
+    {
+        _filterSet = fs;
+        StateHasChanged();
+    }
+
+    // ── CSV filename persistence ──────────────────────────────────────────────
+    private async Task OnCsvFileNameChanged(ChangeEventArgs e)
+    {
+        _csvFileName = e.Value?.ToString() ?? string.Empty;
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+    }
+
+    // ── Download CSV ──────────────────────────────────────────────────────────
+    private async Task DownloadCsvAsync()
+    {
+        _busy = true;
+        try
+        {
+            var filtered = _filterSet.Apply(_rows).ToList();
+            var csv = Processor.BuildCsv(filtered);
+            var fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(csv);
+            await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", bytes);
+        }
+        finally { _busy = false; }
+    }
+}

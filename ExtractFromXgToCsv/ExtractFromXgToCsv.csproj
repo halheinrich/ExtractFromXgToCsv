@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="ExtractFromXgToCsv.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.3" />
     <!-- TODO: Add ConvertXgToJson_Lib reference once submodule is linked -->
     <!-- <ProjectReference Include="..\ConvertXgToJson_Lib\ConvertXgToJson_Lib.csproj" /> -->
@@ -17,6 +21,10 @@
     <ProjectReference Include="..\ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
     <ProjectReference Include="..\..\ConvertXgToJson_Lib\ConvertXgToJson_Lib\ConvertXgToJson_Lib.csproj" />
     <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Services\" />
   </ItemGroup>
 
 </Project>

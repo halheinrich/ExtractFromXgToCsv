@@ -1,10 +1,10 @@
-﻿@using XgFilter_Lib.Filtering
+@using XgFilter_Lib.Filtering
 @using XgFilter_Lib.Enums
 
 @* ── FilterPanel.razor ───────────────────────────────────────────────────────
    Owns all filter state. Raises OnFiltersChanged with a rebuilt DecisionFilterSet
    whenever any control changes. Home.razor applies the set to _rows before CSV output.
-   Location: ExtractFromXgToCsv/Components/FilterPanel.razor
+   Location: ExtractFromXgToCsv.Client/Components/FilterPanel.razor
 ──────────────────────────────────────────────────────────────────────────── *@
 
 <div class="card mb-4" style="max-width:800px">
@@ -133,13 +133,13 @@
     [Parameter] public EventCallback<DecisionFilterSet> OnFiltersChanged { get; set; }
 
     // ── State ─────────────────────────────────────────────────────────────────
-    private string _playerText = string.Empty;
+    private string _playerText               = string.Empty;
     private DecisionTypeOption _decisionType = DecisionTypeOption.Both;
-    private string _matchScoreText = string.Empty;
-    private string _errorMinText = string.Empty;
-    private string _errorMaxText = string.Empty;
+    private string _matchScoreText           = string.Empty;
+    private string _errorMinText             = string.Empty;
+    private string _errorMaxText             = string.Empty;
     private HashSet<PositionType> _positionTypes = new();
-    private HashSet<PlayType> _playTypes = new();
+    private HashSet<PlayType>     _playTypes     = new();
 
     // ── Event handlers ────────────────────────────────────────────────────────
     private async Task OnPlayerChanged(ChangeEventArgs e)
@@ -175,26 +175,26 @@
     private async Task OnPositionTypeChanged(PositionType pt, ChangeEventArgs e)
     {
         if (e.Value is bool b && b) _positionTypes.Add(pt);
-        else _positionTypes.Remove(pt);
+        else                        _positionTypes.Remove(pt);
         await RaiseAsync();
     }
 
     private async Task OnPlayTypeChanged(PlayType pt, ChangeEventArgs e)
     {
         if (e.Value is bool b && b) _playTypes.Add(pt);
-        else _playTypes.Remove(pt);
+        else                        _playTypes.Remove(pt);
         await RaiseAsync();
     }
 
     private async Task ResetAsync()
     {
-        _playerText = string.Empty;
-        _decisionType = DecisionTypeOption.Both;
+        _playerText     = string.Empty;
+        _decisionType   = DecisionTypeOption.Both;
         _matchScoreText = string.Empty;
-        _errorMinText = string.Empty;
-        _errorMaxText = string.Empty;
-        _positionTypes = new();
-        _playTypes = new();
+        _errorMinText   = string.Empty;
+        _errorMaxText   = string.Empty;
+        _positionTypes  = new();
+        _playTypes      = new();
         await RaiseAsync();
     }
 
@@ -203,30 +203,24 @@
     {
         var set = new DecisionFilterSet();
 
-        // PlayerFilter — only add if at least one name provided
         var players = SplitTokens(_playerText);
         if (players.Count > 0)
             set.Add(new PlayerFilter(players));
 
-        // DecisionTypeFilter — always add (Both is a no-op but explicit)
         set.Add(new DecisionTypeFilter(_decisionType));
 
-        // MatchScoreFilter — only add if at least one score provided
         var scores = SplitTokens(_matchScoreText);
         if (scores.Count > 0)
             set.Add(new MatchScoreFilter(scores));
 
-        // ErrorRangeFilter — only add if at least one bound provided
         var min = ParseDouble(_errorMinText);
         var max = ParseDouble(_errorMaxText);
         if (min.HasValue || max.HasValue)
             set.Add(new ErrorRangeFilter(min, max));
 
-        // PositionTypeFilter — only add if at least one type checked
         if (_positionTypes.Count > 0)
             set.Add(new PositionTypeFilter(_positionTypes));
 
-        // PlayTypeFilter — only add if at least one type checked
         if (_playTypes.Count > 0)
             set.Add(new PlayTypeFilter(_playTypes));
 
@@ -246,19 +240,19 @@
 
     private static string DecisionTypeLabel(DecisionTypeOption opt) => opt switch
     {
-        DecisionTypeOption.Both => "Both",
+        DecisionTypeOption.Both             => "Both",
         DecisionTypeOption.CheckerPlaysOnly => "Checker plays only",
-        DecisionTypeOption.CubeOnly => "Cube only",
+        DecisionTypeOption.CubeOnly         => "Cube only",
         _ => opt.ToString(),
     };
 
     private static string PlayTypeLabel(PlayType pt) => pt switch
     {
-        PlayType.Hit => "Hit",
-        PlayType.MakePoint => "Make point",
+        PlayType.Hit             => "Hit",
+        PlayType.MakePoint       => "Make point",
         PlayType.HitAndMakePoint => "Hit and make point",
-        PlayType.SlotAndGo => "Slot and go",
-        PlayType.RunningPlay => "Running play",
+        PlayType.SlotAndGo       => "Slot and go",
+        PlayType.RunningPlay     => "Running play",
         _ => pt.ToString(),
     };
 }
