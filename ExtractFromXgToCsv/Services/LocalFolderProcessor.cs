@@ -50,7 +50,7 @@ public class LocalFolderProcessor
 
         int totalRows = 0;
         var stopwatch = Stopwatch.StartNew();
-        const int reportEvery = 1; // report every N files to avoid SSE flood
+        const int reportEvery = 10; // client polls every second; no need to update on every file
 
         for (int i = 0; i < files.Count; i++)
         {

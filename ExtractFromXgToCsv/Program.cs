@@ -14,6 +14,7 @@ builder.Services.AddRazorComponents()
 if (appMode == "Local")
 {
     builder.Services.AddScoped<LocalFolderProcessor>();
+    builder.Services.AddSingleton<JobStore>();
 }
 
 builder.Services.AddControllers();

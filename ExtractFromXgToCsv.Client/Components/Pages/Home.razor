@@ -48,7 +48,7 @@
         </button>
         @if (_busy)
         {
-            <button class="btn btn-danger" @onclick="StopLocal">
+            <button class="btn btn-danger" @onclick="StopLocalAsync">
                 Stop
             </button>
         }
@@ -223,7 +223,7 @@ else
     private string _folderPath = string.Empty;
     private string _outputPath = string.Empty;
     private ProcessingProgress? _progress = null;
-    private CancellationTokenSource? _cts = null;
+    private string? _currentJobId = null;
 
     // Web mode
     private string _lastFolderHint = string.Empty;
@@ -251,11 +251,7 @@ else
         StateHasChanged();
     }
 
-    public void Dispose()
-    {
-        _cts?.Cancel();
-        _cts?.Dispose();
-    }
+    public void Dispose() { }
 
     // Both modes
     private void OnFiltersChanged(DecisionFilterSet fs)
@@ -288,21 +284,24 @@ else
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
     }
 
-    private void StopLocal()
+    private async Task StopLocalAsync()
     {
-        _cts?.Cancel();
+        if (_currentJobId is not null)
+        {
+            try { await Http.PostAsync($"/api/process/{_currentJobId}/cancel", null); }
+            catch { /* ignore */ }
+        }
     }
 
     private async Task RunLocalAsync()
     {
-        _cts?.Dispose();
-        _cts = new CancellationTokenSource();
-
-        _busy = true; _hasError = false; _statusMessage = string.Empty; _progress = null;
+        _busy = true; _hasError = false; _statusMessage = string.Empty;
+        _progress = null; _currentJobId = null;
         StateHasChanged();
 
         try
         {
+            // Start the job
             var request = new ProcessRequest
             {
                 FolderPath = _folderPath,
@@ -310,18 +309,32 @@ else
                 Filters = _filterConfig
             };
 
-            using var response = await Http.PostAsJsonAsync("/api/process", request, _cts.Token);
-            using var stream = await response.Content.ReadAsStreamAsync(_cts.Token);
-            using var reader = new System.IO.StreamReader(stream);
+            var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
+            startResponse.EnsureSuccessStatusCode();
 
-            while (!reader.EndOfStream)
+            var startResult = await startResponse.Content
+                .ReadFromJsonAsync<StartResult>();
+            _currentJobId = startResult?.JobId;
+
+            if (_currentJobId is null)
             {
-                var line = await reader.ReadLineAsync(_cts.Token);
-                if (string.IsNullOrEmpty(line) || !line.StartsWith("data: ")) continue;
+                _hasError = true;
+                _statusMessage = "Failed to start job — no jobId returned.";
+                return;
+            }
 
-                var json = line["data: ".Length..];
-                var p = System.Text.Json.JsonSerializer.Deserialize<ProcessingProgress>(json,
-                               new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            // Poll for progress every second
+            while (true)
+            {
+                await Task.Delay(1000);
+
+                var statusResponse = await Http.GetAsync($"/api/process/{_currentJobId}/status");
+                if (!statusResponse.IsSuccessStatusCode) break;
+
+                var p = await statusResponse.Content
+                    .ReadFromJsonAsync<ProcessingProgress>(
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
                 if (p is not null)
                 {
                     _progress = p;
@@ -330,17 +343,17 @@ else
                 }
             }
         }
-        catch (OperationCanceledException)
-        {
-            _progress ??= new ProcessingProgress { Total = 1, Current = 1 };
-            _progress.Cancelled = true;
-        }
         catch (Exception ex)
         {
             _hasError = true;
             _statusMessage = $"Error: {ex.Message}";
         }
-        finally { _busy = false; StateHasChanged(); }
+        finally
+        {
+            _busy = false;
+            _currentJobId = null;
+            StateHasChanged();
+        }
     }
 
     // Web mode
@@ -399,5 +412,10 @@ else
             await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", bytes);
         }
         finally { _busy = false; }
+    }
+
+    private class StartResult
+    {
+        public string? JobId { get; set; }
     }
 }

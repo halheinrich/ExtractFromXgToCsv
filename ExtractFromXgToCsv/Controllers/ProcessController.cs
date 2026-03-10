@@ -11,56 +11,89 @@ namespace ExtractFromXgToCsv.Controllers;
 public class ProcessController : ControllerBase
 {
     private readonly LocalFolderProcessor _processor;
+    private readonly JobStore _jobs;
     private readonly ILogger<ProcessController> _logger;
 
-    public ProcessController(LocalFolderProcessor processor, ILogger<ProcessController> logger)
+    public ProcessController(
+        LocalFolderProcessor processor,
+        JobStore jobs,
+        ILogger<ProcessController> logger)
     {
         _processor = processor;
+        _jobs = jobs;
         _logger = logger;
     }
 
     /// <summary>
-    /// POST /api/process
-    /// Accepts folder path, output path, and filter config.
-    /// Streams SSE progress events until complete.
+    /// POST /api/process/start
+    /// Starts processing in background. Returns { jobId }.
     /// </summary>
-    [HttpPost]
-    public async Task RunAsync([FromBody] ProcessRequest request, CancellationToken cancellationToken)
+    [HttpPost("start")]
+    public IActionResult Start([FromBody] ProcessRequest request)
     {
-        Response.Headers.Append("Content-Type", "text/event-stream");
-        Response.Headers.Append("Cache-Control", "no-cache");
-        Response.Headers.Append("X-Accel-Buffering", "no");
-
+        var jobId = _jobs.CreateJob();
+        var entry = _jobs.Get(jobId)!;
         var filterSet = BuildFilterSet(request.Filters);
 
-        async Task SendEvent(ProcessingProgress p)
+        // Fire and forget — progress updates are stored in JobStore
+        _ = Task.Run(async () =>
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(p);
-            await Response.WriteAsync($"data: {json}\n\n", cancellationToken);
-            await Response.Body.FlushAsync(cancellationToken);
-        }
+            var progress = new Progress<ProcessingProgress>(p =>
+            {
+                entry.Progress = p;
+            });
 
-        var progress = new Progress<ProcessingProgress>(p =>
-        {
-            // Fire-and-forget inside the SSE loop — awaited via the semaphore pattern below
-            _ = SendEvent(p);
+            try
+            {
+                await _processor.ProcessAsync(
+                    request.FolderPath,
+                    request.OutputPath,
+                    filterSet,
+                    progress,
+                    entry.Cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                entry.Progress.Cancelled = true;
+                entry.Progress.Complete = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Job {JobId} failed", jobId);
+                entry.Progress = new ProcessingProgress
+                {
+                    Complete = true,
+                    FileName = $"Error: {ex.Message}"
+                };
+            }
         });
 
-        try
-        {
-            await _processor.ProcessAsync(
-                request.FolderPath,
-                request.OutputPath,
-                filterSet,
-                progress,
-                cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Processing failed");
-            var error = new ProcessingProgress { Complete = true, FileName = $"Error: {ex.Message}" };
-            await SendEvent(error);
-        }
+        return Ok(new { jobId });
+    }
+
+    /// <summary>
+    /// GET /api/process/{jobId}/status
+    /// Returns current ProcessingProgress for the job.
+    /// </summary>
+    [HttpGet("{jobId}/status")]
+    public IActionResult Status(string jobId)
+    {
+        var entry = _jobs.Get(jobId);
+        if (entry is null) return NotFound();
+        return Ok(entry.Progress);
+    }
+
+    /// <summary>
+    /// POST /api/process/{jobId}/cancel
+    /// Cancels the running job.
+    /// </summary>
+    [HttpPost("{jobId}/cancel")]
+    public IActionResult Cancel(string jobId)
+    {
+        var entry = _jobs.Get(jobId);
+        if (entry is null) return NotFound();
+        entry.Cts.Cancel();
+        return Ok();
     }
 
     private static DecisionFilterSet BuildFilterSet(FilterConfig cfg)
@@ -95,11 +128,4 @@ public class ProcessController : ControllerBase
 
         return set;
     }
-}
-
-public class ProcessRequest
-{
-    public string FolderPath { get; set; } = string.Empty;
-    public string OutputPath { get; set; } = string.Empty;
-    public FilterConfig Filters { get; set; } = new();
 }
