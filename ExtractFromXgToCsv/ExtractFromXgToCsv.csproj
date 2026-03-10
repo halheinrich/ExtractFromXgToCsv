@@ -23,8 +23,4 @@
     <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Folder Include="Services\" />
-  </ItemGroup>
-
 </Project>

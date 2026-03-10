@@ -1,12 +1,22 @@
 // *** SERVER PROJECT — ExtractFromXgToCsv ***
 using ExtractFromXgToCsv.Components;
+using ExtractFromXgToCsv.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var appMode = builder.Configuration["AppMode"] ?? "Web";
+builder.Services.AddSingleton(new AppModeService(appMode));
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
+if (appMode == "Local")
+{
+    builder.Services.AddScoped<LocalFolderProcessor>();
+}
+
+builder.Services.AddControllers();
 
 var app = builder.Build();
 
@@ -20,6 +30,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.MapStaticAssets();
 app.UseAntiforgery();
+app.MapControllers();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()

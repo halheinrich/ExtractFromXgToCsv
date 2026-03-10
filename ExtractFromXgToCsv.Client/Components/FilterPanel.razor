@@ -1,10 +1,11 @@
 @using XgFilter_Lib.Filtering
 @using XgFilter_Lib.Enums
+@using ExtractFromXgToCsv.Client.Shared
 @inject IJSRuntime JS
 
 @* ── FilterPanel.razor ───────────────────────────────────────────────────────
-   Owns all filter state. Raises OnFiltersChanged only when "Apply Filter" is
-   clicked (or Reset). Filter state is persisted to localStorage.
+   Owns all filter state. Raises OnFiltersChanged and OnFilterConfigChanged
+   only when "Apply Filter" is clicked (or Reset). State persisted to localStorage.
    Location: ExtractFromXgToCsv.Client/Components/FilterPanel.razor
 ──────────────────────────────────────────────────────────────────────────── *@
 
@@ -135,10 +136,9 @@
 </div>
 
 @code {
-    // ── Parameter ─────────────────────────────────────────────────────────────
     [Parameter] public EventCallback<DecisionFilterSet> OnFiltersChanged { get; set; }
+    [Parameter] public EventCallback<FilterConfig> OnFilterConfigChanged { get; set; }
 
-    // ── State ─────────────────────────────────────────────────────────────────
     private string _playerText = string.Empty;
     private DecisionTypeOption _decisionType = DecisionTypeOption.Both;
     private string _matchScoreText = string.Empty;
@@ -147,7 +147,6 @@
     private HashSet<PositionType> _positionTypes = new();
     private HashSet<PlayType> _playTypes = new();
 
-    // ── Lifecycle — restore from localStorage ─────────────────────────────────
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -170,14 +169,12 @@
         StateHasChanged();
     }
 
-    // ── Apply button ──────────────────────────────────────────────────────────
     private async Task ApplyAsync()
     {
         await PersistAsync();
         await RaiseAsync();
     }
 
-    // ── Reset button ──────────────────────────────────────────────────────────
     private async Task ResetAsync()
     {
         _playerText = string.Empty;
@@ -191,7 +188,6 @@
         await RaiseAsync();
     }
 
-    // ── Persist to localStorage ───────────────────────────────────────────────
     private async Task PersistAsync()
     {
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_player", _playerText);
@@ -203,45 +199,43 @@
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_playtypes", SerializeEnumSet(_playTypes));
     }
 
-    // ── Build and raise DecisionFilterSet ─────────────────────────────────────
     private async Task RaiseAsync()
     {
+        // Raise DecisionFilterSet for web mode (in-memory filtering)
         var set = new DecisionFilterSet();
-
         var players = SplitTokens(_playerText);
-        if (players.Count > 0)
-            set.Add(new PlayerFilter(players));
-
+        if (players.Count > 0) set.Add(new PlayerFilter(players));
         set.Add(new DecisionTypeFilter(_decisionType));
-
         var scores = SplitTokens(_matchScoreText);
-        if (scores.Count > 0)
-            set.Add(new MatchScoreFilter(scores));
-
+        if (scores.Count > 0) set.Add(new MatchScoreFilter(scores));
         var min = ParseDouble(_errorMinText);
         var max = ParseDouble(_errorMaxText);
-        if (min.HasValue || max.HasValue)
-            set.Add(new ErrorRangeFilter(min, max));
-
-        if (_positionTypes.Count > 0)
-            set.Add(new PositionTypeFilter(_positionTypes));
-
-        if (_playTypes.Count > 0)
-            set.Add(new PlayTypeFilter(_playTypes));
-
+        if (min.HasValue || max.HasValue) set.Add(new ErrorRangeFilter(min, max));
+        if (_positionTypes.Count > 0) set.Add(new PositionTypeFilter(_positionTypes));
+        if (_playTypes.Count > 0) set.Add(new PlayTypeFilter(_playTypes));
         await OnFiltersChanged.InvokeAsync(set);
+
+        // Raise FilterConfig for local mode (HTTP POST)
+        var cfg = new FilterConfig
+        {
+            Players = SplitTokens(_playerText),
+            DecisionType = _decisionType.ToString(),
+            MatchScores = SplitTokens(_matchScoreText),
+            ErrorMin = ParseDouble(_errorMinText),
+            ErrorMax = ParseDouble(_errorMaxText),
+            PositionTypes = _positionTypes.Select(p => p.ToString()).ToList(),
+            PlayTypes = _playTypes.Select(p => p.ToString()).ToList(),
+        };
+        await OnFilterConfigChanged.InvokeAsync(cfg);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
     private static List<string> SplitTokens(string raw) =>
         raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-           .Where(s => s.Length > 0)
-           .ToList();
+           .Where(s => s.Length > 0).ToList();
 
     private static double? ParseDouble(string raw) =>
         double.TryParse(raw, System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var v)
-            ? v : null;
+                        System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
 
     private static string SerializeEnumSet<T>(HashSet<T> set) where T : struct, Enum =>
         string.Join(",", set.Select(v => v.ToString()));
@@ -250,8 +244,7 @@
     {
         var result = new HashSet<T>();
         foreach (var token in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            if (Enum.TryParse<T>(token, out var v))
-                result.Add(v);
+            if (Enum.TryParse<T>(token, out var v)) result.Add(v);
         return result;
     }
 
