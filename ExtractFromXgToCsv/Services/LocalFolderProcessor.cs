@@ -1,6 +1,7 @@
-﻿using ConvertXgToJson_Lib;
+using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
 using ExtractFromXgToCsv.Client.Shared;
+using System.Diagnostics;
 using System.Text;
 using XgFilter_Lib.Filtering;
 
@@ -40,7 +41,6 @@ public class LocalFolderProcessor
         if (files.Count == 0)
             throw new InvalidOperationException("No .xg or .xgp files found in folder.");
 
-        // Ensure output directory exists
         var outputDir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDir))
             Directory.CreateDirectory(outputDir);
@@ -49,6 +49,8 @@ public class LocalFolderProcessor
         await writer.WriteLineAsync(DecisionRow.CsvHeader);
 
         int totalRows = 0;
+        var stopwatch = Stopwatch.StartNew();
+        const int reportEvery = 1; // report every N files to avoid SSE flood
 
         for (int i = 0; i < files.Count; i++)
         {
@@ -57,13 +59,21 @@ public class LocalFolderProcessor
             var file = files[i];
             var fileName = Path.GetFileName(file);
 
-            progress.Report(new ProcessingProgress
+            if (i % reportEvery == 0)
             {
-                Current = i + 1,
-                Total = files.Count,
-                FileName = fileName,
-                TotalRows = totalRows
-            });
+                var elapsed = stopwatch.Elapsed.TotalSeconds;
+                var filesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0;
+
+                progress.Report(new ProcessingProgress
+                {
+                    Current = i + 1,
+                    Total = files.Count,
+                    FileName = fileName,
+                    TotalRows = totalRows,
+                    ElapsedSec = elapsed,
+                    FilesPerSec = filesPerSec
+                });
+            }
 
             try
             {
@@ -85,13 +95,18 @@ public class LocalFolderProcessor
             }
         }
 
+        var totalElapsed = stopwatch.Elapsed.TotalSeconds;
+        var finalFilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0;
+
         progress.Report(new ProcessingProgress
         {
             Current = files.Count,
             Total = files.Count,
             FileName = "Done",
             TotalRows = totalRows,
-            Complete = true
+            Complete = true,
+            ElapsedSec = totalElapsed,
+            FilesPerSec = finalFilesPerSec
         });
     }
 }

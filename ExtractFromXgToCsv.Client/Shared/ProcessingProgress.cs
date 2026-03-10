@@ -11,6 +11,9 @@ public class ProcessingProgress
     public string FileName { get; set; } = string.Empty;
     public int TotalRows { get; set; }
     public bool Complete { get; set; }
+    public bool Cancelled { get; set; }
+    public double ElapsedSec { get; set; }
+    public int FilesPerSec { get; set; }
 
     public int PercentComplete => Total == 0 ? 0 : (int)((Current / (double)Total) * 100);
 }

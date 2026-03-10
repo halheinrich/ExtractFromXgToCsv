@@ -7,32 +7,29 @@
 @inject XgProcessingService Processor
 @inject IJSRuntime JS
 @inject HttpClient Http
+@implements IDisposable
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
 
 <h1>Extract XG Decisions to CSV</h1>
 
-@* ── MODE SWITCH ──────────────────────────────────────────────────────────────── *@
 @if (_appMode == "Local")
 {
     @* ── LOCAL MODE ───────────────────────────────────────────────────────────── *@
     <section class="mb-4">
         <div style="max-width:800px">
-
             <div class="mb-3">
                 <label class="form-label">Folder path</label>
                 <input class="form-control" placeholder="e.g. D:\xg\matches"
                        value="@_folderPath"
                        @oninput="OnFolderPathChanged" />
             </div>
-
             <div class="mb-3">
                 <label class="form-label">Output CSV path</label>
                 <input class="form-control" placeholder="e.g. D:\xg\decisions.csv"
                        value="@_outputPath"
                        @oninput="OnOutputPathChanged" />
             </div>
-
         </div>
     </section>
 
@@ -43,15 +40,21 @@
 
     <FilterPanel OnFiltersChanged="OnFiltersChanged" OnFilterConfigChanged="OnFilterConfigChanged" />
 
-    <div class="mb-4" style="max-width:800px">
+    <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
                 disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !_filterApplied)">
-            @(_busy ? "Processing…" : "Run")
+            Run
         </button>
+        @if (_busy)
+        {
+            <button class="btn btn-danger" @onclick="StopLocal">
+                Stop
+            </button>
+        }
         @if (!_filterApplied)
         {
-            <small class="text-muted ms-2">Apply filters first</small>
+            <small class="text-muted">Apply filters first</small>
         }
     </div>
 
@@ -61,23 +64,34 @@
             @if (_progress is not null)
             {
                 <div class="progress mb-2" style="height:24px">
-                    <div class="progress-bar" role="progressbar"
+                    <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"
+                         role="progressbar"
                          style="width:@(_progress.PercentComplete)%">
                         @_progress.PercentComplete%
                     </div>
                 </div>
-                <div class="text-muted small">
-                    @if (_progress.Complete)
+                <div class="small">
+                    @if (_progress.Complete && !_progress.Cancelled)
                     {
                         <span class="text-success fw-bold">
-                            ✓ Done — @_progress.TotalRows rows written to @_outputPath
+                            ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
+                            (@_progress.FilesPerSec files/sec) → @_outputPath
+                        </span>
+                    }
+                    else if (_progress.Cancelled)
+                    {
+                        <span class="text-warning fw-bold">
+                            ⏹ Stopped at file @_progress.Current of @_progress.Total
+                            — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
+                            (@_progress.FilesPerSec files/sec)
                         </span>
                     }
                     else
                     {
-                        <span>
+                        <span class="text-muted">
                             File @_progress.Current of @_progress.Total: @_progress.FileName
-                            (@_progress.TotalRows rows so far)
+                            — @_progress.TotalRows rows, @_progress.ElapsedSec.ToString("F1")s
+                            (@_progress.FilesPerSec files/sec)
                         </span>
                     }
                 </div>
@@ -209,6 +223,7 @@ else
     private string _folderPath = string.Empty;
     private string _outputPath = string.Empty;
     private ProcessingProgress? _progress = null;
+    private CancellationTokenSource? _cts = null;
 
     // Web mode
     private string _lastFolderHint = string.Empty;
@@ -234,6 +249,12 @@ else
         catch { _appMode = "Web"; }
 
         StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
 
     // Both modes
@@ -267,10 +288,19 @@ else
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
     }
 
+    private void StopLocal()
+    {
+        _cts?.Cancel();
+    }
+
     private async Task RunLocalAsync()
     {
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+
         _busy = true; _hasError = false; _statusMessage = string.Empty; _progress = null;
         StateHasChanged();
+
         try
         {
             var request = new ProcessRequest
@@ -280,13 +310,13 @@ else
                 Filters = _filterConfig
             };
 
-            using var response = await Http.PostAsJsonAsync("/api/process", request);
-            using var stream = await response.Content.ReadAsStreamAsync();
+            using var response = await Http.PostAsJsonAsync("/api/process", request, _cts.Token);
+            using var stream = await response.Content.ReadAsStreamAsync(_cts.Token);
             using var reader = new System.IO.StreamReader(stream);
 
             while (!reader.EndOfStream)
             {
-                var line = await reader.ReadLineAsync();
+                var line = await reader.ReadLineAsync(_cts.Token);
                 if (string.IsNullOrEmpty(line) || !line.StartsWith("data: ")) continue;
 
                 var json = line["data: ".Length..];
@@ -299,6 +329,11 @@ else
                     if (p.Complete) break;
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _progress ??= new ProcessingProgress { Total = 1, Current = 1 };
+            _progress.Cancelled = true;
         }
         catch (Exception ex)
         {
