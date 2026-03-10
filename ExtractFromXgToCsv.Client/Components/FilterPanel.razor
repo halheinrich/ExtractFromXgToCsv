@@ -1,9 +1,10 @@
 @using XgFilter_Lib.Filtering
 @using XgFilter_Lib.Enums
+@inject IJSRuntime JS
 
 @* ── FilterPanel.razor ───────────────────────────────────────────────────────
-   Owns all filter state. Raises OnFiltersChanged with a rebuilt DecisionFilterSet
-   whenever any control changes. Home.razor applies the set to _rows before CSV output.
+   Owns all filter state. Raises OnFiltersChanged only when "Apply Filter" is
+   clicked (or Reset). Filter state is persisted to localStorage.
    Location: ExtractFromXgToCsv.Client/Components/FilterPanel.razor
 ──────────────────────────────────────────────────────────────────────────── *@
 
@@ -22,7 +23,7 @@
             <input class="form-control"
                    placeholder="e.g. Hal, Magriel"
                    value="@_playerText"
-                   @oninput="OnPlayerChanged" />
+                   @oninput="e => _playerText = e.Value?.ToString() ?? string.Empty" />
         </div>
 
         @* ── Decision type ────────────────────────────────────────────────────── *@
@@ -36,7 +37,7 @@
                                name="decisionType"
                                id="dt_@opt"
                                checked="@(_decisionType == opt)"
-                               @onchange="() => OnDecisionTypeChanged(opt)" />
+                               @onchange="() => _decisionType = opt" />
                         <label class="form-check-label" for="dt_@opt">
                             @DecisionTypeLabel(opt)
                         </label>
@@ -54,7 +55,7 @@
             <input class="form-control"
                    placeholder="e.g. 5a5a, DMP, money"
                    value="@_matchScoreText"
-                   @oninput="OnMatchScoreChanged" />
+                   @oninput="e => _matchScoreText = e.Value?.ToString() ?? string.Empty" />
         </div>
 
         @* ── Error range ──────────────────────────────────────────────────────── *@
@@ -67,12 +68,12 @@
                 <input class="form-control" style="max-width:140px"
                        type="number" step="0.001" placeholder="Min"
                        value="@_errorMinText"
-                       @oninput="OnErrorMinChanged" />
+                       @oninput="e => _errorMinText = e.Value?.ToString() ?? string.Empty" />
                 <span>–</span>
                 <input class="form-control" style="max-width:140px"
                        type="number" step="0.001" placeholder="Max"
                        value="@_errorMaxText"
-                       @oninput="OnErrorMaxChanged" />
+                       @oninput="e => _errorMaxText = e.Value?.ToString() ?? string.Empty" />
             </div>
         </div>
 
@@ -91,7 +92,7 @@
                         <input class="form-check-input" type="checkbox"
                                id="pt_@pt"
                                checked="@_positionTypes.Contains(pt)"
-                               @onchange="(e) => OnPositionTypeChanged(pt, e)" />
+                               @onchange="(e) => { if (e.Value is bool b && b) _positionTypes.Add(pt); else _positionTypes.Remove(pt); }" />
                         <label class="form-check-label" for="pt_@pt">@pt</label>
                     </div>
                 }
@@ -113,17 +114,22 @@
                         <input class="form-check-input" type="checkbox"
                                id="plt_@pt"
                                checked="@_playTypes.Contains(pt)"
-                               @onchange="(e) => OnPlayTypeChanged(pt, e)" />
+                               @onchange="(e) => { if (e.Value is bool b && b) _playTypes.Add(pt); else _playTypes.Remove(pt); }" />
                         <label class="form-check-label" for="plt_@pt">@PlayTypeLabel(pt)</label>
                     </div>
                 }
             </div>
         </div>
 
-        @* ── Reset ────────────────────────────────────────────────────────────── *@
-        <button class="btn btn-outline-secondary btn-sm" @onclick="ResetAsync">
-            Reset filters
-        </button>
+        @* ── Buttons ──────────────────────────────────────────────────────────── *@
+        <div class="d-flex gap-2">
+            <button class="btn btn-primary btn-sm" @onclick="ApplyAsync">
+                Apply Filter
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="ResetAsync">
+                Reset
+            </button>
+        </div>
 
     </div>
 </div>
@@ -133,69 +139,68 @@
     [Parameter] public EventCallback<DecisionFilterSet> OnFiltersChanged { get; set; }
 
     // ── State ─────────────────────────────────────────────────────────────────
-    private string _playerText               = string.Empty;
+    private string _playerText = string.Empty;
     private DecisionTypeOption _decisionType = DecisionTypeOption.Both;
-    private string _matchScoreText           = string.Empty;
-    private string _errorMinText             = string.Empty;
-    private string _errorMaxText             = string.Empty;
+    private string _matchScoreText = string.Empty;
+    private string _errorMinText = string.Empty;
+    private string _errorMaxText = string.Empty;
     private HashSet<PositionType> _positionTypes = new();
-    private HashSet<PlayType>     _playTypes     = new();
+    private HashSet<PlayType> _playTypes = new();
 
-    // ── Event handlers ────────────────────────────────────────────────────────
-    private async Task OnPlayerChanged(ChangeEventArgs e)
+    // ── Lifecycle — restore from localStorage ─────────────────────────────────
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        _playerText = e.Value?.ToString() ?? string.Empty;
+        if (!firstRender) return;
+
+        _playerText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_player") ?? string.Empty;
+        _matchScoreText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_matchscore") ?? string.Empty;
+        _errorMinText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_errormin") ?? string.Empty;
+        _errorMaxText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_errormax") ?? string.Empty;
+
+        var dtRaw = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_decisiontype");
+        if (Enum.TryParse<DecisionTypeOption>(dtRaw, out var dt))
+            _decisionType = dt;
+
+        var ptRaw = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_positiontypes") ?? string.Empty;
+        _positionTypes = DeserializeEnumSet<PositionType>(ptRaw);
+
+        var pltRaw = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_playtypes") ?? string.Empty;
+        _playTypes = DeserializeEnumSet<PlayType>(pltRaw);
+
+        StateHasChanged();
+    }
+
+    // ── Apply button ──────────────────────────────────────────────────────────
+    private async Task ApplyAsync()
+    {
+        await PersistAsync();
         await RaiseAsync();
     }
 
-    private async Task OnDecisionTypeChanged(DecisionTypeOption opt)
-    {
-        _decisionType = opt;
-        await RaiseAsync();
-    }
-
-    private async Task OnMatchScoreChanged(ChangeEventArgs e)
-    {
-        _matchScoreText = e.Value?.ToString() ?? string.Empty;
-        await RaiseAsync();
-    }
-
-    private async Task OnErrorMinChanged(ChangeEventArgs e)
-    {
-        _errorMinText = e.Value?.ToString() ?? string.Empty;
-        await RaiseAsync();
-    }
-
-    private async Task OnErrorMaxChanged(ChangeEventArgs e)
-    {
-        _errorMaxText = e.Value?.ToString() ?? string.Empty;
-        await RaiseAsync();
-    }
-
-    private async Task OnPositionTypeChanged(PositionType pt, ChangeEventArgs e)
-    {
-        if (e.Value is bool b && b) _positionTypes.Add(pt);
-        else                        _positionTypes.Remove(pt);
-        await RaiseAsync();
-    }
-
-    private async Task OnPlayTypeChanged(PlayType pt, ChangeEventArgs e)
-    {
-        if (e.Value is bool b && b) _playTypes.Add(pt);
-        else                        _playTypes.Remove(pt);
-        await RaiseAsync();
-    }
-
+    // ── Reset button ──────────────────────────────────────────────────────────
     private async Task ResetAsync()
     {
-        _playerText     = string.Empty;
-        _decisionType   = DecisionTypeOption.Both;
+        _playerText = string.Empty;
+        _decisionType = DecisionTypeOption.Both;
         _matchScoreText = string.Empty;
-        _errorMinText   = string.Empty;
-        _errorMaxText   = string.Empty;
-        _positionTypes  = new();
-        _playTypes      = new();
+        _errorMinText = string.Empty;
+        _errorMaxText = string.Empty;
+        _positionTypes = new();
+        _playTypes = new();
+        await PersistAsync();
         await RaiseAsync();
+    }
+
+    // ── Persist to localStorage ───────────────────────────────────────────────
+    private async Task PersistAsync()
+    {
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_player", _playerText);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_matchscore", _matchScoreText);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_errormin", _errorMinText);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_errormax", _errorMaxText);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_decisiontype", _decisionType.ToString());
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_positiontypes", SerializeEnumSet(_positionTypes));
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_playtypes", SerializeEnumSet(_playTypes));
     }
 
     // ── Build and raise DecisionFilterSet ─────────────────────────────────────
@@ -238,21 +243,33 @@
                         System.Globalization.CultureInfo.InvariantCulture, out var v)
             ? v : null;
 
+    private static string SerializeEnumSet<T>(HashSet<T> set) where T : struct, Enum =>
+        string.Join(",", set.Select(v => v.ToString()));
+
+    private static HashSet<T> DeserializeEnumSet<T>(string raw) where T : struct, Enum
+    {
+        var result = new HashSet<T>();
+        foreach (var token in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (Enum.TryParse<T>(token, out var v))
+                result.Add(v);
+        return result;
+    }
+
     private static string DecisionTypeLabel(DecisionTypeOption opt) => opt switch
     {
-        DecisionTypeOption.Both             => "Both",
+        DecisionTypeOption.Both => "Both",
         DecisionTypeOption.CheckerPlaysOnly => "Checker plays only",
-        DecisionTypeOption.CubeOnly         => "Cube only",
+        DecisionTypeOption.CubeOnly => "Cube only",
         _ => opt.ToString(),
     };
 
     private static string PlayTypeLabel(PlayType pt) => pt switch
     {
-        PlayType.Hit             => "Hit",
-        PlayType.MakePoint       => "Make point",
+        PlayType.Hit => "Hit",
+        PlayType.MakePoint => "Make point",
         PlayType.HitAndMakePoint => "Hit and make point",
-        PlayType.SlotAndGo       => "Slot and go",
-        PlayType.RunningPlay     => "Running play",
+        PlayType.SlotAndGo => "Slot and go",
+        PlayType.RunningPlay => "Running play",
         _ => pt.ToString(),
     };
 }

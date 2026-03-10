@@ -14,6 +14,10 @@
 <section class="mb-4">
     <div style="max-width:800px">
         <label class="form-label">Select .xg / .xgp files</label>
+        @if (!string.IsNullOrEmpty(_lastFolderHint))
+        {
+            <div><small class="text-muted">Last folder: @_lastFolderHint</small></div>
+        }
         <InputFile OnChange="HandleFileSelectionAsync" multiple
                    accept=".xg,.xgp" class="form-control mb-3" />
     </div>
@@ -31,9 +35,18 @@
     <FilterPanel OnFiltersChanged="OnFiltersChanged" />
 
     <div class="mb-4" style="max-width:800px">
-        <div class="mb-2 text-muted">
-            @_filterSet.Apply(_rows).Count() of @_rows.Count rows match current filters
-        </div>
+        @if (_filterApplied)
+        {
+            <div class="mb-2 text-muted">
+                @_filteredCount of @_rows.Count rows match current filters
+            </div>
+        }
+        else
+        {
+            <div class="mb-2 text-muted">
+                @_rows.Count rows loaded — set filters and click Apply Filter
+            </div>
+        }
 
         <label class="form-label">CSV Filename</label>
         <input class="form-control mb-3" style="max-width:400px"
@@ -41,18 +54,21 @@
                value="@_csvFileName"
                @oninput="OnCsvFileNameChanged" />
 
-        <button class="btn btn-primary" @onclick="DownloadCsvAsync" disabled="@_busy">
+        <button class="btn btn-primary" @onclick="DownloadCsvAsync"
+                disabled="@(_busy || !_filterApplied)">
             @(_busy ? "Building…" : "Download CSV")
         </button>
+        @if (!_filterApplied)
+        {
+            <small class="text-muted ms-2">Apply filters first</small>
+        }
     </div>
 }
 
 @* ── PREVIEW ─────────────────────────────────────────────────────────────────── *@
-@if (_rows.Count > 0)
+@if (_filterApplied && _filteredRows.Count > 0)
 {
-    var filtered = _filterSet.Apply(_rows).ToList();
-
-    <h5>Preview (first 20 of @filtered.Count filtered rows, @_rows.Count total)</h5>
+    <h5>Preview (first @(Math.Min(20, _filteredRows.Count)) of @_filteredRows.Count filtered rows, @_rows.Count total)</h5>
     <div style="overflow-x:auto">
         <table class="table table-sm table-striped table-bordered">
             <thead class="table-dark">
@@ -71,7 +87,7 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var r in filtered.Take(20))
+                @foreach (var r in _filteredRows.Take(20))
                 {
                     <tr>
                         <td><code style="font-size:.75em">@r.Xgid</code></td>
@@ -93,12 +109,16 @@
 }
 
 @code {
-    private string _csvFileName   = "decisions.csv";
+    private string _csvFileName = "decisions.csv";
     private string _statusMessage = string.Empty;
-    private bool _busy     = false;
+    private string _lastFolderHint = string.Empty;
+    private bool _busy = false;
     private bool _hasError = false;
+    private bool _filterApplied = false;
 
-    private List<DecisionRow> _rows      = new();
+    private List<DecisionRow> _rows = new();
+    private List<DecisionRow> _filteredRows = new();
+    private int _filteredCount = 0;
     private DecisionFilterSet _filterSet = new();
 
     // ── Lifecycle — restore prefs from localStorage ───────────────────────────
@@ -106,7 +126,8 @@
     {
         if (firstRender)
         {
-            _csvFileName = await JS.InvokeAsync<string>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
+            _csvFileName = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
+            _lastFolderHint = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_lastFolderHint") ?? string.Empty;
             StateHasChanged();
         }
     }
@@ -116,11 +137,26 @@
     {
         _hasError = false; _statusMessage = string.Empty;
         _rows.Clear();
+        _filteredRows.Clear();
+        _filteredCount = 0;
+        _filterApplied = false;
         _filterSet = new();
 
         try
         {
-            foreach (var file in e.GetMultipleFiles(200))
+            var files = e.GetMultipleFiles(200).ToList();
+
+            // Derive folder hint from first filename (strip the filename, keep folder segment)
+            if (files.Count > 0)
+            {
+                var firstName = files[0].Name;
+                // Browser only gives us the filename, not the full path.
+                // Use the file count + first filename as a hint.
+                _lastFolderHint = $"{files.Count} file(s) — first: {firstName}";
+                await JS.InvokeVoidAsync("localStorage.setItem", "xg_lastFolderHint", _lastFolderHint);
+            }
+
+            foreach (var file in files)
             {
                 using var ms = new MemoryStream();
                 await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
@@ -138,6 +174,9 @@
     private void OnFiltersChanged(DecisionFilterSet fs)
     {
         _filterSet = fs;
+        _filteredRows = _filterSet.Apply(_rows).ToList();
+        _filteredCount = _filteredRows.Count;
+        _filterApplied = true;
         StateHasChanged();
     }
 
@@ -154,8 +193,7 @@
         _busy = true;
         try
         {
-            var filtered = _filterSet.Apply(_rows).ToList();
-            var csv = Processor.BuildCsv(filtered);
+            var csv = Processor.BuildCsv(_filteredRows);
             var fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
             var bytes = System.Text.Encoding.UTF8.GetBytes(csv);
             await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", bytes);
