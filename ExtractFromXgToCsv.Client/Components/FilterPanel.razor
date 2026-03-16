@@ -5,7 +5,9 @@
 
 @* ── FilterPanel.razor ───────────────────────────────────────────────────────
    Owns all filter state. Raises OnFiltersChanged and OnFilterConfigChanged
-   only when "Apply Filter" is clicked (or Reset). State persisted to localStorage.
+   only when "Apply Filter" is clicked (or Reset). Raises OnFilterDirty
+   whenever any control changes, so the parent can disable Run until Apply.
+   State persisted to localStorage.
    Location: ExtractFromXgToCsv.Client/Components/FilterPanel.razor
 ──────────────────────────────────────────────────────────────────────────── *@
 
@@ -24,7 +26,7 @@
             <input class="form-control"
                    placeholder="e.g. Hal, Magriel"
                    value="@_playerText"
-                   @oninput="e => _playerText = e.Value?.ToString() ?? string.Empty" />
+                   @oninput="e => { _playerText = e.Value?.ToString() ?? string.Empty; MarkDirty(); }" />
         </div>
 
         @* ── Decision type ────────────────────────────────────────────────────── *@
@@ -38,7 +40,7 @@
                                name="decisionType"
                                id="dt_@opt"
                                checked="@(_decisionType == opt)"
-                               @onchange="() => _decisionType = opt" />
+                               @onchange="() => { _decisionType = opt; MarkDirty(); }" />
                         <label class="form-check-label" for="dt_@opt">
                             @DecisionTypeLabel(opt)
                         </label>
@@ -56,7 +58,7 @@
             <input class="form-control"
                    placeholder="e.g. 5a5a, DMP, money"
                    value="@_matchScoreText"
-                   @oninput="e => _matchScoreText = e.Value?.ToString() ?? string.Empty" />
+                   @oninput="e => { _matchScoreText = e.Value?.ToString() ?? string.Empty; MarkDirty(); }" />
         </div>
 
         @* ── Error range ──────────────────────────────────────────────────────── *@
@@ -69,12 +71,12 @@
                 <input class="form-control" style="max-width:140px"
                        type="number" step="0.001" placeholder="Min"
                        value="@_errorMinText"
-                       @oninput="e => _errorMinText = e.Value?.ToString() ?? string.Empty" />
+                       @oninput="e => { _errorMinText = e.Value?.ToString() ?? string.Empty; MarkDirty(); }" />
                 <span>–</span>
                 <input class="form-control" style="max-width:140px"
                        type="number" step="0.001" placeholder="Max"
                        value="@_errorMaxText"
-                       @oninput="e => _errorMaxText = e.Value?.ToString() ?? string.Empty" />
+                       @oninput="e => { _errorMaxText = e.Value?.ToString() ?? string.Empty; MarkDirty(); }" />
             </div>
         </div>
 
@@ -84,8 +86,6 @@
                 Position type
                 <small class="text-muted">(none checked = all types)</small>
             </label>
-            @* STUB: PositionTypeFilter.ClassifyPosition always returns Contact
-                     until the XGID decoder is implemented in XgFilter_Lib. *@
             <div>
                 @foreach (var pt in Enum.GetValues<PositionType>())
                 {
@@ -93,8 +93,8 @@
                         <input class="form-check-input" type="checkbox"
                                id="pt_@pt"
                                checked="@_positionTypes.Contains(pt)"
-                               @onchange="(e) => { if (e.Value is bool b && b) _positionTypes.Add(pt); else _positionTypes.Remove(pt); }" />
-                        <label class="form-check-label" for="pt_@pt">@pt</label>
+                               @onchange="(e) => { if (e.Value is bool b && b) _positionTypes.Add(pt); else _positionTypes.Remove(pt); MarkDirty(); }" />
+                        <label class="form-check-label" for="pt_@pt">@PositionTypeLabel(pt)</label>
                     </div>
                 }
             </div>
@@ -106,8 +106,6 @@
                 Play type
                 <small class="text-muted">(checker plays only; none checked = all types)</small>
             </label>
-            @* STUB: PlayTypeFilter.ClassifyPlay always returns RunningPlay
-                     until move-analysis logic is implemented in XgFilter_Lib. *@
             <div>
                 @foreach (var pt in Enum.GetValues<PlayType>())
                 {
@@ -115,7 +113,7 @@
                         <input class="form-check-input" type="checkbox"
                                id="plt_@pt"
                                checked="@_playTypes.Contains(pt)"
-                               @onchange="(e) => { if (e.Value is bool b && b) _playTypes.Add(pt); else _playTypes.Remove(pt); }" />
+                               @onchange="(e) => { if (e.Value is bool b && b) _playTypes.Add(pt); else _playTypes.Remove(pt); MarkDirty(); }" />
                         <label class="form-check-label" for="plt_@pt">@PlayTypeLabel(pt)</label>
                     </div>
                 }
@@ -138,6 +136,7 @@
 @code {
     [Parameter] public EventCallback<DecisionFilterSet> OnFiltersChanged { get; set; }
     [Parameter] public EventCallback<FilterConfig> OnFilterConfigChanged { get; set; }
+    [Parameter] public EventCallback OnFilterDirty { get; set; }
 
     private string _playerText = string.Empty;
     private DecisionTypeOption _decisionType = DecisionTypeOption.Both;
@@ -168,6 +167,8 @@
 
         StateHasChanged();
     }
+
+    private void MarkDirty() => OnFilterDirty.InvokeAsync();
 
     private async Task ApplyAsync()
     {
@@ -254,6 +255,12 @@
         DecisionTypeOption.CheckerPlaysOnly => "Checker plays only",
         DecisionTypeOption.CubeOnly => "Cube only",
         _ => opt.ToString(),
+    };
+
+    private static string PositionTypeLabel(PositionType pt) => pt switch
+    {
+        PositionType.InnerBoard631 => "Inner board 6-3-1",
+        _ => pt.ToString(),
     };
 
     private static string PlayTypeLabel(PlayType pt) => pt switch

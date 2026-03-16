@@ -38,12 +38,14 @@
         <div class="alert alert-danger mt-2">@_statusMessage</div>
     }
 
-    <FilterPanel OnFiltersChanged="OnFiltersChanged" OnFilterConfigChanged="OnFilterConfigChanged" />
+    <FilterPanel OnFiltersChanged="OnFiltersChanged"
+                 OnFilterConfigChanged="OnFilterConfigChanged"
+                 OnFilterDirty="OnFilterDirty" />
 
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !_filterApplied)">
+                disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !_filterApplied || _filterDirty)">
             Run
         </button>
         @if (_busy)
@@ -52,7 +54,10 @@
                 Stop
             </button>
         }
-        @if (!_filterApplied)
+        <button class="btn btn-outline-secondary" @onclick="ExitAsync">
+            Exit
+        </button>
+        @if (!_filterApplied || _filterDirty)
         {
             <small class="text-muted">Apply filters first</small>
         }
@@ -129,10 +134,12 @@ else
 
     @if (_rows.Count > 0)
     {
-        <FilterPanel OnFiltersChanged="OnFiltersChanged" OnFilterConfigChanged="OnFilterConfigChanged" />
+        <FilterPanel OnFiltersChanged="OnFiltersChanged"
+                     OnFilterConfigChanged="OnFilterConfigChanged"
+                     OnFilterDirty="OnFilterDirty" />
 
         <div class="mb-4" style="max-width:800px">
-            @if (_filterApplied)
+            @if (_filterApplied && !_filterDirty)
             {
                 <div class="mb-2 text-muted">
                     @_filteredCount of @_rows.Count rows match current filters
@@ -153,17 +160,17 @@ else
 
             <button class="btn btn-primary"
                     @onclick="DownloadCsvAsync"
-                    disabled="@(_busy || !_filterApplied || _totalSelectedBytes > WebModeLimitBytes)">
+                    disabled="@(_busy || !_filterApplied || _filterDirty || _totalSelectedBytes > WebModeLimitBytes)">
                 @(_busy ? "Building…" : "Download CSV")
             </button>
-            @if (!_filterApplied)
+            @if (!_filterApplied || _filterDirty)
             {
                 <small class="text-muted ms-2">Apply filters first</small>
             }
         </div>
     }
 
-    @if (_filterApplied && _filteredRows.Count > 0)
+    @if (_filterApplied && !_filterDirty && _filteredRows.Count > 0)
     {
         <h5>Preview (first @(Math.Min(20, _filteredRows.Count)) of @_filteredRows.Count filtered rows, @_rows.Count total)</h5>
         <div style="overflow-x:auto">
@@ -216,6 +223,7 @@ else
     private bool _busy = false;
     private bool _hasError = false;
     private bool _filterApplied = false;
+    private bool _filterDirty = false;
     private DecisionFilterSet _filterSet = new();
     private FilterConfig _filterConfig = new();
 
@@ -258,6 +266,7 @@ else
     {
         _filterSet = fs;
         _filterApplied = true;
+        _filterDirty = false;
         if (_appMode != "Local")
         {
             _filteredRows = _filterSet.Apply(_rows).ToList();
@@ -269,6 +278,12 @@ else
     private void OnFilterConfigChanged(FilterConfig fc)
     {
         _filterConfig = fc;
+    }
+
+    private void OnFilterDirty()
+    {
+        _filterDirty = true;
+        StateHasChanged();
     }
 
     // Local mode
@@ -293,6 +308,12 @@ else
         }
     }
 
+    private async Task ExitAsync()
+    {
+        try { await Http.PostAsync("/api/shutdown", null); }
+        catch { /* server shuts down, request may not complete */ }
+    }
+
     private async Task RunLocalAsync()
     {
         _busy = true; _hasError = false; _statusMessage = string.Empty;
@@ -301,7 +322,6 @@ else
 
         try
         {
-            // Start the job
             var request = new ProcessRequest
             {
                 FolderPath = _folderPath,
@@ -323,7 +343,6 @@ else
                 return;
             }
 
-            // Poll for progress every second
             while (true)
             {
                 await Task.Delay(1000);
@@ -361,7 +380,7 @@ else
     {
         _hasError = false; _statusMessage = string.Empty;
         _rows.Clear(); _filteredRows.Clear();
-        _filteredCount = 0; _filterApplied = false; _filterSet = new();
+        _filteredCount = 0; _filterApplied = false; _filterDirty = false; _filterSet = new();
 
         var files = e.GetMultipleFiles(500).ToList();
         _totalSelectedBytes = files.Sum(f => f.Size);
