@@ -128,14 +128,9 @@ Always specify which Program.cs is being modified:
 - JobStore registered as AddSingleton; LocalFolderProcessor as AddScoped (both inside Local mode guard)
 
 ## Shared rules
-Fetch and apply before starting work:
-`https://raw.githubusercontent.com/halheinrich/backgammon/main/AGENTS.md`
-(GitHub raw URLs are blocked in Claude's container — paste this URL into chat and ask Claude to fetch it.)
 
-## Fetching source files
-GitHub (raw.githubusercontent.com) is blocked in Claude's container.
-**Workaround:** Ask Claude for the URLs needed, paste them back into the chat.
-Claude can then use web_fetch via the user-provided URLs.
+See `AGENTS.md` in the umbrella repo — applies to all sub-projects.
+`https://raw.githubusercontent.com/halheinrich/backgammon/main/AGENTS.md`
 
 ## Session handoff
 After committing:
