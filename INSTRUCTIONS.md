@@ -6,64 +6,111 @@ Part of the Backgammon tools ecosystem: https://github.com/halheinrich/backgammo
 ## Repo
 https://github.com/halheinrich/ExtractFromXgToCsv
 **Branch:** main
-**Current commit:** `cd1d198`
+**Current commit:** `2d6902a`
 
 ## Stack
 C# / .NET 10 / Blazor / Visual Studio 2026 / Windows
 
 ## Solution
-`"D:\Users\Hal\Documents\Visual Studio 2026\Projects\backgammon\ExtractFromXgToCsv\ExtractFromXgToCsv.slnx"`
+`D:\Users\Hal\Documents\Visual Studio 2026\Projects\backgammon\ExtractFromXgToCsv\ExtractFromXgToCsv.slnx`
+
+## Purpose
+Blazor web app. Extracts decisions from .xg/.xgp files, applies XgFilter_Lib filters, exports CSV.
 
 ## Depends on
-- ConvertXgToJson_Lib (commit `a18e669`)
-- XgFilter_Lib (commit `3514390`)
+- ConvertXgToJson_Lib (umbrella pinned: `398999f`)
+- XgFilter_Lib (umbrella pinned: `ef7c7de`)
 
 ## Naming convention
 Always specify which Program.cs is being modified:
 - Server: `ExtractFromXgToCsv\ExtractFromXgToCsv\Program.cs`
 - Client: `ExtractFromXgToCsv\ExtractFromXgToCsv.Client\Program.cs`
 
+## Session start verification
+
+Before any planning or coding, verify the repo hash:
+```powershell
+cd "D:\Users\Hal\Documents\Visual Studio 2026\Projects\backgammon\ExtractFromXgToCsv"
+git rev-parse --short HEAD
+git log --oneline -1 origin/main
+```
+Report the result and wait for explicit confirmation before proceeding.
+
+## Repo directory tree
+
+```
+ExtractFromXgToCsv/
+  ExtractFromXgToCsv/
+    Components/
+      Pages/
+        (empty — razor pages are in Client project)
+    Controllers/
+      AppModeController.cs
+      ProcessController.cs
+      ShutdownController.cs
+    Services/
+      JobStore.cs
+      LocalFolderProcessor.cs
+      XgProcessingService.cs
+    appsettings.json
+    appsettings.Development.json
+    ExtractFromXgToCsv.csproj
+    Program.cs
+  ExtractFromXgToCsv.Client/
+    Components/
+      Pages/
+        Home.razor
+      FilterPanel.razor
+    Shared/
+      FilterConfig.cs
+      ProcessingProgress.cs
+    ExtractFromXgToCsv.Client.csproj
+    Program.cs
+  ExtractFromXgToCsv.slnx
+  INSTRUCTIONS.md
+```
+
 ## Key files
 
-### This subproject (commit cd1d198)
-- ExtractFromXgToCsv.csproj: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/ExtractFromXgToCsv.csproj
-- Program.cs (server): https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/Program.cs
-- Program.cs (client): https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv.Client/Program.cs
-- Services/XgProcessingService.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/Services/XgProcessingService.cs
-- Services/LocalFolderProcessor.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/Services/LocalFolderProcessor.cs
-- Services/JobStore.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/Services/JobStore.cs
-- Controllers/ProcessController.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/Controllers/ProcessController.cs
-- Controllers/AppModeController.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv/Controllers/AppModeController.cs
-- Components/Pages/Home.razor: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv.Client/Components/Pages/Home.razor
-- Components/FilterPanel.razor: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv.Client/Components/FilterPanel.razor
-- Shared/FilterConfig.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv.Client/Shared/FilterConfig.cs
-- Shared/ProcessingProgress.cs: https://raw.githubusercontent.com/halheinrich/ExtractFromXgToCsv/cd1d198/ExtractFromXgToCsv.Client/Shared/ProcessingProgress.cs
+All URLs use `raw.githack.com` at pinned commit hash. Source files unchanged since `132a723`; INSTRUCTIONS.md updated at `2d6902a`.
 
-### ConvertXgToJson_Lib dependency (commit a18e669)
-- DecisionRow.cs: https://raw.githubusercontent.com/halheinrich/ConvertXgToJson_Lib/a18e669fa8cb4de458a0b7379dab3e8ce592f2f0/ConvertXgToJson_Lib/Models/DecisionRow.cs
+* INSTRUCTIONS.md: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/2d6902a/INSTRUCTIONS.md
+* ExtractFromXgToCsv.csproj: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/ExtractFromXgToCsv.csproj
+* Program.cs (server): https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Program.cs
+* Program.cs (client): https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv.Client/Program.cs
+* Services/XgProcessingService.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Services/XgProcessingService.cs
+* Services/LocalFolderProcessor.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Services/LocalFolderProcessor.cs
+* Services/JobStore.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Services/JobStore.cs
+* Controllers/ProcessController.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Controllers/ProcessController.cs
+* Controllers/AppModeController.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Controllers/AppModeController.cs
+* Controllers/ShutdownController.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv/Controllers/ShutdownController.cs
+* Components/Pages/Home.razor: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv.Client/Components/Pages/Home.razor
+* Components/FilterPanel.razor: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv.Client/Components/FilterPanel.razor
+* Shared/FilterConfig.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv.Client/Shared/FilterConfig.cs
+* Shared/ProcessingProgress.cs: https://raw.githack.com/halheinrich/ExtractFromXgToCsv/132a723/ExtractFromXgToCsv.Client/Shared/ProcessingProgress.cs
 
-### XgFilter_Lib dependency (commit 3514390)
-- Filtering/IDecisionFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/IDecisionFilter.cs
-- Filtering/DecisionFilterSet.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/DecisionFilterSet.cs
-- Filtering/PlayerFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/PlayerFilter.cs
-- Filtering/DecisionTypeFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/DecisionTypeFilter.cs
-- Filtering/MatchScoreFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/MatchScoreFilter.cs
-- Filtering/ErrorRangeFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/ErrorRangeFilter.cs
-- Filtering/PositionTypeFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/PositionTypeFilter.cs
-- Filtering/PlayTypeFilter.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Filtering/PlayTypeFilter.cs
-- Enums/PositionType.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Enums/PositionType.cs
-- Enums/PlayType.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Enums/PlayType.cs
-- Classification/IPositionClassifier.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Classification/IPositionClassifier.cs
-- Classification/RaceClassifier.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Classification/RaceClassifier.cs
-- Classification/ContactClassifier.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Classification/ContactClassifier.cs
-- Projection/ColumnSelector.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/Projection/ColumnSelector.cs
-- FilteredDecisionIterator.cs: https://raw.githubusercontent.com/halheinrich/XgFilter_Lib/3514390455b9e8795125d3c629560566230f8343/XgFilter_Lib/FilteredDecisionIterator.cs
+## Dependency files
+
+Fetch URLs from umbrella INSTRUCTIONS.md at currently pinned hashes.
+
+### ConvertXgToJson_Lib (umbrella pinned: `398999f`)
+Files needed:
+* ConvertXgToJson_Lib/VersionInfo.cs
+* ConvertXgToJson_Lib/Models/DecisionRow.cs
+* ConvertXgToJson_Lib/XgDecisionIterator.cs
+
+### XgFilter_Lib (umbrella pinned: `ef7c7de`)
+Files needed:
+* XgFilter_Lib/Filtering/IDecisionFilter.cs
+* XgFilter_Lib/Filtering/DecisionFilterSet.cs
+* XgFilter_Lib/FilteredDecisionIterator.cs
+* XgFilter_Lib/Projection/ColumnSelector.cs
 
 ## Architecture
 
 ### Server project
 - Thin host only — all browser processing in client
-- Owns: AppModeService, LocalFolderProcessor, JobStore, ProcessController, AppModeController
+- Owns: AppModeService, LocalFolderProcessor, JobStore, ProcessController, AppModeController, ShutdownController
 
 ### Client project
 - WASM client — owns all .xg parsing, filtering, and CSV generation for web mode
@@ -82,6 +129,7 @@ Always specify which Program.cs is being modified:
   - Run button → POST `/api/process/start` → returns `{ jobId }`
   - Client polls `/api/process/{jobId}/status` every second
   - Stop button → POST `/api/process/{jobId}/cancel`
+  - Exit button → ShutdownController
   - Server processes files in background Task.Run, writes CSV to disk
   - Progress bar + status line update live via polling
   - No data size limit
@@ -89,7 +137,7 @@ Always specify which Program.cs is being modified:
 - **Web/Azure:** (`appsettings.json` `"AppMode": "Web"`)
   - Browser file picker; 50MB total size cap enforced in UI
   - WASM processes files in browser
-  - Download CSV button
+  - Download CSV button (not yet implemented)
   - Preview table (first 20 rows)
 
 ### Job lifecycle (local mode)
@@ -103,9 +151,6 @@ Always specify which Program.cs is being modified:
 ## Current status
 ✅ End-to-end working — local mode tested: 6,660 files → 951,973 rows in 447s (14 files/sec)
 
-## In progress
-- Nothing
-
 ## Deferred
 - CSV download button for Azure/browser mode
 - ColumnSelector wired into UI (column projection)
@@ -113,6 +158,7 @@ Always specify which Program.cs is being modified:
 - Priming, Blitz, HoldingGame classifiers in XgFilter_Lib
 - Job cleanup / expiry in JobStore (not needed for single-user local app)
 - Performance optimization (currently ~14 files/sec on 6,660 file dataset)
+- ExtractFromXgToCsv gets 0 rows after XGID fix — to be diagnosed
 
 ## Key decisions
 - FilterPanel is a separate component under `ExtractFromXgToCsv.Client/Components/`
@@ -122,20 +168,15 @@ Always specify which Program.cs is being modified:
 - Always quote paths with spaces in PowerShell
 - FilterPanel.razor owns all filter UI state; raises OnFiltersChanged and OnFilterConfigChanged
 - Home.razor applies DecisionFilterSet to _rows before CSV output (web mode)
-- WASM cannot stream HTTP responses (net_http_synchronous_reads_not_supported) — polling used instead
+- WASM cannot stream HTTP responses — polling used instead
 - LocalFolderProcessor.reportEvery = 10 (client polls every second; no need to update every file)
-- ProcessRequest class lives in server ProcessController.cs (not client Shared/) — server owns it
+- ProcessRequest class lives in server ProcessController.cs — server owns it
 - JobStore registered as AddSingleton; LocalFolderProcessor as AddScoped (both inside Local mode guard)
+- Run button disabled when filter is dirty (not yet applied)
 
 ## Shared rules
-
-See `AGENTS.md` in the umbrella repo — applies to all sub-projects.
-`https://raw.githubusercontent.com/halheinrich/backgammon/main/AGENTS.md`
-
-## Session handoff
-After committing:
-1. `git rev-parse HEAD` in this subproject dir — note the short hash
-2. Update commit hash in this doc and all raw URLs
-3. Add URLs for any new files created
-4. Update In progress / Deferred / Key decisions
-5. Return to Backgammon Umbrella project — update umbrella instructions doc
+See AGENTS.md in the umbrella repo. Fetch with pinned hash — never `main`:
+```powershell
+git log --oneline -3 -- AGENTS.md
+```
+from the umbrella root to get the correct hash.
