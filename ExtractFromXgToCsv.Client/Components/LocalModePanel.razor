@@ -1,0 +1,220 @@
+﻿@using BgDataTypes_Lib
+@using XgFilter_Lib.Filtering
+@using ExtractFromXgToCsv.Client.Shared
+@inject IJSRuntime JS
+@inject HttpClient Http
+
+<section class="mb-4">
+    <div style="max-width:800px">
+        <div class="mb-3">
+            <label class="form-label">Folder path</label>
+            <input class="form-control" placeholder="e.g. D:\xg\matches"
+                   value="@_folderPath"
+                   @oninput="OnFolderPathChanged" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Output path</label>
+            <input class="form-control" placeholder="e.g. D:\xg\decisions.csv"
+                   value="@_outputPath"
+                   @oninput="OnOutputPathChanged" />
+        </div>
+    </div>
+</section>
+
+@if (_hasError && !string.IsNullOrEmpty(_statusMessage))
+{
+    <div class="alert alert-danger mt-2">@_statusMessage</div>
+}
+
+<div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
+    <button class="btn btn-primary"
+            @onclick="RunLocalAsync"
+            disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty)">
+        Run
+    </button>
+    @if (_busy)
+    {
+        <button class="btn btn-danger" @onclick="StopLocalAsync">
+            Stop
+        </button>
+    }
+    <button class="btn btn-outline-secondary" @onclick="ExitAsync">
+        Exit
+    </button>
+    @if (!FilterApplied || FilterDirty)
+    {
+        <small class="text-muted">Apply filters first</small>
+    }
+</div>
+
+@if (_busy || _progress is not null)
+{
+    <div style="max-width:800px">
+        @if (_progress is not null)
+        {
+            <div class="progress mb-2" style="height:24px">
+                <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"
+                     role="progressbar"
+                     style="width:@(_progress.PercentComplete)%">
+                    @_progress.PercentComplete%
+                </div>
+            </div>
+            <div class="small">
+                @if (_progress.Complete && !_progress.Cancelled)
+                {
+                    <span class="text-success fw-bold">
+                        ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
+                        (@_progress.FilesPerSec files/sec) → @_outputPath
+                    </span>
+                }
+                else if (_progress.Cancelled)
+                {
+                    <span class="text-warning fw-bold">
+                        ⏹ Stopped at file @_progress.Current of @_progress.Total
+                        — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
+                        (@_progress.FilesPerSec files/sec)
+                    </span>
+                }
+                else
+                {
+                    <span class="text-muted">
+                        File @_progress.Current of @_progress.Total: @_progress.FileName
+                        — @_progress.TotalRows rows, @_progress.ElapsedSec.ToString("F1")s
+                        (@_progress.FilesPerSec files/sec)
+                    </span>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public OutputFormat OutputFormat { get; set; }
+    [Parameter] public FilterConfig FilterConfig { get; set; } = new();
+    [Parameter] public bool FilterApplied { get; set; }
+    [Parameter] public bool FilterDirty { get; set; }
+
+    private string _folderPath = string.Empty;
+    private string _outputPath = string.Empty;
+    private ProcessingProgress? _progress = null;
+    private string? _currentJobId = null;
+    private bool _busy = false;
+    private bool _hasError = false;
+    private string _statusMessage = string.Empty;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _folderPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_folderPath") ?? string.Empty;
+        _outputPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputPath") ?? string.Empty;
+        StateHasChanged();
+    }
+
+    private async Task OnFolderPathChanged(ChangeEventArgs e)
+    {
+        _folderPath = e.Value?.ToString() ?? string.Empty;
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_folderPath", _folderPath);
+    }
+
+    private async Task OnOutputPathChanged(ChangeEventArgs e)
+    {
+        _outputPath = e.Value?.ToString() ?? string.Empty;
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Update output path extension when output format changes
+        if (!string.IsNullOrWhiteSpace(_outputPath))
+        {
+            var expectedExt = OutputFormat == OutputFormat.DiagramJson ? ".json" : ".csv";
+            if (!_outputPath.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
+            {
+                _outputPath = Path.ChangeExtension(_outputPath, expectedExt);
+                _ = JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
+            }
+        }
+    }
+
+    private async Task StopLocalAsync()
+    {
+        if (_currentJobId is not null)
+        {
+            try { await Http.PostAsync($"/api/process/{_currentJobId}/cancel", null); }
+            catch { /* ignore */ }
+        }
+    }
+
+    private async Task ExitAsync()
+    {
+        try { await Http.PostAsync("/api/shutdown", null); }
+        catch { /* server shuts down, request may not complete */ }
+    }
+
+    private async Task RunLocalAsync()
+    {
+        _busy = true; _hasError = false; _statusMessage = string.Empty;
+        _progress = null; _currentJobId = null;
+        StateHasChanged();
+
+        try
+        {
+            var request = new ProcessRequest
+            {
+                FolderPath = _folderPath,
+                OutputPath = _outputPath,
+                Filters = FilterConfig,
+                OutputFormat = OutputFormat
+            };
+
+            var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
+            startResponse.EnsureSuccessStatusCode();
+
+            var startResult = await startResponse.Content
+                .ReadFromJsonAsync<StartResult>();
+            _currentJobId = startResult?.JobId;
+
+            if (_currentJobId is null)
+            {
+                _hasError = true;
+                _statusMessage = "Failed to start job — no jobId returned.";
+                return;
+            }
+
+            while (true)
+            {
+                await Task.Delay(1000);
+
+                var statusResponse = await Http.GetAsync($"/api/process/{_currentJobId}/status");
+                if (!statusResponse.IsSuccessStatusCode) break;
+
+                var p = await statusResponse.Content
+                    .ReadFromJsonAsync<ProcessingProgress>(
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                if (p is not null)
+                {
+                    _progress = p;
+                    StateHasChanged();
+                    if (p.Complete) break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _hasError = true;
+            _statusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            _currentJobId = null;
+            StateHasChanged();
+        }
+    }
+
+    private class StartResult
+    {
+        public string? JobId { get; set; }
+    }
+}

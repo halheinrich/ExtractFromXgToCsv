@@ -1,10 +1,8 @@
 @using BgDataTypes_Lib
 @using XgFilter_Lib.Filtering
-@using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
 @page "/"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
-@inject XgProcessingService Processor
 @inject IJSRuntime JS
 @inject HttpClient Http
 @implements IDisposable
@@ -13,275 +11,56 @@
 
 <h1>Extract XG Decisions to CSV</h1>
 
+<div class="mb-3" style="max-width:800px">
+    <label class="form-label d-block">Output format</label>
+    <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
+               checked="@(_outputFormat == OutputFormat.Csv)"
+               @onchange="@(() => SetOutputFormat(OutputFormat.Csv))" />
+        <label class="form-check-label" for="fmtCsv">CSV</label>
+    </div>
+    <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
+               checked="@(_outputFormat == OutputFormat.DiagramJson)"
+               @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
+        <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
+    </div>
+</div>
+
+<FilterPanel OnFiltersChanged="OnFiltersChanged"
+             OnFilterConfigChanged="OnFilterConfigChanged"
+             OnFilterDirty="OnFilterDirty" />
+
 @if (_appMode == "Local")
 {
-    @* ── LOCAL MODE ───────────────────────────────────────────────────────────── *@
-    <section class="mb-4">
-        <div style="max-width:800px">
-            <div class="mb-3">
-                <label class="form-label">Folder path</label>
-                <input class="form-control" placeholder="e.g. D:\xg\matches"
-                       value="@_folderPath"
-                       @oninput="OnFolderPathChanged" />
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Output CSV path</label>
-                <input class="form-control" placeholder="e.g. D:\xg\decisions.csv"
-                       value="@_outputPath"
-                       @oninput="OnOutputPathChanged" />
-            </div>
-        </div>
-    </section>
-
-    @if (_hasError && !string.IsNullOrEmpty(_statusMessage))
-    {
-        <div class="alert alert-danger mt-2">@_statusMessage</div>
-    }
-
-    <div class="mb-3" style="max-width:800px">
-        <label class="form-label d-block">Output format</label>
-        <div class="form-check form-check-inline">
-            <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
-                   checked="@(_outputFormat == OutputFormat.Csv)"
-                   @onchange="@(() => SetOutputFormat(OutputFormat.Csv))" />
-            <label class="form-check-label" for="fmtCsv">CSV</label>
-        </div>
-        <div class="form-check form-check-inline">
-            <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
-                   checked="@(_outputFormat == OutputFormat.DiagramJson)"
-                   @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
-            <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
-        </div>
-    </div>
-
-    <FilterPanel OnFiltersChanged="OnFiltersChanged"
-                 OnFilterConfigChanged="OnFilterConfigChanged"
-                 OnFilterDirty="OnFilterDirty" />
-
-    <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
-        <button class="btn btn-primary"
-                @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !_filterApplied || _filterDirty)">
-            Run
-        </button>
-        @if (_busy)
-        {
-            <button class="btn btn-danger" @onclick="StopLocalAsync">
-                Stop
-            </button>
-        }
-        <button class="btn btn-outline-secondary" @onclick="ExitAsync">
-            Exit
-        </button>
-        @if (!_filterApplied || _filterDirty)
-        {
-            <small class="text-muted">Apply filters first</small>
-        }
-    </div>
-
-    @if (_busy || _progress is not null)
-    {
-        <div style="max-width:800px">
-            @if (_progress is not null)
-            {
-                <div class="progress mb-2" style="height:24px">
-                    <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"
-                         role="progressbar"
-                         style="width:@(_progress.PercentComplete)%">
-                        @_progress.PercentComplete%
-                    </div>
-                </div>
-                <div class="small">
-                    @if (_progress.Complete && !_progress.Cancelled)
-                    {
-                        <span class="text-success fw-bold">
-                            ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec) → @_outputPath
-                        </span>
-                    }
-                    else if (_progress.Cancelled)
-                    {
-                        <span class="text-warning fw-bold">
-                            ⏹ Stopped at file @_progress.Current of @_progress.Total
-                            — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec)
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="text-muted">
-                            File @_progress.Current of @_progress.Total: @_progress.FileName
-                            — @_progress.TotalRows rows, @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec)
-                        </span>
-                    }
-                </div>
-            }
-        </div>
-    }
+    <LocalModePanel OutputFormat="_outputFormat"
+                    FilterConfig="_filterConfig"
+                    FilterApplied="_filterApplied"
+                    FilterDirty="_filterDirty" />
 }
 else
 {
-    @* ── WEB MODE ─────────────────────────────────────────────────────────────── *@
-    <section class="mb-4">
-        <div style="max-width:800px">
-            <label class="form-label">Select .xg / .xgp files</label>
-            @if (!string.IsNullOrEmpty(_lastFolderHint))
-            {
-                <div><small class="text-muted">Last: @_lastFolderHint</small></div>
-            }
-            @if (_totalSelectedBytes > WebModeLimitBytes)
-            {
-                <div class="alert alert-warning mt-1 mb-1 py-1">
-                    Selected files total @(_totalSelectedBytes / 1024 / 1024)MB —
-                    limit is @(WebModeLimitBytes / 1024 / 1024)MB.
-                    Please select fewer files.
-                </div>
-            }
-            <InputFile OnChange="HandleFileSelectionAsync" multiple
-                       accept=".xg,.xgp" class="form-control mb-3" />
-        </div>
-    </section>
-
-    @if (_hasError && !string.IsNullOrEmpty(_statusMessage))
-    {
-        <div class="alert alert-danger mt-2">@_statusMessage</div>
-    }
-
-    @if (_rows.Count > 0)
-    {
-        <div class="mb-3" style="max-width:800px">
-            <label class="form-label d-block">Output format</label>
-            <div class="form-check form-check-inline">
-                <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
-                       checked="@(_outputFormat == OutputFormat.Csv)"
-                       @onchange="@(() => SetOutputFormat(OutputFormat.Csv))" />
-                <label class="form-check-label" for="fmtCsv">CSV</label>
-            </div>
-            <div class="form-check form-check-inline">
-                <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
-                       checked="@(_outputFormat == OutputFormat.DiagramJson)"
-                       @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
-                <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
-            </div>
-        </div>
-        <FilterPanel OnFiltersChanged="OnFiltersChanged"
-                     OnFilterConfigChanged="OnFilterConfigChanged"
-                     OnFilterDirty="OnFilterDirty" />
-
-        <div class="mb-4" style="max-width:800px">
-            @if (_filterApplied && !_filterDirty)
-            {
-                <div class="mb-2 text-muted">
-                    @_filteredCount of @_rows.Count rows match current filters
-                </div>
-            }
-            else
-            {
-                <div class="mb-2 text-muted">
-                    @_rows.Count rows loaded — set filters and click Apply Filter
-                </div>
-            }
-
-            <label class="form-label">CSV Filename</label>
-            <input class="form-control mb-3" style="max-width:400px"
-                   placeholder="decisions.csv"
-                   value="@_csvFileName"
-                   @oninput="OnCsvFileNameChanged" />
-
-            <button class="btn btn-primary"
-                    @onclick="DownloadCsvAsync"
-                    disabled="@(_busy || !_filterApplied || _filterDirty || _totalSelectedBytes > WebModeLimitBytes)">
-                @(_busy ? "Building…" : (_outputFormat == OutputFormat.DiagramJson ? "Download JSON" : "Download CSV"))
-            </button>
-            @if (!_filterApplied || _filterDirty)
-            {
-                <small class="text-muted ms-2">Apply filters first</small>
-            }
-        </div>
-    }
-
-    @if (_filterApplied && !_filterDirty && _filteredRows.Count > 0)
-    {
-        <h5>Preview (first @(Math.Min(20, _filteredRows.Count)) of @_filteredRows.Count filtered rows, @_rows.Count total)</h5>
-        <div style="overflow-x:auto">
-            <table class="table table-sm table-striped table-bordered">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Xgid</th>
-                        <th>Error</th>
-                        <th>MatchScore</th>
-                        <th>MatchLength</th>
-                        <th>Player</th>
-                        <th>Match</th>
-                        <th>Game</th>
-                        <th>MoveNum</th>
-                        <th>Roll</th>
-                        <th>AnalysisDepth</th>
-                        <th>Equity</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var r in _filteredRows.Take(20))
-                    {
-                        <tr>
-                            <td><code style="font-size:.75em">@r.Xgid</code></td>
-                            <td>@r.Error</td>
-                            <td>@r.MatchScore</td>
-                            <td>@r.MatchLength</td>
-                            <td>@r.Player</td>
-                            <td>@r.Match</td>
-                            <td>@r.Game</td>
-                            <td>@r.MoveNum</td>
-                            <td>@r.Roll</td>
-                            <td>@r.AnalysisDepth</td>
-                            <td>@r.Equity</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    }
+    <WebModePanel OutputFormat="_outputFormat"
+                  FilterSet="_filterSet"
+                  FilterApplied="_filterApplied"
+                  FilterDirty="_filterDirty" />
 }
 
 @code {
-    private const long WebModeLimitBytes = 50L * 1024 * 1024;
-
-    // Shared
     private string _appMode = "Web";
-    private string _csvFileName = "decisions.csv";
-    private string _statusMessage = string.Empty;
-    private bool _busy = false;
-    private bool _hasError = false;
+    private OutputFormat _outputFormat = OutputFormat.Csv;
     private bool _filterApplied = false;
     private bool _filterDirty = false;
     private DecisionFilterSet _filterSet = new();
     private FilterConfig _filterConfig = new();
-    private OutputFormat _outputFormat = OutputFormat.Csv;
-
-    // Local mode
-    private string _folderPath = string.Empty;
-    private string _outputPath = string.Empty;
-    private ProcessingProgress? _progress = null;
-    private string? _currentJobId = null;
-
-    // Web mode
-    private string _lastFolderHint = string.Empty;
-    private long _totalSelectedBytes = 0;
-    private List<DecisionRow> _rows = new();
-    private List<DecisionRow> _filteredRows = new();
-    private List<BgDecisionData> _diagramRows = new();
-    private List<BgDecisionData> _filteredDiagramRows = new();
-    private int _filteredCount = 0;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
 
-        _csvFileName = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
-        _lastFolderHint = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_lastFolderHint") ?? string.Empty;
-        _folderPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_folderPath") ?? string.Empty;
-        _outputPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputPath") ?? string.Empty;
+        var savedFormat = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputFormat");
+        if (Enum.TryParse<OutputFormat>(savedFormat, out var fmt))
+            _outputFormat = fmt;
 
         try
         {
@@ -295,18 +74,11 @@ else
 
     public void Dispose() { }
 
-    // Both modes
     private void OnFiltersChanged(DecisionFilterSet fs)
     {
         _filterSet = fs;
         _filterApplied = true;
         _filterDirty = false;
-        if (_appMode != "Local")
-        {
-            _filteredRows = _rows.Where(r => _filterSet.Matches(r)).ToList();
-            _filteredDiagramRows = _diagramRows.Where(r => _filterSet.Matches(r)).ToList();
-            _filteredCount = _filteredRows.Count;
-        }
         StateHasChanged();
     }
 
@@ -321,193 +93,10 @@ else
         StateHasChanged();
     }
 
-    // Local mode
-    private async Task OnFolderPathChanged(ChangeEventArgs e)
-    {
-        _folderPath = e.Value?.ToString() ?? string.Empty;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_folderPath", _folderPath);
-    }
-
-    private async Task OnOutputPathChanged(ChangeEventArgs e)
-    {
-        _outputPath = e.Value?.ToString() ?? string.Empty;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
-    }
-
-    private async Task StopLocalAsync()
-    {
-        if (_currentJobId is not null)
-        {
-            try { await Http.PostAsync($"/api/process/{_currentJobId}/cancel", null); }
-            catch { /* ignore */ }
-        }
-    }
-
-    private async Task ExitAsync()
-    {
-        try { await Http.PostAsync("/api/shutdown", null); }
-        catch { /* server shuts down, request may not complete */ }
-    }
-
-    private async Task RunLocalAsync()
-    {
-        _busy = true; _hasError = false; _statusMessage = string.Empty;
-        _progress = null; _currentJobId = null;
-        StateHasChanged();
-
-        try
-        {
-            var request = new ProcessRequest
-            {
-                FolderPath = _folderPath,
-                OutputPath = _outputPath,
-                Filters = _filterConfig,
-                OutputFormat = _outputFormat
-            };
-
-            var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
-            startResponse.EnsureSuccessStatusCode();
-
-            var startResult = await startResponse.Content
-                .ReadFromJsonAsync<StartResult>();
-            _currentJobId = startResult?.JobId;
-
-            if (_currentJobId is null)
-            {
-                _hasError = true;
-                _statusMessage = "Failed to start job — no jobId returned.";
-                return;
-            }
-
-            while (true)
-            {
-                await Task.Delay(1000);
-
-                var statusResponse = await Http.GetAsync($"/api/process/{_currentJobId}/status");
-                if (!statusResponse.IsSuccessStatusCode) break;
-
-                var p = await statusResponse.Content
-                    .ReadFromJsonAsync<ProcessingProgress>(
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-                if (p is not null)
-                {
-                    _progress = p;
-                    StateHasChanged();
-                    if (p.Complete) break;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _hasError = true;
-            _statusMessage = $"Error: {ex.Message}";
-        }
-        finally
-        {
-            _busy = false;
-            _currentJobId = null;
-            StateHasChanged();
-        }
-    }
-
-    // Web mode
-    private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
-    {
-        _hasError = false; _statusMessage = string.Empty;
-        _rows.Clear(); _filteredRows.Clear();
-        _diagramRows.Clear();
-        _filteredCount = 0; _filterApplied = false; _filterDirty = false; _filterSet = new();
-
-        var files = e.GetMultipleFiles(500).ToList();
-        _totalSelectedBytes = files.Sum(f => f.Size);
-
-        if (_totalSelectedBytes > WebModeLimitBytes)
-        {
-            _hasError = true;
-            _statusMessage = $"Selected files total {_totalSelectedBytes / 1024 / 1024}MB — limit is {WebModeLimitBytes / 1024 / 1024}MB. Please select fewer files.";
-            return;
-        }
-
-        if (files.Count > 0)
-        {
-            _lastFolderHint = $"{files.Count} file(s) — first: {files[0].Name}";
-            await JS.InvokeVoidAsync("localStorage.setItem", "xg_lastFolderHint", _lastFolderHint);
-        }
-
-        try
-        {
-            foreach (var file in files)
-            {
-                using var ms = new MemoryStream();
-                await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
-                var bytes = ms.ToArray();
-                _rows.AddRange(Processor.ExtractDecisions(bytes, file.Name));
-                _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, file.Name));
-            }
-        }
-        catch (Exception ex)
-        {
-            _hasError = true;
-            _statusMessage = $"Error: {ex.Message}";
-        }
-    }
-
-    private async Task OnCsvFileNameChanged(ChangeEventArgs e)
-    {
-        _csvFileName = e.Value?.ToString() ?? string.Empty;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
-    }
-
-    private async Task DownloadCsvAsync()
-    {
-        _busy = true;
-        try
-        {
-            string content;
-            string fileName;
-            string mimeType;
-
-            if (_outputFormat == OutputFormat.DiagramJson)
-            {
-                content = Processor.BuildDiagramJson(_filteredDiagramRows);
-                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.json" : _csvFileName;
-                mimeType = "application/json";
-            }
-            else
-            {
-                content = Processor.BuildCsv(_filteredRows);
-                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
-                mimeType = "text/csv";
-            }
-
-            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
-            await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
-        }
-        finally { _busy = false; }
-    }
-
-    private class StartResult
-    {
-        public string? JobId { get; set; }
-    }
     private async Task SetOutputFormat(OutputFormat fmt)
     {
         _outputFormat = fmt;
-        // Update output path extension in local mode
-        if (_appMode == "Local" && !string.IsNullOrWhiteSpace(_outputPath))
-        {
-            var ext = fmt == OutputFormat.DiagramJson ? ".json" : ".csv";
-            _outputPath = Path.ChangeExtension(_outputPath, ext);
-            await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
-        }
-        // Update filename extension in web mode
-        if (_appMode != "Local" && !string.IsNullOrWhiteSpace(_csvFileName))
-        {
-            var ext = fmt == OutputFormat.DiagramJson ? ".json" : ".csv";
-            _csvFileName = Path.ChangeExtension(_csvFileName, ext);
-            await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
-        }
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputFormat", fmt.ToString());
         StateHasChanged();
     }
 }

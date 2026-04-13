@@ -1,0 +1,238 @@
+﻿<h3>WebModePanel</h3>
+
+@code {
+
+}
+@using BgDataTypes_Lib
+@using XgFilter_Lib.Filtering
+@using ExtractFromXgToCsv.Client.Services
+@using ExtractFromXgToCsv.Client.Shared
+@inject XgProcessingService Processor
+@inject IJSRuntime JS
+
+<section class="mb-4">
+    <div style="max-width:800px">
+        <label class="form-label">Select .xg / .xgp files</label>
+        @if (!string.IsNullOrEmpty(_lastFolderHint))
+        {
+            <div><small class="text-muted">Last: @_lastFolderHint</small></div>
+        }
+        @if (_totalSelectedBytes > WebModeLimitBytes)
+        {
+            <div class="alert alert-warning mt-1 mb-1 py-1">
+                Selected files total @(_totalSelectedBytes / 1024 / 1024)MB —
+                limit is @(WebModeLimitBytes / 1024 / 1024)MB.
+                Please select fewer files.
+            </div>
+        }
+        <InputFile OnChange="HandleFileSelectionAsync" multiple
+                   accept=".xg,.xgp" class="form-control mb-3" />
+    </div>
+</section>
+
+@if (_hasError && !string.IsNullOrEmpty(_statusMessage))
+{
+    <div class="alert alert-danger mt-2">@_statusMessage</div>
+}
+
+@if (_rows.Count > 0)
+{
+    <div class="mb-4" style="max-width:800px">
+        @if (FilterApplied && !FilterDirty)
+        {
+            <div class="mb-2 text-muted">
+                @_filteredCount of @_rows.Count rows match current filters
+            </div>
+        }
+        else
+        {
+            <div class="mb-2 text-muted">
+                @_rows.Count rows loaded — set filters and click Apply Filter
+            </div>
+        }
+
+        <label class="form-label">Filename</label>
+        <input class="form-control mb-3" style="max-width:400px"
+               placeholder="decisions.csv"
+               value="@_csvFileName"
+               @oninput="OnCsvFileNameChanged" />
+
+        <button class="btn btn-primary"
+                @onclick="DownloadAsync"
+                disabled="@(_busy || !FilterApplied || FilterDirty || _totalSelectedBytes > WebModeLimitBytes)">
+            @(_busy ? "Building…" : (OutputFormat == OutputFormat.DiagramJson ? "Download JSON" : "Download CSV"))
+        </button>
+        @if (!FilterApplied || FilterDirty)
+        {
+            <small class="text-muted ms-2">Apply filters first</small>
+        }
+    </div>
+}
+
+@if (FilterApplied && !FilterDirty && _filteredRows.Count > 0)
+{
+    <h5>Preview (first @(Math.Min(20, _filteredRows.Count)) of @_filteredRows.Count filtered rows, @_rows.Count total)</h5>
+    <div style="overflow-x:auto">
+        <table class="table table-sm table-striped table-bordered">
+            <thead class="table-dark">
+                <tr>
+                    <th>Xgid</th>
+                    <th>Error</th>
+                    <th>MatchScore</th>
+                    <th>MatchLength</th>
+                    <th>Player</th>
+                    <th>Match</th>
+                    <th>Game</th>
+                    <th>MoveNum</th>
+                    <th>Roll</th>
+                    <th>AnalysisDepth</th>
+                    <th>Equity</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _filteredRows.Take(20))
+                {
+                    <tr>
+                        <td><code style="font-size:.75em">@r.Xgid</code></td>
+                        <td>@r.Error</td>
+                        <td>@r.MatchScore</td>
+                        <td>@r.MatchLength</td>
+                        <td>@r.Player</td>
+                        <td>@r.Match</td>
+                        <td>@r.Game</td>
+                        <td>@r.MoveNum</td>
+                        <td>@r.Roll</td>
+                        <td>@r.AnalysisDepth</td>
+                        <td>@r.Equity</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private const long WebModeLimitBytes = 50L * 1024 * 1024;
+
+    [Parameter] public OutputFormat OutputFormat { get; set; }
+    [Parameter] public DecisionFilterSet FilterSet { get; set; } = new();
+    [Parameter] public bool FilterApplied { get; set; }
+    [Parameter] public bool FilterDirty { get; set; }
+
+    private string _csvFileName = "decisions.csv";
+    private string _lastFolderHint = string.Empty;
+    private long _totalSelectedBytes = 0;
+    private bool _busy = false;
+    private bool _hasError = false;
+    private string _statusMessage = string.Empty;
+    private List<DecisionRow> _rows = new();
+    private List<DecisionRow> _filteredRows = new();
+    private List<BgDecisionData> _diagramRows = new();
+    private List<BgDecisionData> _filteredDiagramRows = new();
+    private int _filteredCount = 0;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _csvFileName = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
+        _lastFolderHint = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_lastFolderHint") ?? string.Empty;
+        StateHasChanged();
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Re-filter when filter set or applied state changes
+        if (FilterApplied && !FilterDirty && _rows.Count > 0)
+        {
+            _filteredRows = _rows.Where(r => FilterSet.Matches(r)).ToList();
+            _filteredDiagramRows = _diagramRows.Where(r => FilterSet.Matches(r)).ToList();
+            _filteredCount = _filteredRows.Count;
+        }
+
+        // Update filename extension when output format changes
+        if (!string.IsNullOrWhiteSpace(_csvFileName))
+        {
+            var expectedExt = OutputFormat == OutputFormat.DiagramJson ? ".json" : ".csv";
+            if (!_csvFileName.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
+            {
+                _csvFileName = Path.ChangeExtension(_csvFileName, expectedExt);
+                _ = JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+            }
+        }
+    }
+
+    private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
+    {
+        _hasError = false; _statusMessage = string.Empty;
+        _rows.Clear(); _filteredRows.Clear();
+        _diagramRows.Clear(); _filteredDiagramRows.Clear();
+        _filteredCount = 0;
+
+        var files = e.GetMultipleFiles(500).ToList();
+        _totalSelectedBytes = files.Sum(f => f.Size);
+
+        if (_totalSelectedBytes > WebModeLimitBytes)
+        {
+            _hasError = true;
+            _statusMessage = $"Selected files total {_totalSelectedBytes / 1024 / 1024}MB — limit is {WebModeLimitBytes / 1024 / 1024}MB. Please select fewer files.";
+            return;
+        }
+
+        if (files.Count > 0)
+        {
+            _lastFolderHint = $"{files.Count} file(s) — first: {files[0].Name}";
+            await JS.InvokeVoidAsync("localStorage.setItem", "xg_lastFolderHint", _lastFolderHint);
+        }
+
+        try
+        {
+            foreach (var file in files)
+            {
+                using var ms = new MemoryStream();
+                await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
+                var bytes = ms.ToArray();
+                _rows.AddRange(Processor.ExtractDecisions(bytes, file.Name));
+                _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, file.Name));
+            }
+        }
+        catch (Exception ex)
+        {
+            _hasError = true;
+            _statusMessage = $"Error: {ex.Message}";
+        }
+    }
+
+    private async Task OnCsvFileNameChanged(ChangeEventArgs e)
+    {
+        _csvFileName = e.Value?.ToString() ?? string.Empty;
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+    }
+
+    private async Task DownloadAsync()
+    {
+        _busy = true;
+        try
+        {
+            string content;
+            string fileName;
+            string mimeType;
+
+            if (OutputFormat == OutputFormat.DiagramJson)
+            {
+                content = Processor.BuildDiagramJson(_filteredDiagramRows);
+                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.json" : _csvFileName;
+                mimeType = "application/json";
+            }
+            else
+            {
+                content = Processor.BuildCsv(_filteredRows);
+                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
+                mimeType = "text/csv";
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+            await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
+        }
+        finally { _busy = false; }
+    }
+}
