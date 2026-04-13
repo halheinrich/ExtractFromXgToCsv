@@ -76,6 +76,8 @@ ExtractFromXgToCsv.Client.csproj
 Program.cs
 Components/
 FilterPanel.razor
+LocalModePanel.razor
+WebModePanel.razor
 Pages/
 Home.razor
 Services/
@@ -90,6 +92,7 @@ FixtureHelper.cs
 FilterSetBuilderTests.cs
 XgProcessingServiceTests.cs
 OutputConsistencyTests.cs
+ExtractFromXgToCsv.slnx
 ```
 
 ## Architecture
@@ -103,14 +106,16 @@ OutputConsistencyTests.cs
 - WASM — owns all .xg parsing, filtering, CSV/JSON generation for web mode
 
 ### Components
-- `Home.razor` — file input (web mode), `_rows` (List<DecisionRow>), `_diagramRows` (List<BgDecisionData>), `_filterSet`, `_outputFormat`, output path/filename, localStorage persistence, CSV/JSON download, polling loop (local mode), radio buttons for output format
-- `FilterPanel.razor` — all filter state; raises `OnFiltersChanged EventCallback<DecisionFilterSet>` and `OnFilterConfigChanged EventCallback<FilterConfig>`
+- `Home.razor` (~75 lines) — shell: detects app mode, owns shared state (output format, filter set, filter config, filter applied/dirty), renders output format radio buttons and FilterPanel, delegates to LocalModePanel or WebModePanel
+- `FilterPanel.razor` — all filter state; raises `OnFiltersChanged EventCallback<DecisionFilterSet>`, `OnFilterConfigChanged EventCallback<FilterConfig>`, `OnFilterDirty EventCallback`; always visible in both modes
+- `LocalModePanel.razor` (~165 lines) — local mode: folder/output path inputs, Run/Stop/Exit buttons, polling loop, progress bar. Parameters: OutputFormat, FilterConfig, FilterApplied, FilterDirty
+- `WebModePanel.razor` (~175 lines) — web mode: file picker, in-memory rows/diagram rows, filtering via OnParametersSet, preview table, download. Parameters: OutputFormat, FilterSet, FilterApplied, FilterDirty
 
 ### Modes
 
 **Local** (`"AppMode": "Local"`):
 - Folder path + output CSV/JSON path inputs
-- Output format radio buttons: CSV / Diagram JSON
+- Output format radio buttons: CSV / Diagram JSON (persisted to localStorage)
 - Run → POST `/api/process/start` → jobId; client polls `/api/process/{jobId}/status` every second
 - Server calls `ProcessAsync` (CSV) or `ProcessDiagramAsync` (Diagram JSON) based on `ProcessRequest.OutputFormat`
 - Stop → POST `/api/process/{jobId}/cancel`; Exit → ShutdownController
@@ -138,7 +143,6 @@ OutputConsistencyTests.cs
 ## Deferred
 
 * Streaming JSON write for large datasets (in-memory approach may hit limits on very large corpora)
-* Home.razor refactor into mode-specific components (LocalModePanel / WebModePanel)
 * ColumnSelector wired into UI (column projection)
 * 0-rows bug after XGID fix — to be diagnosed
 * Job cleanup / expiry in JobStore
@@ -146,11 +150,13 @@ OutputConsistencyTests.cs
 
 ## Key decisions
 
+* Home.razor is a thin shell (~75 lines); mode-specific logic lives in LocalModePanel and WebModePanel
+* LocalModePanel receives FilterConfig (serializable DTO for HTTP POST); WebModePanel receives DecisionFilterSet (for in-memory filtering)
+* FilterPanel is always visible in both modes (consistent workflow: configure filters → select files → run)
 * FilterPanel is a separate component under `ExtractFromXgToCsv.Client/Components/`
 * All rendering is InteractiveWebAssembly with prerender:false
 * XgFilter_Lib and LocalFolderProcessor are server-side only
 * Board not exposed in CSV/ColumnSelector
-* Home.razor applies DecisionFilterSet to `_rows` / `_diagramRows` before output
 * WASM cannot stream HTTP responses — polling used instead
 * `reportEvery = 10` (client polls every second)
 * ProcessRequest class lives in server ProcessController.cs — server owns it
@@ -159,6 +165,7 @@ OutputConsistencyTests.cs
 * Diagram JSON output uses in-memory JSON array serialization (not NDJSON)
 * Both CSV and Diagram JSON output share the same filter pipeline via IDecisionFilterData
 * OutputFormat enum lives in client Shared/ so both server and client can reference it
+* OutputFormat persisted to localStorage under key `xg_outputFormat`
 * Web mode extracts both DecisionRow and BgDecisionData on file selection to keep formats in sync
 * FilterSetBuilder is a public static class in the server project (extracted from ProcessController)
 * Fixture files live in umbrella TestData/FixtureFiles, referenced by test project via relative path
