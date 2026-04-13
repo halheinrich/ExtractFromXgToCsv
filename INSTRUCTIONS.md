@@ -35,6 +35,7 @@ Blazor web app. Extracts decisions from .xg/.xgp files, applies XgFilter_Lib fil
 ### XgFilter_Lib
 * XgFilter_Lib/Filtering/IDecisionFilter.cs
 * XgFilter_Lib/Filtering/DecisionFilterSet.cs
+* XgFilter_Lib/Filtering/DecisionTypeFilter.cs
 * XgFilter_Lib/FilteredDecisionIterator.cs
 * XgFilter_Lib/Projection/ColumnSelector.cs
 
@@ -64,6 +65,7 @@ AppModeController.cs
 ProcessController.cs
 ShutdownController.cs
 Services/
+FilterSetBuilder.cs
 JobStore.cs
 LocalFolderProcessor.cs
 XgProcessingService.cs
@@ -76,19 +78,26 @@ Components/
 FilterPanel.razor
 Pages/
 Home.razor
+Services/
+XgProcessingService.cs
 Shared/
 FilterConfig.cs
 OutputFormat.cs
 ProcessingProgress.cs
-ExtractFromXgToCsv.slnx
+ExtractFromXgToCsv.Tests/
+ExtractFromXgToCsv.Tests.csproj
+FixtureHelper.cs
+FilterSetBuilderTests.cs
+XgProcessingServiceTests.cs
+OutputConsistencyTests.cs
 ```
 
 ## Architecture
 
 ### Server project
 - Thin host only — all browser processing in client
-- Services: LocalFolderProcessor, JobStore, XgProcessingService
-- Controllers: ProcessController, AppModeController, ShutdownController
+- Services: FilterSetBuilder, LocalFolderProcessor, JobStore, XgProcessingService
+- Controllers: ProcessController (uses primary constructor), AppModeController, ShutdownController
 
 ### Client project
 - WASM — owns all .xg parsing, filtering, CSV/JSON generation for web mode
@@ -110,23 +119,26 @@ ExtractFromXgToCsv.slnx
 - Browser file picker; 50MB cap
 - WASM processes files in browser; both `ExtractDecisions` and `ExtractDiagramRequests` run on file selection
 - Download button produces CSV or JSON based on output format toggle
-- CSV download button not yet implemented (pre-existing — download logic is wired but untested)
 
 ### Job lifecycle (local mode)
 - `JobStore` (singleton) holds `ConcurrentDictionary<jobId, JobEntry>`
 - `JobEntry` has `ProcessingProgress` and `CancellationTokenSource`
 - Jobs not auto-removed (single-user local app)
 
+### Test project
+- xUnit tests in `ExtractFromXgToCsv.Tests/`
+- Fixture files referenced from umbrella `TestData/FixtureFiles/*.xg`
+- Three test classes: FilterSetBuilderTests, XgProcessingServiceTests, OutputConsistencyTests
+- OutputConsistencyTests verifies both output pathways (CSV/DiagramJson) produce consistent results
+
 ## Current status
 
-🔧 In progress — local mode end-to-end working for both CSV and Diagram JSON output
+🔧 In progress — local mode end-to-end working for both CSV and Diagram JSON output; xUnit tests passing
 
 ## Deferred
 
 * Streaming JSON write for large datasets (in-memory approach may hit limits on very large corpora)
-* xUnit test project — planned: BuildFilterSet tests, output consistency tests, XgProcessingService tests
 * Home.razor refactor into mode-specific components (LocalModePanel / WebModePanel)
-* FilterSetBuilder extraction from ProcessController.BuildFilterSet
 * ColumnSelector wired into UI (column projection)
 * 0-rows bug after XGID fix — to be diagnosed
 * Job cleanup / expiry in JobStore
@@ -148,3 +160,7 @@ ExtractFromXgToCsv.slnx
 * Both CSV and Diagram JSON output share the same filter pipeline via IDecisionFilterData
 * OutputFormat enum lives in client Shared/ so both server and client can reference it
 * Web mode extracts both DecisionRow and BgDecisionData on file selection to keep formats in sync
+* FilterSetBuilder is a public static class in the server project (extracted from ProcessController)
+* Fixture files live in umbrella TestData/FixtureFiles, referenced by test project via relative path
+* CA1859 suppressed in OutputConsistencyTests — interface usage is intentional (testing IDecisionFilterData contract)
+* ProcessController uses primary constructor (C# modern idiom for DI)
