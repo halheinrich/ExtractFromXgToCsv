@@ -21,6 +21,7 @@
     <ProjectReference Include="..\ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
     <ProjectReference Include="..\..\ConvertXgToJson_Lib\ConvertXgToJson_Lib\ConvertXgToJson_Lib.csproj" />
     <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
+    <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib\BgDataTypes_Lib.csproj" />
   </ItemGroup>
 
 </Project>

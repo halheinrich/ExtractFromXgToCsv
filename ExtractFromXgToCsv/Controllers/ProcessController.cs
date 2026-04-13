@@ -45,12 +45,24 @@ public class ProcessController : ControllerBase
 
             try
             {
-                await _processor.ProcessAsync(
-                    request.FolderPath,
-                    request.OutputPath,
-                    filterSet,
-                    progress,
-                    entry.Cts.Token);
+                if (request.OutputFormat == OutputFormat.DiagramJson)
+                {
+                    await _processor.ProcessDiagramAsync(
+                        request.FolderPath,
+                        request.OutputPath,
+                        filterSet,
+                        progress,
+                        entry.Cts.Token);
+                }
+                else
+                {
+                    await _processor.ProcessAsync(
+                        request.FolderPath,
+                        request.OutputPath,
+                        filterSet,
+                        progress,
+                        entry.Cts.Token);
+                }
             }
             catch (OperationCanceledException)
             {

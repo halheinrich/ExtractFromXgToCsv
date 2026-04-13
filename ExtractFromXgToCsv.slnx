@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="../BgDataTypes_Lib/BgDataTypes_Lib/BgDataTypes_Lib.csproj" />
   <Project Path="../ConvertXgToJson_Lib/ConvertXgToJson_Lib/ConvertXgToJson_Lib.csproj" />
   <Project Path="../XgFilter_Lib/XgFilter_Lib/XgFilter_Lib.csproj" />
   <Project Path="ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />

@@ -1,6 +1,7 @@
 using ConvertXgToJson_Lib;
-using ConvertXgToJson_Lib.Models;
+using BgDataTypes_Lib;
 using System.Text;
+using System.Text.Json;
 
 namespace ExtractFromXgToCsv.Client.Services;
 
@@ -26,5 +27,16 @@ public class XgProcessingService
         foreach (var row in rows)
             sb.AppendLine(row.ToCsvLine());
         return sb.ToString();
+    }
+    public IReadOnlyList<BgDecisionData> ExtractDiagramRequests(byte[] fileBytes, string fileName)
+    {
+        using var ms = new MemoryStream(fileBytes);
+        var xgFile = XgFileReader.ReadStream(ms);
+        return XgDecisionIterator.IterateDiagramRequests(xgFile).ToList();
+    }
+
+    public string BuildDiagramJson(IEnumerable<BgDecisionData> items)
+    {
+        return JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true });
     }
 }

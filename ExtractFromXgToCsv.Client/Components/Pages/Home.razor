@@ -1,4 +1,4 @@
-@using ConvertXgToJson_Lib.Models
+@using BgDataTypes_Lib
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
@@ -37,6 +37,22 @@
     {
         <div class="alert alert-danger mt-2">@_statusMessage</div>
     }
+
+    <div class="mb-3" style="max-width:800px">
+        <label class="form-label d-block">Output format</label>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
+                   checked="@(_outputFormat == OutputFormat.Csv)"
+                   @onchange="@(() => SetOutputFormat(OutputFormat.Csv))" />
+            <label class="form-check-label" for="fmtCsv">CSV</label>
+        </div>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
+                   checked="@(_outputFormat == OutputFormat.DiagramJson)"
+                   @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
+            <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
+        </div>
+    </div>
 
     <FilterPanel OnFiltersChanged="OnFiltersChanged"
                  OnFilterConfigChanged="OnFilterConfigChanged"
@@ -134,6 +150,21 @@ else
 
     @if (_rows.Count > 0)
     {
+        <div class="mb-3" style="max-width:800px">
+            <label class="form-label d-block">Output format</label>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
+                       checked="@(_outputFormat == OutputFormat.Csv)"
+                       @onchange="@(() => SetOutputFormat(OutputFormat.Csv))" />
+                <label class="form-check-label" for="fmtCsv">CSV</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
+                       checked="@(_outputFormat == OutputFormat.DiagramJson)"
+                       @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
+                <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
+            </div>
+        </div>
         <FilterPanel OnFiltersChanged="OnFiltersChanged"
                      OnFilterConfigChanged="OnFilterConfigChanged"
                      OnFilterDirty="OnFilterDirty" />
@@ -161,7 +192,7 @@ else
             <button class="btn btn-primary"
                     @onclick="DownloadCsvAsync"
                     disabled="@(_busy || !_filterApplied || _filterDirty || _totalSelectedBytes > WebModeLimitBytes)">
-                @(_busy ? "Building…" : "Download CSV")
+                @(_busy ? "Building…" : (_outputFormat == OutputFormat.DiagramJson ? "Download JSON" : "Download CSV"))
             </button>
             @if (!_filterApplied || _filterDirty)
             {
@@ -226,6 +257,7 @@ else
     private bool _filterDirty = false;
     private DecisionFilterSet _filterSet = new();
     private FilterConfig _filterConfig = new();
+    private OutputFormat _outputFormat = OutputFormat.Csv;
 
     // Local mode
     private string _folderPath = string.Empty;
@@ -238,6 +270,8 @@ else
     private long _totalSelectedBytes = 0;
     private List<DecisionRow> _rows = new();
     private List<DecisionRow> _filteredRows = new();
+    private List<BgDecisionData> _diagramRows = new();
+    private List<BgDecisionData> _filteredDiagramRows = new();
     private int _filteredCount = 0;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -269,7 +303,8 @@ else
         _filterDirty = false;
         if (_appMode != "Local")
         {
-            _filteredRows = _filterSet.Apply(_rows).ToList();
+            _filteredRows = _rows.Where(r => _filterSet.Matches(r)).ToList();
+            _filteredDiagramRows = _diagramRows.Where(r => _filterSet.Matches(r)).ToList();
             _filteredCount = _filteredRows.Count;
         }
         StateHasChanged();
@@ -326,7 +361,8 @@ else
             {
                 FolderPath = _folderPath,
                 OutputPath = _outputPath,
-                Filters = _filterConfig
+                Filters = _filterConfig,
+                OutputFormat = _outputFormat
             };
 
             var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
@@ -380,6 +416,7 @@ else
     {
         _hasError = false; _statusMessage = string.Empty;
         _rows.Clear(); _filteredRows.Clear();
+        _diagramRows.Clear();
         _filteredCount = 0; _filterApplied = false; _filterDirty = false; _filterSet = new();
 
         var files = e.GetMultipleFiles(500).ToList();
@@ -404,7 +441,9 @@ else
             {
                 using var ms = new MemoryStream();
                 await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
-                _rows.AddRange(Processor.ExtractDecisions(ms.ToArray(), file.Name));
+                var bytes = ms.ToArray();
+                _rows.AddRange(Processor.ExtractDecisions(bytes, file.Name));
+                _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, file.Name));
             }
         }
         catch (Exception ex)
@@ -425,10 +464,25 @@ else
         _busy = true;
         try
         {
-            var csv = Processor.BuildCsv(_filteredRows);
-            var fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
-            var bytes = System.Text.Encoding.UTF8.GetBytes(csv);
-            await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", bytes);
+            string content;
+            string fileName;
+            string mimeType;
+
+            if (_outputFormat == OutputFormat.DiagramJson)
+            {
+                content = Processor.BuildDiagramJson(_filteredDiagramRows);
+                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.json" : _csvFileName;
+                mimeType = "application/json";
+            }
+            else
+            {
+                content = Processor.BuildCsv(_filteredRows);
+                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
+                mimeType = "text/csv";
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+            await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
         }
         finally { _busy = false; }
     }
@@ -436,5 +490,24 @@ else
     private class StartResult
     {
         public string? JobId { get; set; }
+    }
+    private async Task SetOutputFormat(OutputFormat fmt)
+    {
+        _outputFormat = fmt;
+        // Update output path extension in local mode
+        if (_appMode == "Local" && !string.IsNullOrWhiteSpace(_outputPath))
+        {
+            var ext = fmt == OutputFormat.DiagramJson ? ".json" : ".csv";
+            _outputPath = Path.ChangeExtension(_outputPath, ext);
+            await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
+        }
+        // Update filename extension in web mode
+        if (_appMode != "Local" && !string.IsNullOrWhiteSpace(_csvFileName))
+        {
+            var ext = fmt == OutputFormat.DiagramJson ? ".json" : ".csv";
+            _csvFileName = Path.ChangeExtension(_csvFileName, ext);
+            await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+        }
+        StateHasChanged();
     }
 }
