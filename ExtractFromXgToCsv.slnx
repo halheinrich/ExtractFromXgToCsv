@@ -3,5 +3,6 @@
   <Project Path="../ConvertXgToJson_Lib/ConvertXgToJson_Lib/ConvertXgToJson_Lib.csproj" />
   <Project Path="../XgFilter_Lib/XgFilter_Lib/XgFilter_Lib.csproj" />
   <Project Path="ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
+  <Project Path="ExtractFromXgToCsv.Tests/ExtractFromXgToCsv.Tests.csproj" Id="138f37c4-7b07-4e0e-bd4a-d23ea567d0c9" />
   <Project Path="ExtractFromXgToCsv\ExtractFromXgToCsv.csproj" />
 </Solution>
