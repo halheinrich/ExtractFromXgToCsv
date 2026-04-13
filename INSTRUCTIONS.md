@@ -17,13 +17,13 @@ C# / .NET 10 / Blazor / Visual Studio 2026 / Windows
 
 ## Purpose
 
-Blazor web app. Extracts decisions from .xg/.xgp files, applies XgFilter_Lib filters, exports CSV.
+Blazor web app. Extracts decisions from .xg/.xgp files, applies XgFilter_Lib filters, exports CSV or Diagram JSON.
 
 ## Depends on
 
 * **ConvertXgToJson_Lib** — XgDecisionIterator, XgFileReader, XgIteratorState, XgMatchInfo, XgGameInfo
 * **XgFilter_Lib** — DecisionFilterSet, FilteredDecisionIterator, ColumnSelector, IDecisionFilter, IMatchFilter
-* **BgDataTypes_Lib** (transitive via ConvertXgToJson_Lib and XgFilter_Lib) — DecisionRow, IDecisionFilterData
+* **BgDataTypes_Lib** — DecisionRow, BgDecisionData, PositionData, DecisionData, DescriptiveData, IDecisionFilterData
 
 ## Dependency files
 
@@ -41,6 +41,10 @@ Blazor web app. Extracts decisions from .xg/.xgp files, applies XgFilter_Lib fil
 ### BgDataTypes_Lib
 * BgDataTypes_Lib/DecisionRow.cs
 * BgDataTypes_Lib/IDecisionFilterData.cs
+* BgDataTypes_Lib/BgDecisionData.cs
+* BgDataTypes_Lib/PositionData.cs
+* BgDataTypes_Lib/DecisionData.cs
+* BgDataTypes_Lib/DescriptiveData.cs
 
 ## Naming convention
 
@@ -52,30 +56,31 @@ Always specify which Program.cs is being modified:
 
 ```
 ExtractFromXgToCsv/
-  ExtractFromXgToCsv/
-    ExtractFromXgToCsv.csproj
-    Program.cs
-    Controllers/
-      AppModeController.cs
-      ProcessController.cs
-      ShutdownController.cs
-    Services/
-      JobStore.cs
-      LocalFolderProcessor.cs
-      XgProcessingService.cs
-    appsettings.json
-    appsettings.Development.json
-  ExtractFromXgToCsv.Client/
-    ExtractFromXgToCsv.Client.csproj
-    Program.cs
-    Components/
-      FilterPanel.razor
-      Pages/
-        Home.razor
-    Shared/
-      FilterConfig.cs
-      ProcessingProgress.cs
-  ExtractFromXgToCsv.slnx
+ExtractFromXgToCsv/
+ExtractFromXgToCsv.csproj
+Program.cs
+Controllers/
+AppModeController.cs
+ProcessController.cs
+ShutdownController.cs
+Services/
+JobStore.cs
+LocalFolderProcessor.cs
+XgProcessingService.cs
+appsettings.json
+appsettings.Development.json
+ExtractFromXgToCsv.Client/
+ExtractFromXgToCsv.Client.csproj
+Program.cs
+Components/
+FilterPanel.razor
+Pages/
+Home.razor
+Shared/
+FilterConfig.cs
+OutputFormat.cs
+ProcessingProgress.cs
+ExtractFromXgToCsv.slnx
 ```
 
 ## Architecture
@@ -86,24 +91,26 @@ ExtractFromXgToCsv/
 - Controllers: ProcessController, AppModeController, ShutdownController
 
 ### Client project
-- WASM — owns all .xg parsing, filtering, CSV generation for web mode
+- WASM — owns all .xg parsing, filtering, CSV/JSON generation for web mode
 
 ### Components
-- `Home.razor` — file input (web mode), `_rows` (List<DecisionRow>), `_filterSet`, output path/filename, localStorage persistence, CSV write/download, polling loop (local mode)
+- `Home.razor` — file input (web mode), `_rows` (List<DecisionRow>), `_diagramRows` (List<BgDecisionData>), `_filterSet`, `_outputFormat`, output path/filename, localStorage persistence, CSV/JSON download, polling loop (local mode), radio buttons for output format
 - `FilterPanel.razor` — all filter state; raises `OnFiltersChanged EventCallback<DecisionFilterSet>` and `OnFilterConfigChanged EventCallback<FilterConfig>`
 
 ### Modes
 
 **Local** (`"AppMode": "Local"`):
-- Folder path + output CSV path inputs
+- Folder path + output CSV/JSON path inputs
+- Output format radio buttons: CSV / Diagram JSON
 - Run → POST `/api/process/start` → jobId; client polls `/api/process/{jobId}/status` every second
+- Server calls `ProcessAsync` (CSV) or `ProcessDiagramAsync` (Diagram JSON) based on `ProcessRequest.OutputFormat`
 - Stop → POST `/api/process/{jobId}/cancel`; Exit → ShutdownController
-- Server processes in background Task.Run, writes CSV to disk
 
 **Web/Azure** (`"AppMode": "Web"`):
 - Browser file picker; 50MB cap
-- WASM processes files in browser
-- CSV download button not yet implemented
+- WASM processes files in browser; both `ExtractDecisions` and `ExtractDiagramRequests` run on file selection
+- Download button produces CSV or JSON based on output format toggle
+- CSV download button not yet implemented (pre-existing — download logic is wired but untested)
 
 ### Job lifecycle (local mode)
 - `JobStore` (singleton) holds `ConcurrentDictionary<jobId, JobEntry>`
@@ -112,11 +119,14 @@ ExtractFromXgToCsv/
 
 ## Current status
 
-🔧 In progress — local mode end-to-end working (6,660 files → 951,973 rows in 447s)
+🔧 In progress — local mode end-to-end working for both CSV and Diagram JSON output
 
 ## Deferred
 
-* CSV download button for Azure/browser mode
+* Streaming JSON write for large datasets (in-memory approach may hit limits on very large corpora)
+* xUnit test project — planned: BuildFilterSet tests, output consistency tests, XgProcessingService tests
+* Home.razor refactor into mode-specific components (LocalModePanel / WebModePanel)
+* FilterSetBuilder extraction from ProcessController.BuildFilterSet
 * ColumnSelector wired into UI (column projection)
 * 0-rows bug after XGID fix — to be diagnosed
 * Job cleanup / expiry in JobStore
@@ -128,9 +138,13 @@ ExtractFromXgToCsv/
 * All rendering is InteractiveWebAssembly with prerender:false
 * XgFilter_Lib and LocalFolderProcessor are server-side only
 * Board not exposed in CSV/ColumnSelector
-* Home.razor applies DecisionFilterSet to `_rows` before CSV output
+* Home.razor applies DecisionFilterSet to `_rows` / `_diagramRows` before output
 * WASM cannot stream HTTP responses — polling used instead
 * `reportEvery = 10` (client polls every second)
-* ProcessRequest class lives in server ProcessController.cs
+* ProcessRequest class lives in server ProcessController.cs — server owns it
 * JobStore: AddSingleton; LocalFolderProcessor: AddScoped (both inside Local mode guard)
 * Run button disabled when filter is dirty
+* Diagram JSON output uses in-memory JSON array serialization (not NDJSON)
+* Both CSV and Diagram JSON output share the same filter pipeline via IDecisionFilterData
+* OutputFormat enum lives in client Shared/ so both server and client can reference it
+* Web mode extracts both DecisionRow and BgDecisionData on file selection to keep formats in sync
