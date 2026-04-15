@@ -1,173 +1,251 @@
-# ExtractFromXgToCsv — Project Instructions
+# ExtractFromXgToCsv
 
-Part of the Backgammon tools ecosystem: https://github.com/halheinrich/backgammon
-
-## Repo
-
-https://github.com/halheinrich/ExtractFromXgToCsv
-**Branch:** main
+> Session conventions: [`../CLAUDE.md`](../CLAUDE.md)
+> Umbrella status & dependency graph: [`../INSTRUCTIONS.md`](../INSTRUCTIONS.md)
+> Mission & principles: [`../VISION.md`](../VISION.md)
 
 ## Stack
 
-C# / .NET 10 / Blazor / Visual Studio 2026 / Windows
+C# / .NET 10 / Blazor WebAssembly / xUnit. Visual Studio 2026 on Windows.
 
 ## Solution
 
 `D:\Users\Hal\Documents\Visual Studio 2026\Projects\backgammon\ExtractFromXgToCsv\ExtractFromXgToCsv.slnx`
 
-## Purpose
+## Repo
 
-Blazor web app. Extracts decisions from .xg/.xgp files, applies XgFilter_Lib filters, exports CSV or Diagram JSON.
+https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 
 ## Depends on
 
-* **ConvertXgToJson_Lib** — XgDecisionIterator, XgFileReader, XgIteratorState, XgMatchInfo, XgGameInfo
-* **XgFilter_Lib** — DecisionFilterSet, FilteredDecisionIterator, ColumnSelector, IDecisionFilter, IMatchFilter
-* **BgDataTypes_Lib** — DecisionRow, BgDecisionData, PositionData, DecisionData, DescriptiveData, IDecisionFilterData
-
-## Dependency files
-
-### ConvertXgToJson_Lib
-* ConvertXgToJson_Lib/XgDecisionIterator.cs
-* ConvertXgToJson_Lib/XgFileReader.cs
-* ConvertXgToJson_Lib/XgIteratorState.cs
-
-### XgFilter_Lib
-* XgFilter_Lib/Filtering/IDecisionFilter.cs
-* XgFilter_Lib/Filtering/DecisionFilterSet.cs
-* XgFilter_Lib/Filtering/DecisionTypeFilter.cs
-* XgFilter_Lib/FilteredDecisionIterator.cs
-* XgFilter_Lib/Projection/ColumnSelector.cs
-
-### BgDataTypes_Lib
-* BgDataTypes_Lib/DecisionRow.cs
-* BgDataTypes_Lib/IDecisionFilterData.cs
-* BgDataTypes_Lib/BgDecisionData.cs
-* BgDataTypes_Lib/PositionData.cs
-* BgDataTypes_Lib/DecisionData.cs
-* BgDataTypes_Lib/DescriptiveData.cs
-
-## Naming convention
-
-Always specify which Program.cs is being modified:
-- Server: `ExtractFromXgToCsv\ExtractFromXgToCsv\Program.cs`
-- Client: `ExtractFromXgToCsv\ExtractFromXgToCsv.Client\Program.cs`
+- **ConvertXgToJson_Lib** — `XgDecisionIterator`, `XgFileReader`, `XgIteratorState`
+  for .xg/.xgp reading and decision iteration.
+- **XgFilter_Lib** — `DecisionFilterSet`, `FilteredDecisionIterator`,
+  `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
+- **BgDataTypes_Lib** — `DecisionRow`, `BgDecisionData`, `IDecisionFilterData`
+  and constituent types. Both output pathways (CSV/Diagram JSON) share the
+  filter pipeline via `IDecisionFilterData`.
 
 ## Directory tree
 
 ```
-ExtractFromXgToCsv/
-ExtractFromXgToCsv/
-ExtractFromXgToCsv.csproj
-Program.cs
-Controllers/
-AppModeController.cs
-ProcessController.cs
-ShutdownController.cs
-Services/
-FilterSetBuilder.cs
-JobStore.cs
-LocalFolderProcessor.cs
-XgProcessingService.cs
-appsettings.json
-appsettings.Development.json
-ExtractFromXgToCsv.Client/
-ExtractFromXgToCsv.Client.csproj
-Program.cs
-Components/
-FilterPanel.razor
-LocalModePanel.razor
-WebModePanel.razor
-Pages/
-Home.razor
-Services/
-XgProcessingService.cs
-Shared/
-FilterConfig.cs
-OutputFormat.cs
-ProcessingProgress.cs
-ExtractFromXgToCsv.Tests/
-ExtractFromXgToCsv.Tests.csproj
-FixtureHelper.cs
-FilterSetBuilderTests.cs
-XgProcessingServiceTests.cs
-OutputConsistencyTests.cs
 ExtractFromXgToCsv.slnx
+ExtractFromXgToCsv/                     — server host (thin)
+  ExtractFromXgToCsv.csproj
+  Program.cs
+  appsettings.json
+  appsettings.Development.json
+  Controllers/
+    AppModeController.cs
+    ProcessController.cs                — primary-constructor DI
+    ShutdownController.cs
+  Services/
+    FilterSetBuilder.cs                 — public static, builds DecisionFilterSet
+    JobStore.cs                         — singleton, job registry
+    LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
+    XgProcessingService.cs
+ExtractFromXgToCsv.Client/              — WASM
+  ExtractFromXgToCsv.Client.csproj
+  Program.cs
+  Pages/
+    Home.razor                          — mode-detecting shell (~75 lines)
+  Components/
+    FilterPanel.razor                   — filter UI, always visible both modes
+    LocalModePanel.razor                — folder/output inputs, polling loop
+    WebModePanel.razor                  — file picker, in-memory preview, download
+  Services/
+    XgProcessingService.cs
+  Shared/
+    FilterConfig.cs                     — serializable filter DTO
+    OutputFormat.cs                     — Csv | DiagramJson
+    ProcessingProgress.cs
+ExtractFromXgToCsv.Tests/
+  ExtractFromXgToCsv.Tests.csproj
+  FixtureHelper.cs
+  FilterSetBuilderTests.cs
+  XgProcessingServiceTests.cs
+  OutputConsistencyTests.cs
 ```
 
 ## Architecture
 
-### Server project
-- Thin host only — all browser processing in client
-- Services: FilterSetBuilder, LocalFolderProcessor, JobStore, XgProcessingService
-- Controllers: ProcessController (uses primary constructor), AppModeController, ShutdownController
+### Server host — thin by design
 
-### Client project
-- WASM — owns all .xg parsing, filtering, CSV/JSON generation for web mode
+The server project is a launcher plus an HTTP surface for Local mode. It does
+not parse .xg files for Web/Azure mode. In Local mode it runs
+`LocalFolderProcessor` on a background task and exposes job status; in Web
+mode it serves the WASM payload and nothing else.
+
+`AppMode` is configured in `appsettings.json` (`"Local"` or `"Web"`). Local
+mode registers `JobStore` (singleton) and `LocalFolderProcessor` (scoped)
+inside a mode guard so Web deployments don't carry server-side processing
+dependencies they can't use.
+
+### Client WASM — owns processing in Web mode
+
+All rendering is `InteractiveWebAssembly` with `prerender:false`. In Web mode
+the browser does the whole pipeline: read file, iterate decisions, apply
+filters, emit CSV or Diagram JSON. File cap is 50 MB.
+
+Web mode extracts both `DecisionRow` (for CSV) and `BgDecisionData` (for
+Diagram JSON) on file selection — keeps the two output formats in sync so
+toggling the output-format radio doesn't require re-processing.
 
 ### Components
-- `Home.razor` (~75 lines) — shell: detects app mode, owns shared state (output format, filter set, filter config, filter applied/dirty), renders output format radio buttons and FilterPanel, delegates to LocalModePanel or WebModePanel
-- `FilterPanel.razor` — all filter state; raises `OnFiltersChanged EventCallback<DecisionFilterSet>`, `OnFilterConfigChanged EventCallback<FilterConfig>`, `OnFilterDirty EventCallback`; always visible in both modes
-- `LocalModePanel.razor` (~165 lines) — local mode: folder/output path inputs, Run/Stop/Exit buttons, polling loop, progress bar. Parameters: OutputFormat, FilterConfig, FilterApplied, FilterDirty
-- `WebModePanel.razor` (~175 lines) — web mode: file picker, in-memory rows/diagram rows, filtering via OnParametersSet, preview table, download. Parameters: OutputFormat, FilterSet, FilterApplied, FilterDirty
+
+- **`Home.razor`** — shell. Detects app mode, owns shared state (output format,
+  filter set, filter config, filter applied/dirty), renders the output-format
+  radio and `FilterPanel`, and delegates to `LocalModePanel` or `WebModePanel`.
+- **`FilterPanel.razor`** — owns all filter state. Raises
+  `OnFiltersChanged EventCallback<DecisionFilterSet>`,
+  `OnFilterConfigChanged EventCallback<FilterConfig>`, and
+  `OnFilterDirty EventCallback`. Always visible in both modes so the workflow
+  is consistent: configure filters → select files → run.
+- **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
+  buttons, polling loop, progress bar. Parameters:
+  `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
+  Takes `FilterConfig` (serializable) so it can POST it to the server.
+- **`WebModePanel.razor`** — file picker, in-memory rows and diagram rows,
+  live filtering in `OnParametersSet`, preview table, download. Parameters:
+  `OutputFormat`, `FilterSet`, `FilterApplied`, `FilterDirty`.
+  Takes `DecisionFilterSet` directly — no HTTP boundary to serialize across.
+
+Run button is disabled whenever the filter panel is dirty, forcing the user
+to apply or discard pending changes before a run.
 
 ### Modes
 
 **Local** (`"AppMode": "Local"`):
-- Folder path + output CSV/JSON path inputs
-- Output format radio buttons: CSV / Diagram JSON (persisted to localStorage)
-- Run → POST `/api/process/start` → jobId; client polls `/api/process/{jobId}/status` every second
-- Server calls `ProcessAsync` (CSV) or `ProcessDiagramAsync` (Diagram JSON) based on `ProcessRequest.OutputFormat`
-- Stop → POST `/api/process/{jobId}/cancel`; Exit → ShutdownController
+
+- Folder path + output path inputs. Output format: CSV or Diagram JSON,
+  persisted to `localStorage` under key `xg_outputFormat`.
+- Run → `POST /api/process/start` → jobId. Client polls
+  `GET /api/process/{jobId}/status` every second.
+- `ProcessController` dispatches to `LocalFolderProcessor.ProcessAsync` (CSV)
+  or `ProcessDiagramAsync` (Diagram JSON) based on `ProcessRequest.OutputFormat`.
+- Stop → `POST /api/process/{jobId}/cancel`. Exit → `ShutdownController`.
 
 **Web/Azure** (`"AppMode": "Web"`):
-- Browser file picker; 50MB cap
-- WASM processes files in browser; both `ExtractDecisions` and `ExtractDiagramRequests` run on file selection
-- Download button produces CSV or JSON based on output format toggle
 
-### Job lifecycle (local mode)
-- `JobStore` (singleton) holds `ConcurrentDictionary<jobId, JobEntry>`
-- `JobEntry` has `ProcessingProgress` and `CancellationTokenSource`
-- Jobs not auto-removed (single-user local app)
+- Browser file picker, 50 MB cap.
+- WASM processes everything client-side. Both `ExtractDecisions` and
+  `ExtractDiagramRequests` run on file selection.
+- Download button produces CSV or JSON from the pre-extracted in-memory data
+  based on the current output-format toggle.
+
+### Job lifecycle (Local mode)
+
+`JobStore` is a singleton holding `ConcurrentDictionary<string, JobEntry>`.
+Each `JobEntry` carries a `ProcessingProgress` snapshot and a
+`CancellationTokenSource`. The client polls once per second
+(`reportEvery = 10` in the processor writes progress on every 10th file).
+
+Jobs are not auto-removed — this is a single-user local app and the dictionary
+lives only for the process lifetime.
+
+### Filter pipeline
+
+`FilterSetBuilder` (public static, server-side) converts a `FilterConfig` DTO
+into a `DecisionFilterSet`. Extracted from `ProcessController` so Local mode
+and the test project share the same construction path. Both the CSV and
+Diagram JSON pathways feed the same filter set via `IDecisionFilterData` —
+one filter implementation, two extraction outputs.
+
+### Diagram JSON output
+
+Emitted as a single in-memory JSON array, not NDJSON. Simpler consumer side;
+streaming is deferred (see next steps) and will matter only for very large
+corpora.
 
 ### Test project
-- xUnit tests in `ExtractFromXgToCsv.Tests/`
-- Fixture files referenced from umbrella `TestData/FixtureFiles/*.xg`
-- Three test classes: FilterSetBuilderTests, XgProcessingServiceTests, OutputConsistencyTests
-- OutputConsistencyTests verifies both output pathways (CSV/DiagramJson) produce consistent results
 
-## Current status
+xUnit, targets .NET 10. Fixture files live in the umbrella
+`TestData/FixtureFiles/*.xg` directory and are referenced from the test
+project via relative path — not duplicated here.
 
-🔧 In progress — local mode end-to-end working for both CSV and Diagram JSON output; xUnit tests passing
+- `FilterSetBuilderTests` — DTO → filter-set round trips.
+- `XgProcessingServiceTests` — end-to-end Local-mode pipeline against
+  fixture files.
+- `OutputConsistencyTests` — verifies that the CSV pathway and the Diagram
+  JSON pathway see the same decisions through the same filter set. Uses
+  `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
+  contract is what's being tested).
 
-## Deferred
+## Public API
 
-* Streaming JSON write for large datasets (in-memory approach may hit limits on very large corpora)
-* ColumnSelector wired into UI (column projection)
-* 0-rows bug after XGID fix — to be diagnosed
-* Job cleanup / expiry in JobStore
-* Performance optimization (~14 files/sec)
+### HTTP endpoints (Local mode only)
 
-## Key decisions
+```
+POST /api/process/start
+  body:  ProcessRequest { FolderPath, OutputPath, FilterConfig, OutputFormat }
+  200 →  { JobId }
 
-* Home.razor is a thin shell (~75 lines); mode-specific logic lives in LocalModePanel and WebModePanel
-* LocalModePanel receives FilterConfig (serializable DTO for HTTP POST); WebModePanel receives DecisionFilterSet (for in-memory filtering)
-* FilterPanel is always visible in both modes (consistent workflow: configure filters → select files → run)
-* FilterPanel is a separate component under `ExtractFromXgToCsv.Client/Components/`
-* All rendering is InteractiveWebAssembly with prerender:false
-* XgFilter_Lib and LocalFolderProcessor are server-side only
-* Board not exposed in CSV/ColumnSelector
-* WASM cannot stream HTTP responses — polling used instead
-* `reportEvery = 10` (client polls every second)
-* ProcessRequest class lives in server ProcessController.cs — server owns it
-* JobStore: AddSingleton; LocalFolderProcessor: AddScoped (both inside Local mode guard)
-* Run button disabled when filter is dirty
-* Diagram JSON output uses in-memory JSON array serialization (not NDJSON)
-* Both CSV and Diagram JSON output share the same filter pipeline via IDecisionFilterData
-* OutputFormat enum lives in client Shared/ so both server and client can reference it
-* OutputFormat persisted to localStorage under key `xg_outputFormat`
-* Web mode extracts both DecisionRow and BgDecisionData on file selection to keep formats in sync
-* FilterSetBuilder is a public static class in the server project (extracted from ProcessController)
-* Fixture files live in umbrella TestData/FixtureFiles, referenced by test project via relative path
-* CA1859 suppressed in OutputConsistencyTests — interface usage is intentional (testing IDecisionFilterData contract)
-* ProcessController uses primary constructor (C# modern idiom for DI)
+GET  /api/process/{jobId}/status
+  200 →  ProcessingProgress { FilesProcessed, TotalFiles, DecisionsWritten,
+                              IsComplete, ErrorMessage? }
+
+POST /api/process/{jobId}/cancel
+  200 →  (empty)
+
+GET  /api/appmode
+  200 →  { Mode: "Local" | "Web" }
+
+POST /api/shutdown
+  200 →  (empty; host begins graceful shutdown)
+```
+
+`ProcessRequest` lives in the server `ProcessController.cs`. The server owns
+its own request shape; the client serialises `FilterConfig` into it.
+
+### Client-shared types (`ExtractFromXgToCsv.Client/Shared/`)
+
+- `OutputFormat` — enum `Csv | DiagramJson`. Server references it too, which
+  is why it lives under `Client/Shared` rather than being duplicated.
+- `FilterConfig` — serializable DTO consumed by `FilterSetBuilder`.
+- `ProcessingProgress` — status-endpoint payload.
+
+## Pitfalls
+
+- **WASM can't stream HTTP responses.** Local-mode progress is delivered by
+  client polling, not server-pushed streaming. Don't "fix" this by adding an
+  `IAsyncEnumerable` endpoint expecting WASM to consume it.
+- **`prerender:false` is required.** Filter state and file pickers live in
+  the WASM runtime; a prerendered server pass would double-init components
+  and lose state. Don't enable prerendering on the routable components.
+- **Server project has no .xg parsing in Web mode.** `JobStore`,
+  `LocalFolderProcessor`, and `XgFilter_Lib` wiring are registered only
+  inside the `Local` mode guard in `Program.cs`. Moving that registration
+  outside the guard will break Azure deployment.
+- **Two DTOs on the mode boundary.** `LocalModePanel` takes a `FilterConfig`
+  (serializable) because it crosses the HTTP boundary; `WebModePanel` takes
+  a `DecisionFilterSet` (in-memory, non-serializable) because it doesn't.
+  Don't unify them — the serializability split is load-bearing.
+- **`FilterPanel` lives in the Client project only.** The server doesn't
+  reference Razor components. `FilterSetBuilder` is the server-side
+  equivalent — it takes a `FilterConfig` DTO, not a panel.
+- **Run button dirty-gating.** The Run button is disabled whenever the
+  filter panel has unapplied changes. If a test or UI change ever makes
+  the button appear enabled with a dirty filter, that's a regression — the
+  dirty state is the gate, not a cosmetic hint.
+- **CA1859 in `OutputConsistencyTests`.** The interface usage is the thing
+  under test (the shared-pipeline contract). Don't "fix" the warning by
+  switching to concrete types — you'd defeat the test.
+- **Fixture files are not in this repo.** They live in umbrella `TestData/`
+  and are not tracked by git (contents are gitignored; structure is held by
+  `.gitkeep`). A fresh clone of this subproject alone cannot run the tests
+  without the umbrella `TestData/` present.
+
+## Subproject-internal next steps
+
+- **Streaming JSON write for large datasets.** Current Diagram JSON output is
+  a single in-memory array. Very large corpora may need a streaming writer
+  (NDJSON or JSON-array streaming) rather than building the full document
+  before serialising.
+- **Job cleanup / expiry in `JobStore`.** Entries currently live for the
+  process lifetime. A single-user local app tolerates that, but long-running
+  sessions will accumulate completed jobs. A simple TTL or explicit
+  "clear completed" action would address it.
+- **Pipeline performance.** The Local-mode pipeline is I/O-dominated but has
+  not been profiled. Candidate wins: parallelising per-file work, reducing
+  per-decision allocations in `XgDecisionIterator` consumers, and cutting
+  reflection or LINQ in the filter hot path.
