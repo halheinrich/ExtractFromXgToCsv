@@ -31,3 +31,6 @@ secrets.json
 appsettings.local.json
 
 *.Backup.tmp
+
+# Claude Code worktrees / local session state
+.claude/
