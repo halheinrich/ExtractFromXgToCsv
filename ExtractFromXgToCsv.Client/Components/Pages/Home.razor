@@ -25,6 +25,19 @@
                @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
         <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
     </div>
+    <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="outputFormat" id="fmtPptx"
+               checked="@(_outputFormat == OutputFormat.Pptx)"
+               disabled="@(_appMode != "Local")"
+               @onchange="@(() => SetOutputFormat(OutputFormat.Pptx))" />
+        <label class="form-check-label" for="fmtPptx">
+            PPTX
+            @if (_appMode != "Local")
+            {
+                <small class="text-muted ms-1">(Local mode only)</small>
+            }
+        </label>
+    </div>
 </div>
 
 <FilterPanel OnFiltersChanged="OnFiltersChanged"
@@ -68,6 +81,9 @@ else
             _appMode = serverMode.Trim('"');
         }
         catch { _appMode = "Web"; }
+
+        if (_outputFormat == OutputFormat.Pptx && _appMode != "Local")
+            _outputFormat = OutputFormat.Csv;
 
         StateHasChanged();
     }

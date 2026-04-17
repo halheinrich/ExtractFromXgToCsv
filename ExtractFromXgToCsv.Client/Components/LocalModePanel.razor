@@ -127,7 +127,12 @@
         // Update output path extension when output format changes
         if (!string.IsNullOrWhiteSpace(_outputPath))
         {
-            var expectedExt = OutputFormat == OutputFormat.DiagramJson ? ".json" : ".csv";
+            var expectedExt = OutputFormat switch
+            {
+                OutputFormat.DiagramJson => ".json",
+                OutputFormat.Pptx        => ".pptx",
+                _                        => ".csv",
+            };
             if (!_outputPath.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
             {
                 _outputPath = Path.ChangeExtension(_outputPath, expectedExt);

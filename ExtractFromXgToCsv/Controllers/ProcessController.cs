@@ -33,23 +33,23 @@ public class ProcessController(
 
             try
             {
-                if (request.OutputFormat == OutputFormat.DiagramJson)
+                switch (request.OutputFormat)
                 {
-                    await processor.ProcessDiagramAsync(
-                        request.FolderPath,
-                        request.OutputPath,
-                        filterSet,
-                        progress,
-                        entry.Cts.Token);
-                }
-                else
-                {
-                    await processor.ProcessAsync(
-                        request.FolderPath,
-                        request.OutputPath,
-                        filterSet,
-                        progress,
-                        entry.Cts.Token);
+                    case OutputFormat.DiagramJson:
+                        await processor.ProcessDiagramAsync(
+                            request.FolderPath, request.OutputPath,
+                            filterSet, progress, entry.Cts.Token);
+                        break;
+                    case OutputFormat.Pptx:
+                        await processor.ProcessPptxAsync(
+                            request.FolderPath, request.OutputPath,
+                            filterSet, progress, entry.Cts.Token);
+                        break;
+                    default:
+                        await processor.ProcessAsync(
+                            request.FolderPath, request.OutputPath,
+                            filterSet, progress, entry.Cts.Token);
+                        break;
                 }
             }
             catch (OperationCanceledException)

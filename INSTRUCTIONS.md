@@ -23,8 +23,12 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 - **XgFilter_Lib** — `DecisionFilterSet`, `FilteredDecisionIterator`,
   `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
 - **BgDataTypes_Lib** — `DecisionRow`, `BgDecisionData`, `IDecisionFilterData`
-  and constituent types. Both output pathways (CSV/Diagram JSON) share the
-  filter pipeline via `IDecisionFilterData`.
+  and constituent types. All three output pathways (CSV / Diagram JSON / PPTX)
+  share the filter pipeline via `IDecisionFilterData`.
+- **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData`,
+  `DiagramRenderer.RenderPptx` for the PPTX output pathway. Server-side only;
+  the client csproj does not reference it (Skia native isn't available under
+  WASM — see Pitfalls).
 
 ## Directory tree
 
@@ -57,12 +61,13 @@ ExtractFromXgToCsv.Client/              — WASM
     XgProcessingService.cs
   Shared/
     FilterConfig.cs                     — serializable filter DTO
-    OutputFormat.cs                     — Csv | DiagramJson
+    OutputFormat.cs                     — Csv | DiagramJson | Pptx
     ProcessingProgress.cs
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
   FixtureHelper.cs
   FilterSetBuilderTests.cs
+  LocalFolderProcessorPptxTests.cs
   XgProcessingServiceTests.cs
   OutputConsistencyTests.cs
 ```
@@ -86,6 +91,12 @@ dependencies they can't use.
 All rendering is `InteractiveWebAssembly` with `prerender:false`. In Web mode
 the browser does the whole pipeline: read file, iterate decisions, apply
 filters, emit CSV or Diagram JSON. File cap is 50 MB.
+
+PPTX is **not** offered in Web mode — `BackgammonDiagram_Lib`'s PPTX path
+goes through `SkiaSharp` to rasterize SVG into the slide PNG, and Skia's
+native binary isn't available under Blazor WASM. The PPTX radio is disabled
+client-side when `AppMode != "Local"` and a persisted `xg_outputFormat=Pptx`
+is sanitised to `Csv` on load. (See Pitfalls.)
 
 Web mode extracts both `DecisionRow` (for CSV) and `BgDecisionData` (for
 Diagram JSON) on file selection — keeps the two output formats in sync so
@@ -117,12 +128,15 @@ to apply or discard pending changes before a run.
 
 **Local** (`"AppMode": "Local"`):
 
-- Folder path + output path inputs. Output format: CSV or Diagram JSON,
-  persisted to `localStorage` under key `xg_outputFormat`.
+- Folder path + output path inputs. Output format: CSV, Diagram JSON, or
+  PPTX; persisted to `localStorage` under key `xg_outputFormat`.
 - Run → `POST /api/process/start` → jobId. Client polls
   `GET /api/process/{jobId}/status` every second.
-- `ProcessController` dispatches to `LocalFolderProcessor.ProcessAsync` (CSV)
-  or `ProcessDiagramAsync` (Diagram JSON) based on `ProcessRequest.OutputFormat`.
+- `ProcessController` dispatches to `LocalFolderProcessor.ProcessAsync` (CSV),
+  `ProcessDiagramAsync` (Diagram JSON), or `ProcessPptxAsync` (PPTX) based on
+  `ProcessRequest.OutputFormat`. The PPTX path collects filtered decisions,
+  maps them via `DiagramRequest.FromDecisionData`, and writes one slide per
+  decision via `DiagramRenderer.RenderPptx`.
 - Stop → `POST /api/process/{jobId}/cancel`. Exit → `ShutdownController`.
 
 **Web/Azure** (`"AppMode": "Web"`):
@@ -132,6 +146,7 @@ to apply or discard pending changes before a run.
   `ExtractDiagramRequests` run on file selection.
 - Download button produces CSV or JSON from the pre-extracted in-memory data
   based on the current output-format toggle.
+- PPTX is unavailable (radio disabled) — see "Client WASM" above.
 
 ### Job lifecycle (Local mode)
 
@@ -147,15 +162,26 @@ lives only for the process lifetime.
 
 `FilterSetBuilder` (public static, server-side) converts a `FilterConfig` DTO
 into a `DecisionFilterSet`. Extracted from `ProcessController` so Local mode
-and the test project share the same construction path. Both the CSV and
-Diagram JSON pathways feed the same filter set via `IDecisionFilterData` —
-one filter implementation, two extraction outputs.
+and the test project share the same construction path. CSV, Diagram JSON, and
+PPTX pathways all feed the same filter set via `IDecisionFilterData` — one
+filter implementation, three extraction outputs.
 
 ### Diagram JSON output
 
 Emitted as a single in-memory JSON array, not NDJSON. Simpler consumer side;
 streaming is deferred (see next steps) and will matter only for very large
 corpora.
+
+### PPTX output
+
+Local mode only. Filtered `BgDecisionData` is buffered in memory, mapped to
+`DiagramRequest` via `DiagramRequest.FromDecisionData`, then expanded to a
+Problem/Solution pair via `DiagramRequestExtensions.ToProblemSolutionPair`.
+The pairs are flattened into a single deck (two slides per decision —
+problem first, then solution) via `DiagramRenderer.RenderPptx`. Render
+defaults to `new DiagramOptions()` — default theme, 16:9 aspect, no pip
+count. Render is atomic (the lib returns `byte[]`); cancel works during the
+per-file collect loop, not during render.
 
 ### Test project
 
@@ -170,6 +196,10 @@ project via relative path — not duplicated here.
   JSON pathway see the same decisions through the same filter set. Uses
   `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
   contract is what's being tested).
+- `LocalFolderProcessorPptxTests` — wiring test for the Local-mode PPTX
+  pathway. Runs the processor against the fixture folder, asserts the
+  written file is a valid OOXML zip with at least one slide. Deck-level
+  conformance is owned by `BackgammonDiagram_Lib`'s `PptxConformanceTests`.
 
 ## Public API
 
@@ -199,8 +229,9 @@ its own request shape; the client serialises `FilterConfig` into it.
 
 ### Client-shared types (`ExtractFromXgToCsv.Client/Shared/`)
 
-- `OutputFormat` — enum `Csv | DiagramJson`. Server references it too, which
-  is why it lives under `Client/Shared` rather than being duplicated.
+- `OutputFormat` — enum `Csv | DiagramJson | Pptx`. Server references it too,
+  which is why it lives under `Client/Shared` rather than being duplicated.
+  `Pptx` is Local-mode only.
 - `FilterConfig` — serializable DTO consumed by `FilterSetBuilder`.
 - `ProcessingProgress` — status-endpoint payload.
 
@@ -216,6 +247,13 @@ its own request shape; the client serialises `FilterConfig` into it.
   `LocalFolderProcessor`, and `XgFilter_Lib` wiring are registered only
   inside the `Local` mode guard in `Program.cs`. Moving that registration
   outside the guard will break Azure deployment.
+- **PPTX requires server-side rendering.** The PPTX path goes through
+  `BackgammonDiagram_Lib.DiagramRenderer.RenderPptx`, which rasterizes SVG
+  via SkiaSharp before assembling the deck. SkiaSharp's native binary isn't
+  available under Blazor WASM, so PPTX is offered in Local mode only. Don't
+  add a `BackgammonDiagram_Lib` reference to `ExtractFromXgToCsv.Client.csproj`
+  — it would either fail at runtime or pull `SkiaSharp.NativeAssets.WebAssembly`
+  into the WASM payload (multi-MB bloat, AOT/Skia friction).
 - **Two DTOs on the mode boundary.** `LocalModePanel` takes a `FilterConfig`
   (serializable) because it crosses the HTTP boundary; `WebModePanel` takes
   a `DecisionFilterSet` (in-memory, non-serializable) because it doesn't.

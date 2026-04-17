@@ -3,5 +3,6 @@
 public enum OutputFormat
 {
     Csv,
-    DiagramJson
+    DiagramJson,
+    Pptx
 }
