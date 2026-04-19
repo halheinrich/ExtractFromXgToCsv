@@ -16,8 +16,8 @@ public class XgProcessingService
         using var ms = new MemoryStream(fileBytes);
         var xgFile = XgFileReader.ReadStream(ms);
 
-        string matchId = Path.GetFileNameWithoutExtension(fileName);
-        return XgDecisionIterator.Iterate(xgFile, matchId).ToList();
+        string sourceFile = Path.GetFileName(fileName);
+        return XgDecisionIterator.Iterate(xgFile, sourceFile).ToList();
     }
 
     public string BuildCsv(IEnumerable<DecisionRow> rows)
@@ -32,7 +32,8 @@ public class XgProcessingService
     {
         using var ms = new MemoryStream(fileBytes);
         var xgFile = XgFileReader.ReadStream(ms);
-        return XgDecisionIterator.IterateDiagramRequests(xgFile).ToList();
+        string sourceFile = Path.GetFileName(fileName);
+        return XgDecisionIterator.IterateDiagramRequests(xgFile, sourceFile).ToList();
     }
 
     public string BuildDiagramJson(IEnumerable<BgDecisionData> items)

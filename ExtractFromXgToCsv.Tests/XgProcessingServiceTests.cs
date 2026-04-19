@@ -15,7 +15,7 @@ public class XgProcessingServiceTests
         Error = 0.01 * index,
         MatchLength = 7,
         Player = "Alice",
-        Match = "TestMatch",
+        SourceFile = "TestMatch.xg",
         Game = 1,
         MoveNum = index,
         Roll = 31,

@@ -25,7 +25,7 @@ Part of the [backgammon tools umbrella repo](https://github.com/halheinrich/back
 `DecisionRow` record — mirrors `DecisionRow` from **ConvertXgToJson_Lib**:
 
 ```
-Xgid | Error | MatchScore | MatchLength | Player | Match | Game | MoveNum | Roll | AnalysisDepth | Equity
+Xgid | Error | MatchScore | MatchLength | Player | SourceFile | Game | MoveNum | Roll | AnalysisDepth | Equity
 ```
 
 ---

@@ -83,8 +83,7 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var matchId = Path.GetFileNameWithoutExtension(file);
-                var rows = XgDecisionIterator.Iterate(xgFile, matchId);
+                var rows = XgDecisionIterator.Iterate(xgFile, fileName);
 
                 foreach (var row in rows.Where(r => filterSet.Matches(r)))
                 {
@@ -168,7 +167,7 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(xgFile);
+                var items = XgDecisionIterator.IterateDiagramRequests(xgFile, fileName);
 
                 foreach (var item in items.Where(r => filterSet.Matches(r)))
                 {
@@ -258,7 +257,7 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(xgFile);
+                var items = XgDecisionIterator.IterateDiagramRequests(xgFile, fileName);
 
                 foreach (var item in items.Where(r => filterSet.Matches(r)))
                 {
