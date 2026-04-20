@@ -213,7 +213,8 @@
         var max = ParseDouble(_errorMaxText);
         if (min.HasValue || max.HasValue) set.Add(new ErrorRangeFilter(min, max));
         if (_positionTypes.Count > 0) set.Add(new PositionTypeFilter(_positionTypes));
-        if (_playTypes.Count > 0) set.Add(new PlayTypeFilter(_playTypes));
+        // PlayType filtering temporarily ungated: PlayTypeFilter was removed in
+        // XgFilter_Lib pending a three-board IDecisionFilterData substrate.
         await OnFiltersChanged.InvokeAsync(set);
 
         // Raise FilterConfig for local mode (HTTP POST)
@@ -265,11 +266,7 @@
 
     private static string PlayTypeLabel(PlayType pt) => pt switch
     {
-        PlayType.Hit => "Hit",
-        PlayType.MakePoint => "Make point",
-        PlayType.HitAndMakePoint => "Hit and make point",
-        PlayType.SlotAndGo => "Slot and go",
-        PlayType.RunningPlay => "Running play",
+        PlayType.Make20Pt => "Make 20-point",
         _ => pt.ToString(),
     };
 }
