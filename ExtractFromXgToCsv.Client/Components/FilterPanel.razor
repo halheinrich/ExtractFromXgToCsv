@@ -94,7 +94,7 @@
                                id="pt_@pt"
                                checked="@_positionTypes.Contains(pt)"
                                @onchange="(e) => { if (e.Value is bool b && b) _positionTypes.Add(pt); else _positionTypes.Remove(pt); MarkDirty(); }" />
-                        <label class="form-check-label" for="pt_@pt">@PositionTypeLabel(pt)</label>
+                        <label class="form-check-label" for="pt_@pt">@pt</label>
                     </div>
                 }
             </div>
@@ -114,7 +114,7 @@
                                id="plt_@pt"
                                checked="@_playTypes.Contains(pt)"
                                @onchange="(e) => { if (e.Value is bool b && b) _playTypes.Add(pt); else _playTypes.Remove(pt); MarkDirty(); }" />
-                        <label class="form-check-label" for="plt_@pt">@PlayTypeLabel(pt)</label>
+                        <label class="form-check-label" for="plt_@pt">@pt</label>
                     </div>
                 }
             </div>
@@ -256,17 +256,5 @@
         DecisionTypeOption.CheckerPlaysOnly => "Checker plays only",
         DecisionTypeOption.CubeOnly => "Cube only",
         _ => opt.ToString(),
-    };
-
-    private static string PositionTypeLabel(PositionType pt) => pt switch
-    {
-        PositionType.InnerBoard631 => "Inner board 6-3-1",
-        _ => pt.ToString(),
-    };
-
-    private static string PlayTypeLabel(PlayType pt) => pt switch
-    {
-        PlayType.Make20Pt => "Make 20-point",
-        _ => pt.ToString(),
     };
 }
