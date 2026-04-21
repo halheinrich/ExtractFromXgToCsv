@@ -33,8 +33,11 @@ public static class FilterSetBuilder
         if (posTypes.Count > 0)
             set.Add(new PositionTypeFilter(posTypes));
 
-        // cfg.PlayTypes is intentionally unwired: PlayTypeFilter was removed in
-        // XgFilter_Lib pending a three-board IDecisionFilterData substrate.
+        var playTypes = cfg.PlayTypes
+            .Select(s => Enum.TryParse<PlayType>(s, out var v) ? v : (PlayType?)null)
+            .Where(v => v.HasValue).Select(v => v!.Value).ToHashSet();
+        if (playTypes.Count > 0)
+            set.Add(new PlayTypeFilter(playTypes));
 
         return set;
     }

@@ -13,7 +13,10 @@ public class FilterSetBuilderTests
         double error = 0.05,
         int matchLength = 7,
         int onRollNeeds = 3,
-        int opponentNeeds = 4) => new()
+        int opponentNeeds = 4,
+        int[]? board = null,
+        int[]? afterBestBoard = null,
+        int[]? afterPlayerBoard = null) => new()
         {
             Player = player,
             Roll = isCube ? 0 : 31,
@@ -21,8 +24,19 @@ public class FilterSetBuilderTests
             MatchLength = matchLength,
             OnRollNeeds = onRollNeeds,
             OpponentNeeds = opponentNeeds,
-            Board = new int[26],
+            Board = board ?? new int[26],
+            AfterBestBoard = afterBestBoard ?? new int[26],
+            AfterPlayerBoard = afterPlayerBoard ?? new int[26],
         };
+
+    // Make20Pt under the flipped after-POV: decision-maker's 20pt is index 5
+    // in after-boards and their checkers are negative, so "made" is <= -2.
+    private static int[] AfterBoardWith20PtMade()
+    {
+        var b = new int[26];
+        b[5] = -2;
+        return b;
+    }
 
     [Fact]
     public void EmptyConfig_MatchesEverything()
@@ -81,6 +95,57 @@ public class FilterSetBuilderTests
         Assert.True(fs.Matches(MakeRow(error: 0.04)));
         Assert.False(fs.Matches(MakeRow(error: 0.01)));
         Assert.False(fs.Matches(MakeRow(error: 0.10)));
+    }
+
+    [Fact]
+    public void PlayType_Empty_NoFilterAdded()
+    {
+        // A present PlayTypeFilter with an empty selection returns false for
+        // every row (empty OR). If Build does not add the filter when the
+        // selection is empty, a row with empty after-boards still passes.
+        var fs = FilterSetBuilder.Build(new FilterConfig { PlayTypes = [] });
+        Assert.True(fs.Matches(MakeRow()));
+    }
+
+    [Fact]
+    public void PlayType_Make20Pt_Selected()
+    {
+        var cfg = new FilterConfig { PlayTypes = ["Make20Pt"] };
+        var fs = FilterSetBuilder.Build(cfg);
+
+        // Empty after-boards: neither play "makes" the 20pt → XOR false.
+        Assert.False(fs.Matches(MakeRow()));
+
+        // Best play makes it, player play does not → XOR true.
+        Assert.True(fs.Matches(MakeRow(
+            afterBestBoard:   AfterBoardWith20PtMade(),
+            afterPlayerBoard: new int[26])));
+    }
+
+    [Fact]
+    public void PlayType_CombinedWithErrorRange()
+    {
+        var cfg = new FilterConfig
+        {
+            PlayTypes = ["Make20Pt"],
+            ErrorMin = 0.01,
+        };
+        var fs = FilterSetBuilder.Build(cfg);
+
+        // Make20Pt passes, error passes.
+        Assert.True(fs.Matches(MakeRow(
+            error: 0.05,
+            afterBestBoard:   AfterBoardWith20PtMade(),
+            afterPlayerBoard: new int[26])));
+
+        // Make20Pt passes, error below threshold → fails.
+        Assert.False(fs.Matches(MakeRow(
+            error: 0.001,
+            afterBestBoard:   AfterBoardWith20PtMade(),
+            afterPlayerBoard: new int[26])));
+
+        // Error passes, Make20Pt fails (both after-boards empty).
+        Assert.False(fs.Matches(MakeRow(error: 0.05)));
     }
 
     [Fact]
