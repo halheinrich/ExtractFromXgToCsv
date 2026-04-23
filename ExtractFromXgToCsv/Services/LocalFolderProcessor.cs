@@ -201,12 +201,36 @@ public class LocalFolderProcessor
         });
     }
 
-    public async Task ProcessPptxAsync(
+    public Task ProcessPptxAsync(
             string folderPath,
             string outputPath,
             DecisionFilterSet filterSet,
             IProgress<ProcessingProgress> progress,
             CancellationToken cancellationToken = default)
+        => ProcessDeckAsync(
+            folderPath, outputPath, filterSet, progress,
+            (reqs, opts) => DiagramRenderer.RenderPptx(reqs, opts),
+            "PPTX", cancellationToken);
+
+    public Task ProcessPdfAsync(
+            string folderPath,
+            string outputPath,
+            DecisionFilterSet filterSet,
+            IProgress<ProcessingProgress> progress,
+            CancellationToken cancellationToken = default)
+        => ProcessDeckAsync(
+            folderPath, outputPath, filterSet, progress,
+            (reqs, opts) => DiagramRenderer.RenderPdf(reqs, opts),
+            "PDF", cancellationToken);
+
+    private async Task ProcessDeckAsync(
+            string folderPath,
+            string outputPath,
+            DecisionFilterSet filterSet,
+            IProgress<ProcessingProgress> progress,
+            Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> renderer,
+            string formatLabel,
+            CancellationToken cancellationToken)
     {
         if (!Directory.Exists(folderPath))
             throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
@@ -278,14 +302,14 @@ public class LocalFolderProcessor
             }
         }
 
-        // Render and write are atomic — RenderPptx returns the full byte[] and
-        // mid-render cancellation isn't supported by the renderer. Cancellation
-        // gating happens during the per-file collect loop above.
+        // Render and write are atomic — the renderer returns the full byte[]
+        // and mid-render cancellation isn't supported. Cancellation gating
+        // happens during the per-file collect loop above.
         progress.Report(new ProcessingProgress
         {
             Current = files.Count,
             Total = files.Count,
-            FileName = $"Rendering PPTX ({totalRows} decisions, {requests.Count} slides)…",
+            FileName = $"Rendering {formatLabel} ({totalRows} decisions, {requests.Count} slides)…",
             TotalRows = totalRows,
             ElapsedSec = stopwatch.Elapsed.TotalSeconds,
             FilesPerSec = stopwatch.Elapsed.TotalSeconds > 0
@@ -296,8 +320,8 @@ public class LocalFolderProcessor
             throw new InvalidOperationException(
                 "No decisions matched the filter — nothing to render.");
 
-        var pptxBytes = DiagramRenderer.RenderPptx(requests, new DiagramOptions());
-        await File.WriteAllBytesAsync(outputPath, pptxBytes, cancellationToken);
+        var deckBytes = renderer(requests, new DiagramOptions());
+        await File.WriteAllBytesAsync(outputPath, deckBytes, cancellationToken);
 
         var totalElapsed = stopwatch.Elapsed.TotalSeconds;
         var finalFilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0;

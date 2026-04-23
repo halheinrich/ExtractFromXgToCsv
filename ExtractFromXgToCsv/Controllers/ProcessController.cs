@@ -45,6 +45,11 @@ public class ProcessController(
                             request.FolderPath, request.OutputPath,
                             filterSet, progress, entry.Cts.Token);
                         break;
+                    case OutputFormat.Pdf:
+                        await processor.ProcessPdfAsync(
+                            request.FolderPath, request.OutputPath,
+                            filterSet, progress, entry.Cts.Token);
+                        break;
                     default:
                         await processor.ProcessAsync(
                             request.FolderPath, request.OutputPath,
