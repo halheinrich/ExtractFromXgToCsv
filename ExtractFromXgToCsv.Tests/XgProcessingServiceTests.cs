@@ -17,7 +17,7 @@ public class XgProcessingServiceTests
         Player = "Alice",
         SourceFile = "TestMatch.xg",
         Game = 1,
-        MoveNum = index,
+        MoveNumber = index,
         Roll = 31,
         AnalysisDepth = "3-ply",
         Equity = 0.5,
