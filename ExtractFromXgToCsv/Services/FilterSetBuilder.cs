@@ -27,6 +27,9 @@ public static class FilterSetBuilder
         if (cfg.ErrorMin.HasValue || cfg.ErrorMax.HasValue)
             set.Add(new ErrorRangeFilter(cfg.ErrorMin, cfg.ErrorMax));
 
+        if (cfg.MoveNumberMin.HasValue || cfg.MoveNumberMax.HasValue)
+            set.Add(new MoveNumberFilter(cfg.MoveNumberMin, cfg.MoveNumberMax));
+
         var posTypes = cfg.PositionTypes
             .Select(s => Enum.TryParse<PositionType>(s, out var v) ? v : (PositionType?)null)
             .Where(v => v.HasValue).Select(v => v!.Value).ToHashSet();

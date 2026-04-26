@@ -12,6 +12,8 @@ public class FilterConfig
     public List<string> MatchScores   { get; set; } = new();
     public double? ErrorMin           { get; set; }
     public double? ErrorMax           { get; set; }
+    public int? MoveNumberMin         { get; set; }
+    public int? MoveNumberMax         { get; set; }
     public List<string> PositionTypes { get; set; } = new();
     public List<string> PlayTypes     { get; set; } = new();
 }

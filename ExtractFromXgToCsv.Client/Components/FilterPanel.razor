@@ -80,6 +80,25 @@
             </div>
         </div>
 
+        @* ── Move number range ────────────────────────────────────────────────── *@
+        <div class="mb-3">
+            <label class="form-label">
+                Move number range
+                <small class="text-muted">(inclusive; blank = no bound; non-standard-start games are excluded)</small>
+            </label>
+            <div class="d-flex gap-2 align-items-center">
+                <input class="form-control" style="max-width:140px"
+                       type="number" step="1" min="1" placeholder="Min"
+                       value="@_moveNumberMinText"
+                       @oninput="e => { _moveNumberMinText = e.Value?.ToString() ?? string.Empty; MarkDirty(); }" />
+                <span>–</span>
+                <input class="form-control" style="max-width:140px"
+                       type="number" step="1" min="1" placeholder="Max"
+                       value="@_moveNumberMaxText"
+                       @oninput="e => { _moveNumberMaxText = e.Value?.ToString() ?? string.Empty; MarkDirty(); }" />
+            </div>
+        </div>
+
         @* ── Position type ────────────────────────────────────────────────────── *@
         <div class="mb-3">
             <label class="form-label">
@@ -143,6 +162,8 @@
     private string _matchScoreText = string.Empty;
     private string _errorMinText = string.Empty;
     private string _errorMaxText = string.Empty;
+    private string _moveNumberMinText = string.Empty;
+    private string _moveNumberMaxText = string.Empty;
     private HashSet<PositionType> _positionTypes = new();
     private HashSet<PlayType> _playTypes = new();
 
@@ -154,6 +175,8 @@
         _matchScoreText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_matchscore") ?? string.Empty;
         _errorMinText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_errormin") ?? string.Empty;
         _errorMaxText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_errormax") ?? string.Empty;
+        _moveNumberMinText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_movenumbermin") ?? string.Empty;
+        _moveNumberMaxText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_movenumbermax") ?? string.Empty;
 
         var dtRaw = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_filter_decisiontype");
         if (Enum.TryParse<DecisionTypeOption>(dtRaw, out var dt))
@@ -183,6 +206,8 @@
         _matchScoreText = string.Empty;
         _errorMinText = string.Empty;
         _errorMaxText = string.Empty;
+        _moveNumberMinText = string.Empty;
+        _moveNumberMaxText = string.Empty;
         _positionTypes = new();
         _playTypes = new();
         await PersistAsync();
@@ -195,6 +220,8 @@
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_matchscore", _matchScoreText);
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_errormin", _errorMinText);
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_errormax", _errorMaxText);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_movenumbermin", _moveNumberMinText);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_movenumbermax", _moveNumberMaxText);
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_decisiontype", _decisionType.ToString());
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_positiontypes", SerializeEnumSet(_positionTypes));
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_filter_playtypes", SerializeEnumSet(_playTypes));
@@ -212,6 +239,9 @@
         var min = ParseDouble(_errorMinText);
         var max = ParseDouble(_errorMaxText);
         if (min.HasValue || max.HasValue) set.Add(new ErrorRangeFilter(min, max));
+        var moveMin = ParseInt(_moveNumberMinText);
+        var moveMax = ParseInt(_moveNumberMaxText);
+        if (moveMin.HasValue || moveMax.HasValue) set.Add(new MoveNumberFilter(moveMin, moveMax));
         if (_positionTypes.Count > 0) set.Add(new PositionTypeFilter(_positionTypes));
         if (_playTypes.Count > 0) set.Add(new PlayTypeFilter(_playTypes));
         await OnFiltersChanged.InvokeAsync(set);
@@ -224,6 +254,8 @@
             MatchScores = SplitTokens(_matchScoreText),
             ErrorMin = ParseDouble(_errorMinText),
             ErrorMax = ParseDouble(_errorMaxText),
+            MoveNumberMin = ParseInt(_moveNumberMinText),
+            MoveNumberMax = ParseInt(_moveNumberMaxText),
             PositionTypes = _positionTypes.Select(p => p.ToString()).ToList(),
             PlayTypes = _playTypes.Select(p => p.ToString()).ToList(),
         };
@@ -237,6 +269,10 @@
     private static double? ParseDouble(string raw) =>
         double.TryParse(raw, System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+
+    private static int? ParseInt(string raw) =>
+        int.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                     System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
 
     private static string SerializeEnumSet<T>(HashSet<T> set) where T : struct, Enum =>
         string.Join(",", set.Select(v => v.ToString()));

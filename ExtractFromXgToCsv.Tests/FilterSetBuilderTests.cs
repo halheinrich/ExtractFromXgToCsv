@@ -14,6 +14,8 @@ public class FilterSetBuilderTests
         int matchLength = 7,
         int onRollNeeds = 3,
         int opponentNeeds = 4,
+        int moveNumber = 10,
+        bool isStandardStart = true,
         int[]? board = null,
         int[]? afterBestBoard = null,
         int[]? afterPlayerBoard = null) => new()
@@ -24,6 +26,8 @@ public class FilterSetBuilderTests
             MatchLength = matchLength,
             OnRollNeeds = onRollNeeds,
             OpponentNeeds = opponentNeeds,
+            MoveNumber = moveNumber,
+            IsStandardStart = isStandardStart,
             Board = board ?? new int[26],
             AfterBestBoard = afterBestBoard ?? new int[26],
             AfterPlayerBoard = afterPlayerBoard ?? new int[26],
@@ -95,6 +99,66 @@ public class FilterSetBuilderTests
         Assert.True(fs.Matches(MakeRow(error: 0.04)));
         Assert.False(fs.Matches(MakeRow(error: 0.01)));
         Assert.False(fs.Matches(MakeRow(error: 0.10)));
+    }
+
+    [Fact]
+    public void MoveNumber_MinOnly()
+    {
+        var cfg = new FilterConfig { MoveNumberMin = 5 };
+        var fs = FilterSetBuilder.Build(cfg);
+
+        Assert.True(fs.Matches(MakeRow(moveNumber: 7)));
+        Assert.False(fs.Matches(MakeRow(moveNumber: 3)));
+    }
+
+    [Fact]
+    public void MoveNumber_MaxOnly()
+    {
+        var cfg = new FilterConfig { MoveNumberMax = 30 };
+        var fs = FilterSetBuilder.Build(cfg);
+
+        Assert.True(fs.Matches(MakeRow(moveNumber: 25)));
+        Assert.False(fs.Matches(MakeRow(moveNumber: 40)));
+    }
+
+    [Fact]
+    public void MoveNumber_MinAndMax()
+    {
+        var cfg = new FilterConfig { MoveNumberMin = 5, MoveNumberMax = 30 };
+        var fs = FilterSetBuilder.Build(cfg);
+
+        Assert.True(fs.Matches(MakeRow(moveNumber: 15)));
+        Assert.False(fs.Matches(MakeRow(moveNumber: 3)));
+        Assert.False(fs.Matches(MakeRow(moveNumber: 40)));
+    }
+
+    [Fact]
+    public void MoveNumber_NeitherBound_NoFilterAdded()
+    {
+        // No MoveNumber bounds → MoveNumberFilter not constructed, so its
+        // standard-start gate doesn't apply and a non-standard-start row
+        // still passes (parallel to ErrorRange empty-bounds behaviour).
+        var fs = FilterSetBuilder.Build(new FilterConfig());
+        Assert.True(fs.Matches(MakeRow(moveNumber: 99, isStandardStart: false)));
+    }
+
+    [Fact]
+    public void MoveNumber_CombinedWithPlayer()
+    {
+        var cfg = new FilterConfig
+        {
+            Players = ["Alice"],
+            MoveNumberMin = 5,
+            MoveNumberMax = 30,
+        };
+        var fs = FilterSetBuilder.Build(cfg);
+
+        // Both pass.
+        Assert.True(fs.Matches(MakeRow(player: "Alice", moveNumber: 15)));
+        // Wrong player.
+        Assert.False(fs.Matches(MakeRow(player: "Bob", moveNumber: 15)));
+        // Move number out of range.
+        Assert.False(fs.Matches(MakeRow(player: "Alice", moveNumber: 99)));
     }
 
     [Fact]
