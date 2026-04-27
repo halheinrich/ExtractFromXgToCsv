@@ -101,6 +101,7 @@
     private bool _busy = false;
     private bool _hasError = false;
     private string _statusMessage = string.Empty;
+    private bool _lastFilterDirty = false;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -140,6 +141,18 @@
                 _ = JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
             }
         }
+
+        // Drop the post-run status block as soon as the user starts editing a
+        // filter input — otherwise "Done — N rows" keeps describing a filter
+        // set that's no longer active. Gated on !_busy so an in-flight job's
+        // progress isn't dropped if the user pre-edits for the next run.
+        if (FilterDirty && !_lastFilterDirty && !_busy)
+        {
+            _progress = null;
+            _hasError = false;
+            _statusMessage = string.Empty;
+        }
+        _lastFilterDirty = FilterDirty;
     }
 
     private async Task StopLocalAsync()
