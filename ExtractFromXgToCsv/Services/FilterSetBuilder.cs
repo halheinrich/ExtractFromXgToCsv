@@ -1,6 +1,7 @@
 ﻿using ExtractFromXgToCsv.Client.Shared;
 using XgFilter_Lib.Enums;
 using XgFilter_Lib.Filtering;
+using XgFilter_Razor.Shared;
 
 namespace ExtractFromXgToCsv.Services;
 

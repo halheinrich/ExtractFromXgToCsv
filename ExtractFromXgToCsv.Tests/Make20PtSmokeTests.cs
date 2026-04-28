@@ -2,6 +2,7 @@ using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using XgFilter_Lib;
+using XgFilter_Razor.Shared;
 using Xunit;
 using Xunit.Abstractions;
 

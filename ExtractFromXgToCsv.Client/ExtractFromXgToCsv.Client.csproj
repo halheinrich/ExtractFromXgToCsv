@@ -15,6 +15,7 @@
     <ProjectReference Include="..\..\ConvertXgToJson_Lib\ConvertXgToJson_Lib\ConvertXgToJson_Lib.csproj" />
     <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
     <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib\BgDataTypes_Lib.csproj" />
+    <ProjectReference Include="..\..\XgFilter_Razor\XgFilter_Razor\XgFilter_Razor.csproj" />
   </ItemGroup>
 
 </Project>

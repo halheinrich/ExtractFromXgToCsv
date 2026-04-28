@@ -1,6 +1,7 @@
 ﻿using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
+using XgFilter_Razor.Shared;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
