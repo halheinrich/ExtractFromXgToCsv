@@ -93,7 +93,7 @@ public class LocalFolderProcessor
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Skipping {File}: {Error}", fileName, ex.Message);
+                _logger.LogWarning(ex, "Skipping {File}", fileName);
             }
         }
 
@@ -177,7 +177,7 @@ public class LocalFolderProcessor
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Skipping {File}: {Error}", fileName, ex.Message);
+                _logger.LogWarning(ex, "Skipping {File}", fileName);
             }
         }
 
@@ -298,7 +298,7 @@ public class LocalFolderProcessor
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Skipping {File}: {Error}", fileName, ex.Message);
+                _logger.LogWarning(ex, "Skipping {File}", fileName);
             }
         }
 
