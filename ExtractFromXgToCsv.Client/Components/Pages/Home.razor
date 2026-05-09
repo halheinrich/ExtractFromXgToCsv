@@ -53,8 +53,7 @@
     </div>
 </div>
 
-<FilterPanel OnFiltersChanged="OnFiltersChanged"
-             OnFilterConfigChanged="OnFilterConfigChanged"
+<FilterPanel OnFilterConfigChanged="OnFilterConfigChanged"
              OnFilterDirty="OnFilterDirty" />
 
 @if (_appMode == "Local")
@@ -67,7 +66,7 @@
 else
 {
     <WebModePanel OutputFormat="_outputFormat"
-                  FilterSet="_filterSet"
+                  FilterConfig="_filterConfig"
                   FilterApplied="_filterApplied"
                   FilterDirty="_filterDirty" />
 }
@@ -77,7 +76,6 @@ else
     private OutputFormat _outputFormat = OutputFormat.Csv;
     private bool _filterApplied = false;
     private bool _filterDirty = false;
-    private DecisionFilterSet _filterSet = new();
     private FilterConfig _filterConfig = new();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -104,17 +102,11 @@ else
 
     public void Dispose() { }
 
-    private void OnFiltersChanged(DecisionFilterSet fs)
-    {
-        _filterSet = fs;
-        _filterApplied = true;
-        _filterDirty = false;
-        StateHasChanged();
-    }
-
     private void OnFilterConfigChanged(FilterConfig fc)
     {
         _filterConfig = fc;
+        _filterApplied = true;
+        _filterDirty = false;
     }
 
     private void OnFilterDirty()
