@@ -92,9 +92,9 @@
 
 @code {
     [Parameter] public OutputFormat OutputFormat { get; set; }
-    [Parameter] public FilterConfig FilterConfig { get; set; } = new();
-    [Parameter] public bool FilterApplied { get; set; }
-    [Parameter] public bool FilterDirty { get; set; }
+    [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
+    [Parameter, EditorRequired] public bool FilterApplied { get; set; }
+    [Parameter, EditorRequired] public bool FilterDirty { get; set; }
 
     private string _folderPath = string.Empty;
     private string _outputPath = string.Empty;
