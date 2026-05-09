@@ -48,33 +48,31 @@ ExtractFromXgToCsv/                     — server host (thin)
     ProcessController.cs                — primary-constructor DI
     ShutdownController.cs
   Services/
-    FilterSetBuilder.cs                 — public static, builds DecisionFilterSet
+    AppModeService.cs                   — singleton, exposes configured mode
     JobStore.cs                         — singleton, job registry
     LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
-    XgProcessingService.cs
 ExtractFromXgToCsv.Client/              — WASM
   ExtractFromXgToCsv.Client.csproj
   Program.cs
-  Pages/
-    Home.razor                          — mode-detecting shell (~75 lines)
   Components/
-    FilterPanel.razor                   — filter UI, always visible both modes
     LocalModePanel.razor                — folder/output inputs, polling loop
     WebModePanel.razor                  — file picker, in-memory preview, download
+    Pages/
+      Home.razor                        — mode-detecting shell
   Services/
-    XgProcessingService.cs
+    XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
-    FilterConfig.cs                     — serializable filter DTO
     OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf
+    ProcessRequest.cs                   — POST body for /api/process/start
     ProcessingProgress.cs
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
   FixtureHelper.cs
-  FilterSetBuilderTests.cs
-  LocalFolderProcessorPptxTests.cs
   LocalFolderProcessorPdfTests.cs
-  XgProcessingServiceTests.cs
+  LocalFolderProcessorPptxTests.cs
+  Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
+  XgProcessingServiceTests.cs
 ```
 
 ## Architecture
@@ -111,8 +109,8 @@ toggling the output-format radio doesn't require re-processing.
 ### Components
 
 - **`Home.razor`** — shell. Detects app mode, owns shared state (output format,
-  filter set, filter config, filter applied/dirty), renders the output-format
-  radio and `FilterPanel`, and delegates to `LocalModePanel` or `WebModePanel`.
+  filter config, filter applied/dirty), renders the output-format radio and
+  `FilterPanel`, and delegates to `LocalModePanel` or `WebModePanel`.
 - **`FilterPanel.razor`** — owns all filter state. Raises
   `OnFilterConfigChanged EventCallback<FilterConfig>` on Apply / Reset, and
   `OnFilterDirty EventCallback` on every input change so the parent can
@@ -171,10 +169,12 @@ lives only for the process lifetime.
 
 ### Filter pipeline
 
-`FilterSetBuilder` (public static, server-side) converts a `FilterConfig` DTO
-into a `DecisionFilterSet`. Extracted from `ProcessController` so Local mode
-and the test project share the same construction path. CSV, Diagram JSON, and
-PPTX, and PDF pathways all feed the same filter set via
+`FilterConfig.Build()` (lib-owned, in `XgFilter_Lib.Filtering`) materialises
+a `DecisionFilterSet` from the serialisable DTO. The server calls
+`request.Filters.Build()` in `ProcessController.Start`; `WebModePanel` calls
+`FilterConfig.Build()` in `OnParametersSet`. Same method, two call-sites —
+see "FilterConfig materialization differs by mode" in Pitfalls. CSV,
+Diagram JSON, PPTX, and PDF pathways all feed the same filter set via
 `IDecisionFilterData` — one filter implementation, four extraction outputs.
 
 ### Diagram JSON output
@@ -206,9 +206,13 @@ xUnit, targets .NET 10. Fixture files live in the umbrella
 `TestData/FixtureFiles/*.xg` directory and are referenced from the test
 project via relative path — not duplicated here.
 
-- `FilterSetBuilderTests` — DTO → filter-set round trips.
 - `XgProcessingServiceTests` — end-to-end Local-mode pipeline against
   fixture files.
+- `Make20PtSmokeTests` — wire test for the Make20Pt filter category.
+  Exercises the same `FilterConfig.Build` + `FilteredDecisionIterator`
+  call sequence `LocalFolderProcessor` uses, against the real fixture
+  `.xg` files; the reference set is computed directly from the lib's
+  XOR semantic so adding/removing fixtures shifts both sides together.
 - `OutputConsistencyTests` — verifies that the CSV pathway and the Diagram
   JSON pathway see the same decisions through the same filter set. Uses
   `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
@@ -245,16 +249,24 @@ POST /api/shutdown
   200 →  (empty; host begins graceful shutdown)
 ```
 
-`ProcessRequest` lives in the server `ProcessController.cs`. The server owns
-its own request shape; the client serialises `FilterConfig` into it.
+`ProcessRequest` lives in `ExtractFromXgToCsv.Client/Shared/ProcessRequest.cs`
+— the client owns the wire shape and the server deserialises against it.
+The server's `ProcessController` references the same type via the Client
+project reference.
 
 ### Client-shared types (`ExtractFromXgToCsv.Client/Shared/`)
 
 - `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf`. Server references
   it too, which is why it lives under `Client/Shared` rather than being
   duplicated. `Pptx` and `Pdf` are Local-mode only.
-- `FilterConfig` — serializable DTO consumed by `FilterSetBuilder`.
+- `ProcessRequest` — POST body for `/api/process/start`
+  (`FolderPath`, `OutputPath`, `Filters` of type
+  `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`).
 - `ProcessingProgress` — status-endpoint payload.
+
+`FilterConfig` is **not** in `Client/Shared` — it lives in
+`XgFilter_Lib.Filtering` (lib-owned). Both client and server reference the
+lib type directly; nothing in this subproject duplicates or shadows it.
 
 ## Pitfalls
 
@@ -295,9 +307,11 @@ its own request shape; the client serialises `FilterConfig` into it.
   identity so the build runs once per Apply, not once per `Matches` call.
   Same `FilterConfig.Build()` method on both sides; the materialization
   point is the only difference.
-- **`FilterPanel` lives in the Client project only.** The server doesn't
-  reference Razor components. `FilterSetBuilder` is the server-side
-  equivalent — it takes a `FilterConfig` DTO, not a panel.
+- **`FilterPanel` is not referenced server-side.** It lives in
+  `XgFilter_Razor` (lib-owned) and is consumed only by the WASM client.
+  The server's bridge from a configured filter to a runnable filter set is
+  `FilterConfig.Build()`, not the panel — see the materialization pitfall
+  above.
 - **Run button dirty-gating.** The Run button is disabled whenever the
   filter panel has unapplied changes. If a test or UI change ever makes
   the button appear enabled with a dirty filter, that's a regression — the
