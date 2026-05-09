@@ -114,9 +114,9 @@ toggling the output-format radio doesn't require re-processing.
   filter set, filter config, filter applied/dirty), renders the output-format
   radio and `FilterPanel`, and delegates to `LocalModePanel` or `WebModePanel`.
 - **`FilterPanel.razor`** — owns all filter state. Raises
-  `OnFiltersChanged EventCallback<DecisionFilterSet>`,
-  `OnFilterConfigChanged EventCallback<FilterConfig>`, and
-  `OnFilterDirty EventCallback`. Always visible in both modes so the workflow
+  `OnFilterConfigChanged EventCallback<FilterConfig>` on Apply / Reset, and
+  `OnFilterDirty EventCallback` on every input change so the parent can
+  disable Run until Apply. Always visible in both modes so the workflow
   is consistent: configure filters → select files → run.
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar. Parameters:
@@ -124,8 +124,10 @@ toggling the output-format radio doesn't require re-processing.
   Takes `FilterConfig` (serializable) so it can POST it to the server.
 - **`WebModePanel.razor`** — file picker, in-memory rows and diagram rows,
   live filtering in `OnParametersSet`, preview table, download. Parameters:
-  `OutputFormat`, `FilterSet`, `FilterApplied`, `FilterDirty`.
-  Takes `DecisionFilterSet` directly — no HTTP boundary to serialize across.
+  `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
+  Takes `FilterConfig` and materializes a `DecisionFilterSet` locally
+  (cached by `FilterConfig` reference identity) — no HTTP boundary to
+  serialize across.
 
 Run button is disabled whenever the filter panel is dirty, forcing the user
 to apply or discard pending changes before a run.
@@ -282,10 +284,17 @@ its own request shape; the client serialises `FilterConfig` into it.
   appropriate for the current non-commercial posture
   (revenue ≤ \$1M / year); revisit if commercial distribution ever becomes
   a goal.
-- **Two DTOs on the mode boundary.** `LocalModePanel` takes a `FilterConfig`
-  (serializable) because it crosses the HTTP boundary; `WebModePanel` takes
-  a `DecisionFilterSet` (in-memory, non-serializable) because it doesn't.
-  Don't unify them — the serializability split is load-bearing.
+- **`FilterConfig` materialization differs by mode.** Both panels take
+  `FilterConfig` — but where it's materialized into a `DecisionFilterSet`
+  via `FilterConfig.Build()` differs. Local mode POSTs the unbuilt config
+  to the server over HTTP; `ProcessController` calls
+  `request.Filters.Build()` to materialize server-side before handing the
+  set to `LocalFolderProcessor`. Web mode never crosses an HTTP boundary;
+  `WebModePanel` calls `FilterConfig.Build()` directly in
+  `OnParametersSet`, caching the result by `FilterConfig` reference
+  identity so the build runs once per Apply, not once per `Matches` call.
+  Same `FilterConfig.Build()` method on both sides; the materialization
+  point is the only difference.
 - **`FilterPanel` lives in the Client project only.** The server doesn't
   reference Razor components. `FilterSetBuilder` is the server-side
   equivalent — it takes a `FilterConfig` DTO, not a panel.
