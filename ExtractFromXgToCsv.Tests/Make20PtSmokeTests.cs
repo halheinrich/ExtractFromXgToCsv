@@ -1,8 +1,8 @@
 using BgDataTypes_Lib;
-using ExtractFromXgToCsv.Client.Shared;
-using ExtractFromXgToCsv.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using XgFilter_Lib;
-using XgFilter_Razor.Shared;
+using XgFilter_Lib.Enums;
+using XgFilter_Lib.Filtering;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -10,7 +10,7 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// End-to-end smoke test for the Make20Pt filter path. Exercises the same
-/// FilterSetBuilder.Build + FilteredDecisionIterator.IterateXgDirectory call
+/// FilterConfig.Build + FilteredDecisionIterator.IterateXgDirectory call
 /// sequence LocalFolderProcessor uses, against the real fixture .xg files.
 ///
 /// Strategy: compute the Make20Pt reference set directly from the library's
@@ -24,8 +24,10 @@ public class Make20PtSmokeTests(ITestOutputHelper output)
     public void FilterConfigWithMake20Pt_ReturnsExactlyRowsWhereXorHolds()
     {
         // Reference set: unfiltered iteration + manual XOR check.
-        var allRows = FilteredDecisionIterator
-            .IterateXgDirectory(FixtureHelper.FixtureDir, new())
+        var allRows = new FilteredDecisionIterator(
+                new DecisionFilterSet(),
+                NullLogger<FilteredDecisionIterator>.Instance)
+            .IterateXgDirectory(FixtureHelper.FixtureDir)
             .ToList();
 
         static bool SatisfiesMake20Pt(DecisionRow r) =>
@@ -42,10 +44,11 @@ public class Make20PtSmokeTests(ITestOutputHelper output)
             .ToHashSet();
 
         // Filter-returned set.
-        var cfg = new FilterConfig { PlayTypes = ["Make20Pt"] };
-        var set = FilterSetBuilder.Build(cfg);
-        var filteredRows = FilteredDecisionIterator
-            .IterateXgDirectory(FixtureHelper.FixtureDir, set)
+        var cfg = new FilterConfig { PlayTypes = { PlayType.Make20Pt } };
+        var filteredRows = new FilteredDecisionIterator(
+                cfg.Build(),
+                NullLogger<FilteredDecisionIterator>.Instance)
+            .IterateXgDirectory(FixtureHelper.FixtureDir)
             .ToList();
         var filteredXgids = filteredRows.Select(r => r.Xgid).ToHashSet();
 

@@ -1,4 +1,4 @@
-using XgFilter_Razor.Shared;
+using XgFilter_Lib.Filtering;
 
 namespace ExtractFromXgToCsv.Client.Shared;
 

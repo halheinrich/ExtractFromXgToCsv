@@ -1,8 +1,7 @@
 ﻿using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Services;
-using ExtractFromXgToCsv.Client.Shared;
-using ExtractFromXgToCsv.Services;
-using XgFilter_Razor.Shared;
+using XgFilter_Lib.Enums;
+using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -50,19 +49,18 @@ public class OutputConsistencyTests
     }
 
     [Theory]
-    [InlineData("MatchTest.xg", "CheckerPlaysOnly")]
-    [InlineData("MatchTest.xg", "CubeOnly")]
-    [InlineData("MoneyTest.xg", "CheckerPlaysOnly")]
-    [InlineData("MoneyTest.xg", "CubeOnly")]
-    public void BothPathways_SameFilteredCount(string fileName, string decisionType)
+    [InlineData("MatchTest.xg", DecisionTypeOption.CheckerPlaysOnly)]
+    [InlineData("MatchTest.xg", DecisionTypeOption.CubeOnly)]
+    [InlineData("MoneyTest.xg", DecisionTypeOption.CheckerPlaysOnly)]
+    [InlineData("MoneyTest.xg", DecisionTypeOption.CubeOnly)]
+    public void BothPathways_SameFilteredCount(string fileName, DecisionTypeOption decisionType)
     {
         var bytes = FixtureHelper.ReadFixture(fileName);
 
         var rows = _svc.ExtractDecisions(bytes, fileName);
         var diagrams = _svc.ExtractDiagramRequests(bytes, fileName);
 
-        var cfg = new FilterConfig { DecisionType = decisionType };
-        var fs = FilterSetBuilder.Build(cfg);
+        var fs = new FilterConfig { DecisionType = decisionType }.Build();
 
         var filteredRows = rows.Where(r => fs.Matches(r)).Count();
         var filteredDiagrams = diagrams.Where(d => fs.Matches(d)).Count();

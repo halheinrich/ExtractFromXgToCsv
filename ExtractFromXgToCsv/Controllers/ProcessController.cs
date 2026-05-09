@@ -21,7 +21,7 @@ public class ProcessController(
     {
         var jobId = jobs.CreateJob();
         var entry = jobs.Get(jobId)!;
-        var filterSet = FilterSetBuilder.Build(request.Filters);
+        var filterSet = request.Filters.Build();
 
         // Fire and forget — progress updates are stored in JobStore
         _ = Task.Run(async () =>
