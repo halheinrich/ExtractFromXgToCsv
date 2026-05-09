@@ -1,9 +1,4 @@
-﻿<h3>WebModePanel</h3>
-
-@code {
-
-}
-@using BgDataTypes_Lib
+﻿@using BgDataTypes_Lib
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
@@ -115,9 +110,9 @@
     private const long WebModeLimitBytes = 50L * 1024 * 1024;
 
     [Parameter] public OutputFormat OutputFormat { get; set; }
-    [Parameter] public DecisionFilterSet FilterSet { get; set; } = new();
-    [Parameter] public bool FilterApplied { get; set; }
-    [Parameter] public bool FilterDirty { get; set; }
+    [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
+    [Parameter, EditorRequired] public bool FilterApplied { get; set; }
+    [Parameter, EditorRequired] public bool FilterDirty { get; set; }
 
     private string _csvFileName = "decisions.csv";
     private string _lastFolderHint = string.Empty;
@@ -131,6 +126,13 @@
     private List<BgDecisionData> _filteredDiagramRows = new();
     private int _filteredCount = 0;
 
+    // Cached materialization of FilterConfig. FilterPanel mints a new
+    // FilterConfig instance on every Apply (XgFilter_Razor's RaiseAsync),
+    // so reference inequality reliably signals "rebuild." This keeps the
+    // Build() call out of the per-row Matches hot path.
+    private DecisionFilterSet? _builtSet;
+    private FilterConfig? _lastBuiltConfig;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -141,12 +143,21 @@
 
     protected override void OnParametersSet()
     {
-        // Re-filter when filter set or applied state changes
-        if (FilterApplied && !FilterDirty && _rows.Count > 0)
+        // Re-filter when filter config or applied state changes
+        if (FilterApplied && !FilterDirty)
         {
-            _filteredRows = _rows.Where(r => FilterSet.Matches(r)).ToList();
-            _filteredDiagramRows = _diagramRows.Where(r => FilterSet.Matches(r)).ToList();
-            _filteredCount = _filteredRows.Count;
+            if (!ReferenceEquals(_lastBuiltConfig, FilterConfig))
+            {
+                _builtSet = FilterConfig.Build();
+                _lastBuiltConfig = FilterConfig;
+            }
+
+            if (_rows.Count > 0)
+            {
+                _filteredRows = _rows.Where(r => _builtSet!.Matches(r)).ToList();
+                _filteredDiagramRows = _diagramRows.Where(r => _builtSet!.Matches(r)).ToList();
+                _filteredCount = _filteredRows.Count;
+            }
         }
 
         // Update filename extension when output format changes
