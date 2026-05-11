@@ -26,6 +26,8 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   and constituent types. All four output pathways
   (CSV / Diagram JSON / PPTX / PDF) share the filter pipeline via
   `IDecisionFilterData`.
+- **XgFilter_Razor** — `FilterPanel` Razor component. Referenced by the
+  WASM Client csproj only; the server has no filter UI to host.
 - **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData`,
   `DiagramRenderer.RenderPptx` / `RenderPdf` for the PPTX and PDF output
   pathways. Server-side only; the client csproj does not reference it
@@ -43,35 +45,57 @@ ExtractFromXgToCsv/                     — server host (thin)
   Program.cs
   appsettings.json
   appsettings.Development.json
+  Components/
+    App.razor                           — root document
+    Routes.razor                        — router host
+    _Imports.razor
+    Layout/
+      MainLayout.razor
+    Pages/
+      Error.razor                       — server-rendered error page
   Controllers/
     AppModeController.cs
     ProcessController.cs                — primary-constructor DI
     ShutdownController.cs
+  Properties/
+    launchSettings.json
   Services/
     AppModeService.cs                   — singleton, exposes configured mode
     JobStore.cs                         — singleton, job registry
     LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
+  wwwroot/
+    app.css
+    app.js
+    bootstrap/
 ExtractFromXgToCsv.Client/              — WASM
   ExtractFromXgToCsv.Client.csproj
   Program.cs
+  _Imports.razor
   Components/
     LocalModePanel.razor                — folder/output inputs, polling loop
     WebModePanel.razor                  — file picker, in-memory preview, download
     Pages/
       Home.razor                        — mode-detecting shell
+  Properties/
+    launchSettings.json
   Services/
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
+    AppModeResponse.cs                  — { Mode } body for GET /api/appmode
     OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf
     ProcessRequest.cs                   — POST body for /api/process/start
     ProcessingProgress.cs
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
+  bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
   FixtureHelper.cs
+  HomeWiringTests.cs                    — FilterPanel → Home wiring (bUnit)
   LocalFolderProcessorPdfTests.cs
   LocalFolderProcessorPptxTests.cs
+  LocalModePanelGateTests.cs            — Run-button dirty-gating + error render (bUnit)
   Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
+  WebModePanelFilteringTests.cs         — FilterConfig-identity rebuild cache (bUnit)
   XgProcessingServiceTests.cs
 ```
 
@@ -138,14 +162,15 @@ to apply or discard pending changes before a run.
   or PDF; persisted to `localStorage` under key `xg_outputFormat`.
 - Run → `POST /api/process/start` → jobId. Client polls
   `GET /api/process/{jobId}/status` every second.
-- `ProcessController` dispatches to `LocalFolderProcessor.ProcessAsync` (CSV),
-  `ProcessDiagramAsync` (Diagram JSON), `ProcessPptxAsync` (PPTX), or
-  `ProcessPdfAsync` (PDF) based on `ProcessRequest.OutputFormat`. The PPTX
-  and PDF public methods are one-line wrappers around a shared private
-  `ProcessDeckAsync` helper parameterised on the renderer delegate — both
-  collect filtered decisions, map them via `DiagramRequest.FromDecisionData`,
-  and expand into Problem/Solution pairs rendered via
-  `DiagramRenderer.RenderPptx` or `RenderPdf`.
+- `ProcessController` dispatches via a switch on `ProcessRequest.OutputFormat`
+  with `ProcessAsync` (CSV) as the default branch — unknown / future enum
+  values fall through to CSV. Cases:
+  `ProcessDiagramAsync` (Diagram JSON), `ProcessPptxAsync` (PPTX),
+  `ProcessPdfAsync` (PDF). The PPTX and PDF public methods are one-line
+  wrappers around a shared private `ProcessDeckAsync` helper parameterised
+  on the renderer delegate — both collect filtered decisions, map them via
+  `DiagramRequest.FromDecisionData`, and expand into Problem/Solution pairs
+  rendered via `DiagramRenderer.RenderPptx` or `RenderPdf`.
 - Stop → `POST /api/process/{jobId}/cancel`. Exit → `ShutdownController`.
 
 **Web/Azure** (`"AppMode": "Web"`):
@@ -165,7 +190,10 @@ Each `JobEntry` carries a `ProcessingProgress` snapshot and a
 (`reportEvery = 10` in the processor writes progress on every 10th file).
 
 Jobs are not auto-removed — this is a single-user local app and the dictionary
-lives only for the process lifetime.
+lives only for the process lifetime. `JobStore` exposes a `Remove(string jobId)`
+method, currently unused by callers (kept for an eventual explicit cleanup
+hook; see the "Job cleanup / expiry" entry under subproject-internal next
+steps).
 
 ### Filter pipeline
 
@@ -225,6 +253,24 @@ project via relative path — not duplicated here.
   pathway. Runs the processor against the fixture folder, asserts the
   written file begins with the `%PDF-` magic bytes. Document-level
   conformance is owned by `BackgammonDiagram_Lib`'s own tests.
+- `HomeWiringTests` — bUnit wire test pinning the `FilterPanel` →
+  `Home` integration. Fails closed if the consumer's binding to
+  `OnFilterConfigChanged` or `OnFilterDirty` ever silently drops — the
+  regression class that produced the original arc (a post-rename
+  `OnFiltersChanged=` attribute that compiled clean and never bound).
+  Uses `StubAppModeHandler` from `bUnitTestHelpers` to drive the mode
+  branch deterministically.
+- `LocalModePanelGateTests` — bUnit tests pinning two `LocalModePanel`
+  invariants: the Run-button dirty-gating contract (`FilterApplied` &&
+  !`FilterDirty` plus non-empty paths to enable) and the `ErrorMessage`
+  render branch (a `Complete + ErrorMessage != null` `ProcessingProgress`
+  renders in a `.text-danger` span, not the in-progress slot).
+- `WebModePanelFilteringTests` — bUnit tests pinning the `WebModePanel`
+  `FilterConfig`-by-reference-identity rebuild cache: no build before
+  Apply; build on first Apply; cache hit on same `FilterConfig` ref;
+  rebuild on a new ref; dirty filter doesn't rebuild. Reflection
+  accessors are deliberate — the cache fields aren't a public seam, but
+  the invariant is load-bearing enough to pin directly.
 
 ## Public API
 
@@ -232,12 +278,15 @@ project via relative path — not duplicated here.
 
 ```
 POST /api/process/start
-  body:  ProcessRequest { FolderPath, OutputPath, FilterConfig, OutputFormat }
+  body:  ProcessRequest { FolderPath, OutputPath, Filters, OutputFormat }
   200 →  { JobId }
 
 GET  /api/process/{jobId}/status
-  200 →  ProcessingProgress { FilesProcessed, TotalFiles, DecisionsWritten,
-                              IsComplete, ErrorMessage? }
+  200 →  ProcessingProgress { Current, Total, FileName, TotalRows,
+                              Complete, Cancelled, ElapsedSec, FilesPerSec,
+                              ErrorMessage?, PercentComplete (computed) }
+         — PercentComplete is derived from Current/Total; ErrorMessage is
+           non-null only on the catch path (terminal error state).
 
 POST /api/process/{jobId}/cancel
   200 →  (empty)
@@ -256,6 +305,10 @@ project reference.
 
 ### Client-shared types (`ExtractFromXgToCsv.Client/Shared/`)
 
+- `AppModeResponse` — response record for `GET /api/appmode`
+  (`record AppModeResponse(string Mode)`). Server returns it; client
+  deserialises against it. Object-wrapped rather than a bare string so the
+  shape stays extensible without breaking consumers.
 - `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf`. Server references
   it too, which is why it lives under `Client/Shared` rather than being
   duplicated. `Pptx` and `Pdf` are Local-mode only.
