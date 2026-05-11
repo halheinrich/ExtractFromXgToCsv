@@ -88,8 +88,8 @@ else
 
         try
         {
-            var serverMode = await Http.GetStringAsync("/api/appmode");
-            _appMode = serverMode.Trim('"');
+            var response = await Http.GetFromJsonAsync<AppModeResponse>("/api/appmode");
+            _appMode = response?.Mode ?? "Web";
         }
         catch { _appMode = "Web"; }
 

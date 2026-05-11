@@ -23,10 +23,10 @@ internal static class bUnitTestHelpers
 }
 
 /// <summary>
-/// Minimal <see cref="HttpMessageHandler"/> stub. Returns a JSON-quoted
-/// app-mode string for <c>/api/appmode</c> (matching the real server's
-/// <see cref="ExtractFromXgToCsv.Controllers.AppModeController"/> shape:
-/// <c>Ok(string)</c> serializes as a JSON string with quotes). Returns
+/// Minimal <see cref="HttpMessageHandler"/> stub. Returns the
+/// <see cref="ExtractFromXgToCsv.Client.Shared.AppModeResponse"/> JSON
+/// object shape for <c>/api/appmode</c>, matching the real server's
+/// <see cref="ExtractFromXgToCsv.Controllers.AppModeController"/>. Returns
 /// 404 for everything else so a stray request fails loudly rather than
 /// hanging.
 /// </summary>
@@ -39,7 +39,10 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
         {
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent($"\"{mode}\""),
+                Content = new StringContent(
+                    $"{{\"Mode\":\"{mode}\"}}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
             });
         }
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));

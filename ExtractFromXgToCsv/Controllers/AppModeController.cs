@@ -1,4 +1,5 @@
-﻿using ExtractFromXgToCsv.Services;
+﻿using ExtractFromXgToCsv.Client.Shared;
+using ExtractFromXgToCsv.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ExtractFromXgToCsv.Controllers;
@@ -11,5 +12,5 @@ public class AppModeController : ControllerBase
     public AppModeController(AppModeService appMode) => _appMode = appMode;
 
     [HttpGet]
-    public IActionResult Get() => Ok(_appMode.Mode);
+    public IActionResult Get() => Ok(new AppModeResponse(_appMode.Mode));
 }

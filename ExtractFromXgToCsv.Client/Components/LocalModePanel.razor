@@ -1,6 +1,5 @@
 ﻿@using BgDataTypes_Lib
 @using System.Text.Json
-@using System.Text.Json.Serialization
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Shared
 @inject IJSRuntime JS
@@ -111,15 +110,9 @@
     private string _statusMessage = string.Empty;
     private bool _lastFilterDirty = false;
 
-    // FilterConfig's wire contract pins enums as their declaration names; the
-    // server registers the matching converter in Program.cs. Reuse one options
-    // instance for both the POST and the status GET so the contract stays
-    // honored end-to-end (PropertyNameCaseInsensitive matches the prior status
-    // call's tolerance).
     private static readonly JsonSerializerOptions _wireOptions = new()
     {
         PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter() },
     };
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

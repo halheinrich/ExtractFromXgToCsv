@@ -1,5 +1,4 @@
 // *** SERVER PROJECT — ExtractFromXgToCsv ***
-using System.Text.Json.Serialization;
 using ExtractFromXgToCsv.Components;
 using ExtractFromXgToCsv.Services;
 using QuestPDF.Infrastructure;
@@ -26,13 +25,7 @@ if (appMode == "Local")
     builder.Services.AddSingleton<JobStore>();
 }
 
-// XgFilter_Lib.Filtering.FilterConfig pins enums-as-strings on the wire
-// (see lib's FilterConfigTests.JsonRoundTrip_PreservesEnumValuesAsStrings).
-// Register JsonStringEnumConverter so /api/process/start round-trips against
-// that contract instead of relying on integer ordering.
-builder.Services
-    .AddControllers()
-    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddControllers();
 
 var app = builder.Build();
 
