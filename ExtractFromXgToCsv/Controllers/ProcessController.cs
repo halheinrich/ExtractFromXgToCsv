@@ -68,7 +68,7 @@ public class ProcessController(
                 entry.Progress = new ProcessingProgress
                 {
                     Complete = true,
-                    FileName = $"Error: {ex.Message}"
+                    ErrorMessage = ex.Message,
                 };
             }
         });

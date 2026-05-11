@@ -14,6 +14,7 @@ public class ProcessingProgress
     public bool Cancelled { get; set; }
     public double ElapsedSec { get; set; }
     public int FilesPerSec { get; set; }
+    public string? ErrorMessage { get; set; }
 
     public int PercentComplete => Total == 0 ? 0 : (int)((Current / (double)Total) * 100);
 }

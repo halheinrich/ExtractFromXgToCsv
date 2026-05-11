@@ -52,4 +52,35 @@ public class LocalModePanelGateTests : BunitContext
         var runButton = (IHtmlButtonElement)cut.FindAll("button.btn-primary").Single();
         Assert.Equal(expectDisabled, runButton.IsDisabled);
     }
+
+    /// <summary>
+    /// Pins the error-render branch added when <c>ProcessingProgress.ErrorMessage</c>
+    /// was decoupled from <c>FileName</c>. Before the split, the server's catch path
+    /// stuffed <c>"Error: ..."</c> into <c>FileName</c> and the UI rendered it through
+    /// the in-progress "File X of Y: @FileName" slot. The dedicated branch shows the
+    /// message in a <c>.text-danger</c> span; this test fails closed if either the
+    /// property or the branch is removed.
+    /// </summary>
+    [Fact]
+    public void Progress_WithErrorMessage_RendersErrorBranch()
+    {
+        var cut = Render<LocalModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.Csv)
+            .Add(c => c.FilterConfig, new FilterConfig())
+            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterDirty, false));
+
+        var instance = cut.Instance;
+        instance.GetType()
+            .GetField("_progress", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(instance, new ProcessingProgress
+            {
+                Complete = true,
+                ErrorMessage = "boom",
+            });
+        cut.Render();
+
+        var errorSpan = cut.Find("span.text-danger");
+        Assert.Contains("boom", errorSpan.TextContent);
+    }
 }

@@ -62,7 +62,13 @@
                 </div>
             </div>
             <div class="small">
-                @if (_progress.Complete && !_progress.Cancelled)
+                @if (_progress.Complete && _progress.ErrorMessage is not null)
+                {
+                    <span class="text-danger fw-bold">
+                        ✗ Error: @_progress.ErrorMessage
+                    </span>
+                }
+                else if (_progress.Complete && !_progress.Cancelled)
                 {
                     <span class="text-success fw-bold">
                         ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
