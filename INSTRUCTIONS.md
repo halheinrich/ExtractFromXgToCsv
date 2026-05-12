@@ -24,7 +24,7 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
 - **BgDataTypes_Lib** — `DecisionRow`, `BgDecisionData`, `IDecisionFilterData`
   and constituent types. All four output pathways
-  (CSV / Diagram JSON / PPTX / PDF) share the filter pipeline via
+  (CSV, Diagram JSON, PPTX, and PDF) share the filter pipeline via
   `IDecisionFilterData`.
 - **XgFilter_Razor** — `FilterPanel` Razor component. Referenced by the
   WASM Client csproj only; the server has no filter UI to host.
@@ -117,13 +117,13 @@ dependencies they can't use.
 
 All rendering is `InteractiveWebAssembly` with `prerender:false`. In Web mode
 the browser does the whole pipeline: read file, iterate decisions, apply
-filters, emit CSV or Diagram JSON. File cap is 50 MB.
+filters, emit CSV or Diagram JSON.
 
 PPTX and PDF are **not** offered in Web mode — `BackgammonDiagram_Lib`'s
 deck paths go through `SkiaSharp` to rasterize SVG into the slide/page PNG,
 and Skia's native binary isn't available under Blazor WASM. The PPTX and
-PDF radios are disabled client-side when `AppMode != "Local"` and a
-persisted `xg_outputFormat` of `Pptx` or `Pdf` is sanitised to `Csv` on
+PDF radios are disabled client-side when `AppMode != "Local"`. A
+persisted `xg_outputFormat` of `Pptx` or `Pdf` is sanitized to `Csv` on
 load. (See Pitfalls.)
 
 Web mode extracts both `DecisionRow` (for CSV) and `BgDecisionData` (for
@@ -156,24 +156,24 @@ to apply or discard pending changes before a run.
 
 ### Modes
 
-**Local** (`"AppMode": "Local"`):
+#### Local (`"AppMode": "Local"`)
 
 - Folder path + output path inputs. Output format: CSV, Diagram JSON, PPTX,
   or PDF; persisted to `localStorage` under key `xg_outputFormat`.
-- Run → `POST /api/process/start` → jobId. Client polls
+- Run → `POST /api/process/start` → `jobId`. Client polls
   `GET /api/process/{jobId}/status` every second.
 - `ProcessController` dispatches via a switch on `ProcessRequest.OutputFormat`
   with `ProcessAsync` (CSV) as the default branch — unknown / future enum
   values fall through to CSV. Cases:
   `ProcessDiagramAsync` (Diagram JSON), `ProcessPptxAsync` (PPTX),
   `ProcessPdfAsync` (PDF). The PPTX and PDF public methods are one-line
-  wrappers around a shared private `ProcessDeckAsync` helper parameterised
+  wrappers around a shared private `ProcessDeckAsync` helper parameterized
   on the renderer delegate — both collect filtered decisions, map them via
   `DiagramRequest.FromDecisionData`, and expand into Problem/Solution pairs
   rendered via `DiagramRenderer.RenderPptx` or `RenderPdf`.
 - Stop → `POST /api/process/{jobId}/cancel`. Exit → `ShutdownController`.
 
-**Web/Azure** (`"AppMode": "Web"`):
+#### Web/Azure (`"AppMode": "Web"`)
 
 - Browser file picker, 50 MB cap.
 - WASM processes everything client-side. Both `ExtractDecisions` and
@@ -187,7 +187,7 @@ to apply or discard pending changes before a run.
 `JobStore` is a singleton holding `ConcurrentDictionary<string, JobEntry>`.
 Each `JobEntry` carries a `ProcessingProgress` snapshot and a
 `CancellationTokenSource`. The client polls once per second
-(`reportEvery = 10` in the processor writes progress on every 10th file).
+(the processor uses `reportEvery = 10`, writing progress every 10th file).
 
 Jobs are not auto-removed — this is a single-user local app and the dictionary
 lives only for the process lifetime. `JobStore` exposes a `Remove(string jobId)`
@@ -197,8 +197,8 @@ steps).
 
 ### Filter pipeline
 
-`FilterConfig.Build()` (lib-owned, in `XgFilter_Lib.Filtering`) materialises
-a `DecisionFilterSet` from the serialisable DTO. The server calls
+`FilterConfig.Build()` (lib-owned, in `XgFilter_Lib.Filtering`) materializes
+a `DecisionFilterSet` from the serializable DTO. The server calls
 `request.Filters.Build()` in `ProcessController.Start`; `WebModePanel` calls
 `FilterConfig.Build()` in `OnParametersSet`. Same method, two call-sites —
 see "FilterConfig materialization differs by mode" in Pitfalls. CSV,
@@ -211,16 +211,16 @@ Emitted as a single in-memory JSON array, not NDJSON. Simpler consumer side;
 streaming is deferred (see next steps) and will matter only for very large
 corpora.
 
-### Deck output (PPTX / PDF)
+### Deck output (PPTX/PDF)
 
 Local mode only. Filtered `BgDecisionData` is buffered in memory, mapped to
 `DiagramRequest` via `DiagramRequest.FromDecisionData`, then expanded to a
 Problem/Solution pair via `DiagramRequestExtensions.ToProblemSolutionPair`.
 The pairs are flattened into a single deck (two slides/pages per decision —
 problem first, then solution) via `DiagramRenderer.RenderPptx` or
-`RenderPdf`. Render defaults to `new DiagramOptions()` — default theme,
-16:9 aspect, no pip count. Render is atomic (the lib returns `byte[]`);
-cancel works during the per-file collect loop, not during render.
+`RenderPdf`. Rendering defaults to `new DiagramOptions()` — default theme,
+16:9 aspect, no pip count. Rendering is atomic (the lib returns `byte[]`);
+cancel works during the per-file collect loop, not during rendering.
 
 `ProcessPptxAsync` and `ProcessPdfAsync` are thin wrappers around a private
 `ProcessDeckAsync` helper that takes a
@@ -240,7 +240,7 @@ project via relative path — not duplicated here.
   Exercises the same `FilterConfig.Build` + `FilteredDecisionIterator`
   call sequence `LocalFolderProcessor` uses, against the real fixture
   `.xg` files; the reference set is computed directly from the lib's
-  XOR semantic so adding/removing fixtures shifts both sides together.
+  XOR semantics so adding/removing fixtures shifts both sides together.
 - `OutputConsistencyTests` — verifies that the CSV pathway and the Diagram
   JSON pathway see the same decisions through the same filter set. Uses
   `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
@@ -254,12 +254,12 @@ project via relative path — not duplicated here.
   written file begins with the `%PDF-` magic bytes. Document-level
   conformance is owned by `BackgammonDiagram_Lib`'s own tests.
 - `HomeWiringTests` — bUnit wire test pinning the `FilterPanel` →
-  `Home` integration. Fails closed if the consumer's binding to
-  `OnFilterConfigChanged` or `OnFilterDirty` ever silently drops — the
-  regression class that produced the original arc (a post-rename
-  `OnFiltersChanged=` attribute that compiled clean and never bound).
-  Uses `StubAppModeHandler` from `bUnitTestHelpers` to drive the mode
-  branch deterministically.
+  `Home` integration. Fails closed if a binding to
+  `OnFilterConfigChanged` or `OnFilterDirty` is ever silently dropped
+  (Razor compiles unrecognized component attributes cleanly, so a stale
+  attribute name binds nothing and produces no error). Uses
+  `StubAppModeHandler` from `bUnitTestHelpers` to drive the mode branch
+  deterministically.
 - `LocalModePanelGateTests` — bUnit tests pinning two `LocalModePanel`
   invariants: the Run-button dirty-gating contract (`FilterApplied` &&
   !`FilterDirty` plus non-empty paths to enable) and the `ErrorMessage`
@@ -299,7 +299,7 @@ POST /api/shutdown
 ```
 
 `ProcessRequest` lives in `ExtractFromXgToCsv.Client/Shared/ProcessRequest.cs`
-— the client owns the wire shape and the server deserialises against it.
+— the client owns the wire shape and the server deserializes against it.
 The server's `ProcessController` references the same type via the Client
 project reference.
 
@@ -307,7 +307,7 @@ project reference.
 
 - `AppModeResponse` — response record for `GET /api/appmode`
   (`record AppModeResponse(string Mode)`). Server returns it; client
-  deserialises against it. Object-wrapped rather than a bare string so the
+  deserializes against it. Object-wrapped rather than a bare string so the
   shape stays extensible without breaking consumers.
 - `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf`. Server references
   it too, which is why it lives under `Client/Shared` rather than being
@@ -333,7 +333,7 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `LocalFolderProcessor`, and `XgFilter_Lib` wiring are registered only
   inside the `Local` mode guard in `Program.cs`. Moving that registration
   outside the guard will break Azure deployment.
-- **Deck output (PPTX / PDF) requires server-side rendering.** Both deck
+- **Deck output (PPTX/PDF) requires server-side rendering.** Both deck
   paths go through `BackgammonDiagram_Lib.DiagramRenderer`
   (`RenderPptx` / `RenderPdf`), which rasterizes SVG via SkiaSharp before
   assembling the deck. SkiaSharp's native binary isn't available under
@@ -347,7 +347,7 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `LicenseType.Community` unconditionally (Web mode never calls
   `RenderPdf`, so there's no harm in setting it always). Community is
   appropriate for the current non-commercial posture
-  (revenue ≤ \$1M / year); revisit if commercial distribution ever becomes
+  (revenue ≤ $1M / year); revisit if commercial distribution ever becomes
   a goal.
 - **`FilterConfig` materialization differs by mode.** Both panels take
   `FilterConfig` — but where it's materialized into a `DecisionFilterSet`
@@ -382,12 +382,12 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **Streaming JSON write for large datasets.** Current Diagram JSON output is
   a single in-memory array. Very large corpora may need a streaming writer
   (NDJSON or JSON-array streaming) rather than building the full document
-  before serialising.
+  before serializing.
 - **Job cleanup / expiry in `JobStore`.** Entries currently live for the
   process lifetime. A single-user local app tolerates that, but long-running
   sessions will accumulate completed jobs. A simple TTL or explicit
   "clear completed" action would address it.
 - **Pipeline performance.** The Local-mode pipeline is I/O-dominated but has
-  not been profiled. Candidate wins: parallelising per-file work, reducing
+  not been profiled. Candidate wins: parallelizing per-file work, reducing
   per-decision allocations in `XgDecisionIterator` consumers, and cutting
   reflection or LINQ in the filter hot path.
