@@ -11,6 +11,7 @@ public class XgProcessingServiceTests
 
     private static DecisionRow MakeRow(int index) => new()
     {
+        Id = new XgpDecisionId("test.xgp"),
         Xgid = $"XGID=test{index}",
         Error = 0.01 * index,
         MatchLength = 7,
@@ -42,12 +43,14 @@ public class XgProcessingServiceTests
         {
             new()
             {
+                Id = new XgpDecisionId("test.xgp"),
                 Position = new PositionData { Mop = new int[26], OnRollNeeds = 3, OpponentNeeds = 4 },
                 Decision = new DecisionData { IsCube = false, Dice = [3, 1] },
                 Descriptive = new DescriptiveData { MatchLength = 7, OnRollName = "Alice" },
             },
             new()
             {
+                Id = new XgpDecisionId("test.xgp"),
                 Position = new PositionData { Mop = new int[26], OnRollNeeds = 5, OpponentNeeds = 2 },
                 Decision = new DecisionData { IsCube = true, Dice = [0, 0] },
                 Descriptive = new DescriptiveData { MatchLength = 7, OnRollName = "Bob" },
@@ -66,6 +69,7 @@ public class XgProcessingServiceTests
     {
         var item = new BgDecisionData
         {
+            Id = new XgpDecisionId("test.xgp"),
             Position = new PositionData { Mop = new int[26], OnRollNeeds = 3, OpponentNeeds = 4, CubeSize = 2 },
             Decision = new DecisionData { IsCube = true, Dice = [0, 0], NoDoubleEquity = 0.45 },
             Descriptive = new DescriptiveData { MatchLength = 9, OnRollName = "Alice", OpponentName = "Bob" },
