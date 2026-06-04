@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
     <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib\BgDataTypes_Lib.csproj" />
     <ProjectReference Include="..\..\BackgammonDiagram_Lib\BackgammonDiagram_Lib\BackgammonDiagram_Lib.csproj" />
+    <ProjectReference Include="..\..\BackgammonDiagram_Lib\BackgammonDiagram_Lib.ExportRaster\BackgammonDiagram_Lib.ExportRaster.csproj" />
   </ItemGroup>
 
 </Project>

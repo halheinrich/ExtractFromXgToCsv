@@ -1,5 +1,5 @@
 using BackgammonDiagram_Lib;
-using BackgammonDiagram_Lib.Rendering;
+using BackgammonDiagram_Lib.ExportRaster;
 using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Shared;
@@ -209,7 +209,7 @@ public class LocalFolderProcessor
             CancellationToken cancellationToken = default)
         => ProcessDeckAsync(
             folderPath, outputPath, filterSet, progress,
-            (reqs, opts) => DiagramRenderer.RenderPptx(reqs, opts),
+            (reqs, opts) => DiagramRasterRenderer.RenderPptx(reqs, opts),
             "PPTX", cancellationToken);
 
     public Task ProcessPdfAsync(
@@ -220,7 +220,7 @@ public class LocalFolderProcessor
             CancellationToken cancellationToken = default)
         => ProcessDeckAsync(
             folderPath, outputPath, filterSet, progress,
-            (reqs, opts) => DiagramRenderer.RenderPdf(reqs, opts),
+            (reqs, opts) => DiagramRasterRenderer.RenderPdf(reqs, opts),
             "PDF", cancellationToken);
 
     private async Task ProcessDeckAsync(

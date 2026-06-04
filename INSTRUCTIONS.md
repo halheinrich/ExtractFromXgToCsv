@@ -28,13 +28,16 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   `IDecisionFilterData`.
 - **XgFilter_Razor** — `FilterPanel` Razor component. Referenced by the
   WASM Client csproj only; the server has no filter UI to host.
-- **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData`,
-  `DiagramRenderer.RenderPptx` / `RenderPdf` for the PPTX and PDF output
-  pathways. Server-side only; the client csproj does not reference it
-  (Skia native isn't available under WASM — see Pitfalls).
-- **QuestPDF** (transitive, via BackgammonDiagram_Lib) — PDF builder. A
-  license must be configured at server startup before `RenderPdf` is
-  invoked; see Pitfalls.
+- **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData` and the
+  diagram model/options types. Native-free (SVG-only) core.
+- **BackgammonDiagram_Lib.ExportRaster** — `DiagramRasterRenderer.RenderPptx`
+  / `RenderPdf` for the PPTX and PDF output pathways. Server-side only; the
+  client csproj does not reference it (the native rasterization deps —
+  SkiaSharp, QuestPDF, OpenXml — live here and aren't available under WASM,
+  see Pitfalls).
+- **QuestPDF** (transitive, via BackgammonDiagram_Lib.ExportRaster) — PDF
+  builder. A license must be configured at server startup before `RenderPdf`
+  is invoked; see Pitfalls.
 
 ## Directory tree
 
@@ -170,7 +173,7 @@ to apply or discard pending changes before a run.
   wrappers around a shared private `ProcessDeckAsync` helper parameterized
   on the renderer delegate — both collect filtered decisions, map them via
   `DiagramRequest.FromDecisionData`, and expand into Problem/Solution pairs
-  rendered via `DiagramRenderer.RenderPptx` or `RenderPdf`.
+  rendered via `DiagramRasterRenderer.RenderPptx` or `RenderPdf`.
 - Stop → `POST /api/process/{jobId}/cancel`. Exit → `ShutdownController`.
 
 #### Web/Azure (`"AppMode": "Web"`)
@@ -217,7 +220,7 @@ Local mode only. Filtered `BgDecisionData` is buffered in memory, mapped to
 `DiagramRequest` via `DiagramRequest.FromDecisionData`, then expanded to a
 Problem/Solution pair via `DiagramRequestExtensions.ToProblemSolutionPair`.
 The pairs are flattened into a single deck (two slides/pages per decision —
-problem first, then solution) via `DiagramRenderer.RenderPptx` or
+problem first, then solution) via `DiagramRasterRenderer.RenderPptx` or
 `RenderPdf`. Rendering defaults to `new DiagramOptions()` — default theme,
 16:9 aspect, no pip count. Rendering is atomic (the lib returns `byte[]`);
 cancel works during the per-file collect loop, not during rendering.
@@ -334,14 +337,15 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   inside the `Local` mode guard in `Program.cs`. Moving that registration
   outside the guard will break Azure deployment.
 - **Deck output (PPTX/PDF) requires server-side rendering.** Both deck
-  paths go through `BackgammonDiagram_Lib.DiagramRenderer`
-  (`RenderPptx` / `RenderPdf`), which rasterizes SVG via SkiaSharp before
-  assembling the deck. SkiaSharp's native binary isn't available under
-  Blazor WASM, so PPTX and PDF are offered in Local mode only. Don't add a
-  `BackgammonDiagram_Lib` reference to `ExtractFromXgToCsv.Client.csproj` —
-  it would either fail at runtime or pull
-  `SkiaSharp.NativeAssets.WebAssembly` into the WASM payload (multi-MB
-  bloat, AOT/Skia friction).
+  paths go through `BackgammonDiagram_Lib.ExportRaster.DiagramRasterRenderer`
+  (`RenderPptx` / `RenderPdf`), which renders SVG via the native-free core
+  and then rasterizes it via SkiaSharp before assembling the deck. SkiaSharp's
+  native binary isn't available under Blazor WASM, so PPTX and PDF are offered
+  in Local mode only. Don't add a `BackgammonDiagram_Lib.ExportRaster`
+  reference to `ExtractFromXgToCsv.Client.csproj` — it would either fail at
+  runtime or pull `SkiaSharp.NativeAssets.WebAssembly` into the WASM payload
+  (multi-MB bloat, AOT/Skia friction). The SVG-only core
+  `BackgammonDiagram_Lib` is WASM-safe, but the client has no need for it.
 - **QuestPDF license must be set at server startup.** `RenderPdf` throws if
   `QuestPDF.Settings.License` is unset. `Program.cs` assigns
   `LicenseType.Community` unconditionally (Web mode never calls
