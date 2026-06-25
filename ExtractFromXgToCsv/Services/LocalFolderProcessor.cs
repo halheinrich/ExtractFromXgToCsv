@@ -281,7 +281,7 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(xgFile, fileName);
+                var items = XgDecisionIterator.IterateDiagramRequests(xgFile, fileName, logger: _logger);
 
                 foreach (var item in items.Where(r => filterSet.Matches(r)))
                 {
