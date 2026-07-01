@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.3" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" />
     <!-- TODO: Add ConvertXgToJson_Lib reference once submodule is linked -->
     <!-- <ProjectReference Include="..\ConvertXgToJson_Lib\ConvertXgToJson_Lib.csproj" /> -->
   </ItemGroup>
