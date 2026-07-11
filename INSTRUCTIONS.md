@@ -43,6 +43,8 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 
 ```
 ExtractFromXgToCsv.slnx
+Directory.Packages.props
+README.md
 ExtractFromXgToCsv/                     — server host (thin)
   ExtractFromXgToCsv.csproj
   Program.cs
@@ -93,6 +95,7 @@ ExtractFromXgToCsv.Tests/
   bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
   FixtureHelper.cs
   HomeWiringTests.cs                    — FilterPanel → Home wiring (bUnit)
+  LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
   LocalFolderProcessorPptxTests.cs
   LocalModePanelGateTests.cs            — Run-button dirty-gating + error render (bUnit)
