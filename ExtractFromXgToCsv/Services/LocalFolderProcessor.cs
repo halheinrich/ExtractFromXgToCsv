@@ -215,6 +215,14 @@ public class LocalFolderProcessor
     /// <see cref="XgpExporter"/> (analysis carried through); decisions from
     /// .xgp sources are copied verbatim, mirroring the Web-mode rule in
     /// <c>XgProcessingService.BuildXgpZip</c>.
+    /// <para>
+    /// When <paramref name="anonymize"/> is <see langword="true"/>, every
+    /// written position has its player names rewritten to the neutral preset
+    /// (<see cref="XgpSliceOptions.Anonymized"/> — the producer's SSOT): an
+    /// .xg slice takes the options-bearing overload, an .xgp source takes the
+    /// whole-file anonymize-copy (comments and rollouts preserved, only the
+    /// header names change), so the toggle covers every entry.
+    /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="options"/> fails validation (surfaces to
@@ -226,6 +234,7 @@ public class LocalFolderProcessor
             DecisionFilterSet filterSet,
             XgpExportOptions options,
             IProgress<ProcessingProgress> progress,
+            bool anonymize = false,
             CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -235,6 +244,11 @@ public class LocalFolderProcessor
         var files = DiscoverInputFiles(folderPath);
 
         Directory.CreateDirectory(outputPath);
+
+        // The service owns the bool -> producer-type mapping: the request
+        // carries only intent. null keeps the current byte-for-byte behaviour;
+        // the preset is the producer's single source of "anonymized".
+        var nameOverrides = anonymize ? XgpSliceOptions.Anonymized : null;
 
         int totalRows = 0;
         var stopwatch = Stopwatch.StartNew();
@@ -276,21 +290,30 @@ public class LocalFolderProcessor
                         switch (row.Id)
                         {
                             case XgpDecisionId:
-                                // Already a single-position analyzed .xgp —
-                                // copy verbatim (same rule as Web mode).
-                                // Deliberately not cancellable: cancel
+                                // Already a single-position analyzed .xgp.
+                                // Not anonymizing: copy verbatim (same rule as
+                                // Web mode). Anonymizing: whole-file re-emit
+                                // with only the header names rewritten
+                                // (comments and rollouts preserved). Both are
+                                // deliberately not cancellable: cancel
                                 // granularity is the file boundary, so the
                                 // reported TotalRows never lags a partial
                                 // batch of written decisions.
-                                await File.WriteAllBytesAsync(target, bytes);
+                                if (nameOverrides is null)
+                                    await File.WriteAllBytesAsync(target, bytes);
+                                else
+                                    XgpExporter.WriteFile(xgFile, nameOverrides, target);
                                 break;
                             case XgDecisionId xgId:
                                 // Pass the typed Id straight to the producer's
                                 // Id overload (coordinates destructured
                                 // internally; Filename ignored — the source is
-                                // already resolved). Byte-identical to the
-                                // coordinate overload.
-                                XgpExporter.WriteFile(xgFile, xgId, target);
+                                // already resolved). Without overrides this is
+                                // byte-identical to the coordinate overload.
+                                if (nameOverrides is null)
+                                    XgpExporter.WriteFile(xgFile, xgId, target);
+                                else
+                                    XgpExporter.WriteFile(xgFile, xgId, nameOverrides, target);
                                 break;
                             default:
                                 throw new NotSupportedException(

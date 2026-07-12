@@ -123,6 +123,45 @@ public class LocalFolderProcessorXgpTests
     }
 
     [Fact]
+    public async Task ProcessXgpAsync_Anonymize_RewritesEveryWrittenPositionToTheNeutralPreset()
+    {
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-anon-{Guid.NewGuid():N}");
+        var options = new XgpExportOptions { Prefix = "anon", StartNumber = 1, SuffixLength = 4 };
+
+        var expectedCount = XgDecisionIterator
+            .IterateXgDirectory(FixtureHelper.FixtureDir).Count();
+        Assert.True(expectedCount > 0, "fixture folder should yield decisions");
+
+        try
+        {
+            await processor.ProcessXgpAsync(
+                FixtureHelper.FixtureDir,
+                outputDir,
+                new DecisionFilterSet(),
+                options,
+                new Progress<ProcessingProgress>(),
+                anonymize: true);
+
+            var written = Directory.GetFiles(outputDir, "*.xgp");
+            Assert.Equal(expectedCount, written.Length);
+
+            // Every entry — .xg-sliced and .xgp-copied alike (the fixture folder
+            // holds both) — must re-read with the neutral names.
+            foreach (var path in written)
+            {
+                var info = XgDecisionIterator.ExtractMatchInfo(XgFileReader.ReadFile(path))!;
+                Assert.Equal("Player 1", info.Player1);
+                Assert.Equal("Player 2", info.Player2);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProcessXgpAsync_InvalidOptions_Throw()
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);

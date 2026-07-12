@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Bunit;
+using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -68,6 +69,48 @@ public class WebModePanelXgpExportTests : BunitContext
         Assert.Equal("pos001.xgp", zip.Entries[0].FullName);
 
         Assert.Equal(expectedCount, exportedCount);
+    }
+
+    [Fact]
+    public async Task SelectExportDownload_WithAnonymize_ProducesZipOfAnonymizedPositions()
+    {
+        // Same chain as above, but XgpAnonymize=true — the flag must ride the
+        // panel -> BuildXgpZip seam and every zip entry re-reads with the
+        // neutral names.
+        var options = new XgpExportOptions { Prefix = "pos", StartNumber = 1, SuffixLength = 3 };
+
+        var cut = Render<WebModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.Xgp)
+            .Add(c => c.FilterConfig, new FilterConfig())
+            .Add(c => c.FilterApplied, false)
+            .Add(c => c.FilterDirty, false)
+            .Add(c => c.XgpOptions, options)
+            .Add(c => c.XgpAnonymize, true));
+
+        cut.FindComponent<InputFile>().UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
+        cut.Render(p => p.Add(c => c.FilterApplied, true));
+
+        var expectedCount = bUnitTestHelpers
+            .GetPrivateField<List<BgDataTypes_Lib.DecisionRow>>(cut.Instance, "_filteredRows")
+            .Count;
+        Assert.True(expectedCount > 0, "fixture should yield filtered decisions");
+
+        await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
+
+        var zipBytes = (byte[])JSInterop.VerifyInvoke("downloadFile").Arguments[2]!;
+        using var zip = new ZipArchive(new MemoryStream(zipBytes), ZipArchiveMode.Read);
+        Assert.Equal(expectedCount, zip.Entries.Count);
+        foreach (var entry in zip.Entries)
+        {
+            using var es = entry.Open();
+            using var ms = new MemoryStream();
+            es.CopyTo(ms);
+            ms.Position = 0;
+            var info = XgDecisionIterator.ExtractMatchInfo(XgFileReader.ReadStream(ms))!;
+            Assert.Equal("Player 1", info.Player1);
+            Assert.Equal("Player 2", info.Player2);
+        }
     }
 
     [Fact]

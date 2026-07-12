@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using BgDataTypes_Lib;
+using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Xunit;
@@ -134,6 +135,69 @@ public class XgpExportServiceTests
         {
             Assert.Equal(new[] { "pos001.xgp", "pos002.xgp", "pos003.xgp" },
                 entries.Select(e => e.FullName));
+            Assert.Equal(sources[XgpFixture], EntryBytes(entries[1]));
+        }
+    }
+
+    private static (string Player1, string Player2) ReadPlayerNames(byte[] xgpBytes)
+    {
+        using var ms = new MemoryStream(xgpBytes);
+        var info = XgDecisionIterator.ExtractMatchInfo(XgFileReader.ReadStream(ms))!;
+        return (info.Player1, info.Player2);
+    }
+
+    [Fact]
+    public void Anonymize_RewritesBothXgSlicedAndXgpCopiedEntries_ToTheNeutralPreset()
+    {
+        // A mixed batch: one .xg decision (sliced) and the whole .xgp (copied).
+        // With anonymize on, BOTH must come back with the neutral names — the
+        // toggle closes the mixed-batch privacy gap or it lies.
+        var sources = Sources(XgFixture, XgpFixture);
+        var xgId = _service.ExtractDecisions(sources[XgFixture], XgFixture).First(r => !r.IsCube).Id;
+        var xgpId = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single().Id;
+        Assert.IsType<XgpDecisionId>(xgpId);
+
+        var zipBytes = _service.BuildXgpZip(
+            sources, new List<DecisionId> { xgId, xgpId }, new XgpExportOptions(),
+            anonymize: true);
+
+        var entries = ReadEntries(zipBytes, out var zip);
+        using (zip)
+        {
+            Assert.Equal(2, entries.Count);
+            foreach (var entry in entries)
+            {
+                var (p1, p2) = ReadPlayerNames(EntryBytes(entry));
+                Assert.Equal("Player 1", p1);
+                Assert.Equal("Player 2", p2);
+            }
+            // The .xgp entry is NOT the verbatim source when anonymizing —
+            // it's a whole-file re-emit with the names rewritten.
+            Assert.NotEqual(sources[XgpFixture], EntryBytes(entries[1]));
+        }
+    }
+
+    [Fact]
+    public void AnonymizeOff_PreservesEachSourcesOwnPlayerNames()
+    {
+        // The OFF path must not touch names — each entry re-reads to the
+        // player names of its own source (and the .xgp stays byte-verbatim).
+        var sources = Sources(XgFixture, XgpFixture);
+        var xgNames = ReadPlayerNames(sources[XgFixture]);
+        var xgpNames = ReadPlayerNames(sources[XgpFixture]);
+
+        var xgId = _service.ExtractDecisions(sources[XgFixture], XgFixture).First(r => !r.IsCube).Id;
+        var xgpId = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single().Id;
+
+        var zipBytes = _service.BuildXgpZip(
+            sources, new List<DecisionId> { xgId, xgpId }, new XgpExportOptions(),
+            anonymize: false);
+
+        var entries = ReadEntries(zipBytes, out var zip);
+        using (zip)
+        {
+            Assert.Equal(xgNames, ReadPlayerNames(EntryBytes(entries[0])));
+            Assert.Equal(xgpNames, ReadPlayerNames(EntryBytes(entries[1])));
             Assert.Equal(sources[XgpFixture], EntryBytes(entries[1]));
         }
     }

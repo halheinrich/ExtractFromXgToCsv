@@ -106,6 +106,7 @@
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
     [Parameter, EditorRequired] public bool FilterDirty { get; set; }
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
+    [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
     [Parameter] public EventCallback<int> OnXgpExported { get; set; }
 
     private bool XgpRunBlocked =>
@@ -208,7 +209,8 @@
                 OutputPath = _outputPath,
                 Filters = FilterConfig,
                 OutputFormat = OutputFormat,
-                XgpOptions = XgpOptions
+                XgpOptions = XgpOptions,
+                Anonymize = XgpAnonymize
             };
 
             var startResponse = await Http.PostAsJsonAsync("/api/process/start", request, _wireOptions);

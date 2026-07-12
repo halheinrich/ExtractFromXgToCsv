@@ -82,6 +82,16 @@
                        value="@_xgpSuffixLength" @oninput="OnXgpSuffixLengthChanged" />
             </div>
         </div>
+        <div class="form-check mt-3">
+            <input class="form-check-input" type="checkbox" id="xgpAnonymize"
+                   checked="@_xgpAnonymize" @onchange="OnXgpAnonymizeChanged" />
+            <label class="form-check-label" for="xgpAnonymize">
+                Anonymize player names
+                <small class="text-muted ms-1">
+                    (rewrites every exported position's names to “Player 1” / “Player 2”)
+                </small>
+            </label>
+        </div>
         @if (_xgpOptions.TryValidate(out var xgpError))
         {
             <small class="text-muted">
@@ -106,6 +116,7 @@
                     FilterApplied="_filterApplied"
                     FilterDirty="_filterDirty"
                     XgpOptions="_xgpOptions"
+                    XgpAnonymize="_xgpAnonymize"
                     OnXgpExported="OnXgpExported" />
 }
 else
@@ -115,6 +126,7 @@ else
                   FilterApplied="_filterApplied"
                   FilterDirty="_filterDirty"
                   XgpOptions="_xgpOptions"
+                  XgpAnonymize="_xgpAnonymize"
                   OnXgpExported="OnXgpExported" />
 }
 
@@ -131,6 +143,7 @@ else
     private string _xgpPrefix = "pos";
     private int _xgpNextNumber = 1;
     private int _xgpSuffixLength = 3;
+    private bool _xgpAnonymize = false;
     private XgpExportOptions _xgpOptions = new();
 
     // Last persisted prefix/number pair — the "next number" default follows
@@ -156,6 +169,8 @@ else
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         if (int.TryParse(savedLength, out var len) && len is >= 1 and <= 9)
             _xgpSuffixLength = len;
+        var savedAnonymize = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpAnonymize");
+        _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
 
         try
@@ -226,6 +241,16 @@ else
         if (int.TryParse(e.Value?.ToString(), out var n))
             _xgpSuffixLength = n;
         RebuildXgpOptions();
+    }
+
+    // Anonymize is independent of the naming options (XgpExportOptions), so it
+    // isn't folded into RebuildXgpOptions — it rides to the panels as its own
+    // bool parameter and persists under its own key.
+    private async Task OnXgpAnonymizeChanged(ChangeEventArgs e)
+    {
+        _xgpAnonymize = e.Value is bool b && b;
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpAnonymize",
+            _xgpAnonymize.ToString());
     }
 
     /// <summary>

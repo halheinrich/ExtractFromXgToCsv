@@ -58,6 +58,16 @@ public class XgProcessingService
     /// copied verbatim — it already is a single-position analyzed
     /// <c>.xgp</c>; re-slicing would only strip its comments.
     /// </para>
+    ///
+    /// <para>
+    /// When <paramref name="anonymize"/> is <see langword="true"/>, every
+    /// entry's player names are rewritten to the neutral preset
+    /// (<see cref="XgpSliceOptions.Anonymized"/> — the producer's SSOT for
+    /// what "anonymized" means): an <c>.xg</c> slice takes the options-bearing
+    /// overload, and an <c>.xgp</c> source takes the whole-file anonymize-copy
+    /// (comments and rollouts still preserved; only the header names change).
+    /// The toggle therefore covers every entry, not just the sliced ones.
+    /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="options"/> fails validation.
@@ -69,13 +79,19 @@ public class XgProcessingService
     public byte[] BuildXgpZip(
         IReadOnlyDictionary<string, byte[]> sourceFiles,
         IReadOnlyList<DecisionId> decisions,
-        XgpExportOptions options)
+        XgpExportOptions options,
+        bool anonymize = false)
     {
         ArgumentNullException.ThrowIfNull(sourceFiles);
         ArgumentNullException.ThrowIfNull(decisions);
         ArgumentNullException.ThrowIfNull(options);
         if (!options.TryValidate(out var optionsError))
             throw new ArgumentException(optionsError, nameof(options));
+
+        // The service owns the bool -> producer-type mapping: the UI carries
+        // only intent. null keeps the current byte-for-byte behaviour; the
+        // preset is the producer's single source of what "anonymized" means.
+        var nameOverrides = anonymize ? XgpSliceOptions.Anonymized : null;
 
         // Each source is parsed at most once per batch, however many of its
         // decisions are being exported.
@@ -88,7 +104,7 @@ public class XgProcessingService
         {
             for (int i = 0; i < decisions.Count; i++)
             {
-                var bytes = ExportDecision(decisions[i], sourceFiles, parsed);
+                var bytes = ExportDecision(decisions[i], sourceFiles, parsed, nameOverrides);
                 var entry = zip.CreateEntry(options.EntryName(i), CompressionLevel.Fastest);
                 using var entryStream = entry.Open();
                 entryStream.Write(bytes);
@@ -100,7 +116,8 @@ public class XgProcessingService
     private static byte[] ExportDecision(
         DecisionId id,
         IReadOnlyDictionary<string, byte[]> sourceFiles,
-        Dictionary<string, XgFile> parsed)
+        Dictionary<string, XgFile> parsed,
+        XgpSliceOptions? nameOverrides)
     {
         if (!sourceFiles.TryGetValue(id.Filename, out var sourceBytes))
             throw new InvalidOperationException(
@@ -109,25 +126,44 @@ public class XgProcessingService
         switch (id)
         {
             case XgpDecisionId:
-                // Already a single-position analyzed .xgp — copy verbatim.
-                return sourceBytes;
+                // Already a single-position analyzed .xgp. Not anonymizing:
+                // copy verbatim (byte-for-byte with the source). Anonymizing:
+                // whole-file re-emit with only the header names rewritten —
+                // comments and rollout contexts still travel.
+                return nameOverrides is null
+                    ? sourceBytes
+                    : XgpExporter.ToBytes(Parse(id.Filename, sourceBytes, parsed), nameOverrides);
 
             case XgDecisionId xgId:
-                if (!parsed.TryGetValue(id.Filename, out var xgFile))
-                {
-                    using var ms = new MemoryStream(sourceBytes);
-                    xgFile = XgFileReader.ReadStream(ms);
-                    parsed[id.Filename] = xgFile;
-                }
                 // Pass the typed Id straight to the producer's Id overload —
                 // it destructures the coordinates internally and ignores
-                // Filename (the source is already resolved). Byte-identical
-                // to the coordinate overload.
-                return XgpExporter.ToBytes(xgFile, xgId);
+                // Filename (the source is already resolved). Without overrides
+                // this is byte-identical to the coordinate overload.
+                var xgFile = Parse(id.Filename, sourceBytes, parsed);
+                return nameOverrides is null
+                    ? XgpExporter.ToBytes(xgFile, xgId)
+                    : XgpExporter.ToBytes(xgFile, xgId, nameOverrides);
 
             default:
                 throw new NotSupportedException(
                     $"Unsupported DecisionId shape '{id.GetType().Name}' for .xgp export.");
         }
+    }
+
+    /// <summary>
+    /// Parses <paramref name="sourceBytes"/> once per source filename,
+    /// caching the result in <paramref name="parsed"/> so a batch re-parses
+    /// no source however many of its decisions are exported.
+    /// </summary>
+    private static XgFile Parse(
+        string filename, byte[] sourceBytes, Dictionary<string, XgFile> parsed)
+    {
+        if (!parsed.TryGetValue(filename, out var xgFile))
+        {
+            using var ms = new MemoryStream(sourceBytes);
+            xgFile = XgFileReader.ReadStream(ms);
+            parsed[filename] = xgFile;
+        }
+        return xgFile;
     }
 }

@@ -122,6 +122,7 @@
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
     [Parameter, EditorRequired] public bool FilterDirty { get; set; }
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
+    [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
     [Parameter] public EventCallback<int> OnXgpExported { get; set; }
 
     private string _csvFileName = "decisions.csv";
@@ -271,7 +272,8 @@
                 bytes = Processor.BuildXgpZip(
                     _fileBytes,
                     _filteredRows.Select(r => r.Id).ToList(),
-                    XgpOptions);
+                    XgpOptions,
+                    anonymize: XgpAnonymize);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.zip" : _csvFileName;
                 mimeType = "application/zip";
             }

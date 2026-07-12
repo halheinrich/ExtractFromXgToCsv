@@ -15,4 +15,14 @@ public class ProcessRequest
     /// <see cref="Filters"/> so older/partial payloads deserialize cleanly.
     /// </summary>
     public XgpExportOptions XgpOptions { get; set; } = new();
+
+    /// <summary>
+    /// When <see langword="true"/>, the Xgp pathway rewrites the player names
+    /// of every exported position to the neutral "Player 1" / "Player 2"
+    /// (comments and rollouts preserved). Ignored by every other
+    /// <see cref="OutputFormat"/>. Defaults to <see langword="false"/> —
+    /// the conservative behaviour default, so an older/partial payload never
+    /// rewrites anyone's file by omission.
+    /// </summary>
+    public bool Anonymize { get; set; }
 }
