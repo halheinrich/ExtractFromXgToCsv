@@ -35,9 +35,24 @@
     <div class="mb-4" style="max-width:800px">
         @if (FilterApplied && !FilterDirty)
         {
-            <div class="mb-2 text-muted">
-                @_filteredCount of @_rows.Count rows match current filters
-            </div>
+            @if (_filteredCount == 0)
+            {
+                // Rows loaded but the applied filter set excluded every one of
+                // them. Because an empty (inactive) set passes every row, a zero
+                // count here means the filters are genuinely active — so we can
+                // say so without re-inspecting FilterConfig. Replaces the bland
+                // "0 of N rows match" line that read as a silent success.
+                <div class="alert alert-warning zero-match-notice" role="alert">
+                    No decisions matched these filters — adjust the filters or
+                    select different files.
+                </div>
+            }
+            else
+            {
+                <div class="mb-2 text-muted">
+                    @_filteredCount of @_rows.Count rows match current filters
+                </div>
+            }
         }
         else
         {

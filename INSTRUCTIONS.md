@@ -193,7 +193,13 @@ the counter too (their files were written), error terminations don't.
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
   Takes `FilterConfig` and materializes a `DecisionFilterSet` locally
   (cached by `FilterConfig` reference identity) — no HTTP boundary to
-  serialize across.
+  serialize across. When an applied filter set excludes every loaded row
+  (`_rows.Count > 0` but `_filteredRows.Count == 0`) it renders an explicit
+  zero-match notice in place of the bland `N of M rows match` line, so a
+  filtered-to-zero result reads as a result rather than a silent success.
+  The "filters are active" signal is emergent, not a `FilterConfig`
+  re-inspection: an empty (inactive) set passes every row, so zero survivors
+  from a non-empty load can only mean the set is non-empty.
 
 Run button is disabled whenever the filter panel is dirty, forcing the user
 to apply or discard pending changes before a run.
