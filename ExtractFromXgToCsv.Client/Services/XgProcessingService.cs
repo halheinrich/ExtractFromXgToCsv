@@ -112,14 +112,18 @@ public class XgProcessingService
                 // Already a single-position analyzed .xgp — copy verbatim.
                 return sourceBytes;
 
-            case XgDecisionId(_, var game, var moveNumber, var isCube):
+            case XgDecisionId xgId:
                 if (!parsed.TryGetValue(id.Filename, out var xgFile))
                 {
                     using var ms = new MemoryStream(sourceBytes);
                     xgFile = XgFileReader.ReadStream(ms);
                     parsed[id.Filename] = xgFile;
                 }
-                return XgpExporter.ToBytes(xgFile, game, moveNumber, isCube);
+                // Pass the typed Id straight to the producer's Id overload —
+                // it destructures the coordinates internally and ignores
+                // Filename (the source is already resolved). Byte-identical
+                // to the coordinate overload.
+                return XgpExporter.ToBytes(xgFile, xgId);
 
             default:
                 throw new NotSupportedException(

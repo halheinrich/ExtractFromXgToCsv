@@ -284,8 +284,13 @@ public class LocalFolderProcessor
                                 // batch of written decisions.
                                 await File.WriteAllBytesAsync(target, bytes);
                                 break;
-                            case XgDecisionId(_, var game, var moveNumber, var isCube):
-                                XgpExporter.WriteFile(xgFile, game, moveNumber, isCube, target);
+                            case XgDecisionId xgId:
+                                // Pass the typed Id straight to the producer's
+                                // Id overload (coordinates destructured
+                                // internally; Filename ignored — the source is
+                                // already resolved). Byte-identical to the
+                                // coordinate overload.
+                                XgpExporter.WriteFile(xgFile, xgId, target);
                                 break;
                             default:
                                 throw new NotSupportedException(
