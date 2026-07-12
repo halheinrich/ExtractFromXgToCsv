@@ -77,6 +77,52 @@ public class LocalFolderProcessorXgpTests
     }
 
     [Fact]
+    public async Task ProcessXgpAsync_NumbersDecisionsInProducerDiscoveryOrder()
+    {
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-order-{Guid.NewGuid():N}");
+        var options = new XgpExportOptions { Prefix = "ord", StartNumber = 1, SuffixLength = 4 };
+
+        // Reference sequence: the producer's *contractual* discovery order
+        // (ascending full path, OrdinalIgnoreCase + Ordinal tiebreak) walked
+        // per file. Deriving expected from the same enumeration the processor
+        // now uses keeps this pin fixture-shift-proof rather than hardcoded —
+        // add/remove a fixture and both sides move together.
+        var expected = XgFileReader
+            .EnumerateXgFormatFiles(FixtureHelper.FixtureDir, SearchOption.AllDirectories)
+            .SelectMany(path => XgDecisionIterator.Iterate(
+                XgFileReader.ReadFile(path), Path.GetFileName(path)))
+            .Select(r => r.Xgid)
+            .ToList();
+        Assert.True(expected.Count > 0, "fixture folder should yield decisions");
+
+        try
+        {
+            await processor.ProcessXgpAsync(
+                FixtureHelper.FixtureDir,
+                outputDir,
+                new DecisionFilterSet(),
+                options,
+                new Progress<ProcessingProgress>());
+
+            // The i-th written file (EntryName(i)) must re-read to the i-th
+            // decision of the reference walk — pins numbering ORDER, not just
+            // the set of names or the count.
+            var actual = Enumerable.Range(0, expected.Count)
+                .Select(i => Path.Combine(outputDir, options.EntryName(i)))
+                .Select(p => XgDecisionIterator.IterateDiagramRequests(
+                    XgFileReader.ReadFile(p), Path.GetFileName(p)).Single().Xgid)
+                .ToList();
+
+            Assert.Equal(expected, actual);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProcessXgpAsync_InvalidOptions_Throw()
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);

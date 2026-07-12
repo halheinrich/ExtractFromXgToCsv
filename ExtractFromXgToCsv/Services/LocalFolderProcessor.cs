@@ -25,6 +25,32 @@ public class LocalFolderProcessor
         _logger = logger;
     }
 
+    /// <summary>
+    /// Discovers the .xg/.xgp input files under <paramref name="folderPath"/>,
+    /// recursively. The extension set and ordering are the producer's contract
+    /// (<see cref="XgFileReader.EnumerateXgFormatFiles(string, SearchOption)"/>):
+    /// ascending full path, <c>OrdinalIgnoreCase</c> with an <c>Ordinal</c>
+    /// tiebreak — culture-independent, so the resulting numbering order is
+    /// stable across machines. The single source of discovery for every
+    /// pathway in this processor; the friendly not-found / empty-folder
+    /// messages are consumer-owned preludes and stay here (both surface to the
+    /// client through the job's ErrorMessage channel).
+    /// </summary>
+    private static IReadOnlyList<string> DiscoverInputFiles(string folderPath)
+    {
+        if (!Directory.Exists(folderPath))
+            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
+
+        var files = XgFileReader
+            .EnumerateXgFormatFiles(folderPath, SearchOption.AllDirectories)
+            .ToList();
+
+        if (files.Count == 0)
+            throw new InvalidOperationException("No .xg or .xgp files found in folder.");
+
+        return files;
+    }
+
     public async Task ProcessAsync(
         string folderPath,
         string outputPath,
@@ -32,17 +58,7 @@ public class LocalFolderProcessor
         IProgress<ProcessingProgress> progress,
         CancellationToken cancellationToken = default)
     {
-        if (!Directory.Exists(folderPath))
-            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
-
-        var files = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => f.EndsWith(".xg", StringComparison.OrdinalIgnoreCase)
-                     || f.EndsWith(".xgp", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f)
-            .ToList();
-
-        if (files.Count == 0)
-            throw new InvalidOperationException("No .xg or .xgp files found in folder.");
+        var files = DiscoverInputFiles(folderPath);
 
         var outputDir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDir))
@@ -118,17 +134,7 @@ public class LocalFolderProcessor
             IProgress<ProcessingProgress> progress,
             CancellationToken cancellationToken = default)
     {
-        if (!Directory.Exists(folderPath))
-            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
-
-        var files = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => f.EndsWith(".xg", StringComparison.OrdinalIgnoreCase)
-                     || f.EndsWith(".xgp", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f)
-            .ToList();
-
-        if (files.Count == 0)
-            throw new InvalidOperationException("No .xg or .xgp files found in folder.");
+        var files = DiscoverInputFiles(folderPath);
 
         var outputDir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDir))
@@ -222,20 +228,11 @@ public class LocalFolderProcessor
             IProgress<ProcessingProgress> progress,
             CancellationToken cancellationToken = default)
     {
-        if (!Directory.Exists(folderPath))
-            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
         ArgumentNullException.ThrowIfNull(options);
         if (!options.TryValidate(out var optionsError))
             throw new ArgumentException(optionsError, nameof(options));
 
-        var files = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => f.EndsWith(".xg", StringComparison.OrdinalIgnoreCase)
-                     || f.EndsWith(".xgp", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f)
-            .ToList();
-
-        if (files.Count == 0)
-            throw new InvalidOperationException("No .xg or .xgp files found in folder.");
+        var files = DiscoverInputFiles(folderPath);
 
         Directory.CreateDirectory(outputPath);
 
@@ -358,17 +355,7 @@ public class LocalFolderProcessor
             string formatLabel,
             CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(folderPath))
-            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
-
-        var files = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => f.EndsWith(".xg", StringComparison.OrdinalIgnoreCase)
-                     || f.EndsWith(".xgp", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f)
-            .ToList();
-
-        if (files.Count == 0)
-            throw new InvalidOperationException("No .xg or .xgp files found in folder.");
+        var files = DiscoverInputFiles(folderPath);
 
         var outputDir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDir))
