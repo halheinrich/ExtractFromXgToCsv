@@ -51,7 +51,57 @@
             }
         </label>
     </div>
+    <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="outputFormat" id="fmtXgp"
+               checked="@(_outputFormat == OutputFormat.Xgp)"
+               disabled="@(_appMode == "Local")"
+               @onchange="@(() => SetOutputFormat(OutputFormat.Xgp))" />
+        <label class="form-check-label" for="fmtXgp">
+            XGP positions
+            @if (_appMode == "Local")
+            {
+                <small class="text-muted ms-1">(Web mode only)</small>
+            }
+        </label>
+    </div>
 </div>
+
+@if (_outputFormat == OutputFormat.Xgp)
+{
+    <div class="mb-3 border rounded p-3" style="max-width:800px" id="xgpOptions">
+        <label class="form-label d-block fw-bold">XGP export options</label>
+        <div class="row g-3">
+            <div class="col-auto">
+                <label class="form-label" for="xgpPrefix">Filename prefix</label>
+                <input class="form-control" id="xgpPrefix" style="max-width:200px"
+                       value="@_xgpPrefix" @oninput="OnXgpPrefixChanged" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" for="xgpNextNumber">Next number</label>
+                <input class="form-control" id="xgpNextNumber" type="number" min="1"
+                       style="max-width:120px"
+                       value="@_xgpNextNumber" @oninput="OnXgpNextNumberChanged" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" for="xgpSuffixLength">Number length</label>
+                <input class="form-control" id="xgpSuffixLength" type="number" min="1" max="9"
+                       style="max-width:120px"
+                       value="@_xgpSuffixLength" @oninput="OnXgpSuffixLengthChanged" />
+            </div>
+        </div>
+        @if (_xgpOptions.TryValidate(out var xgpError))
+        {
+            <small class="text-muted">
+                Files are named @(_xgpOptions.EntryName(0)), @(_xgpOptions.EntryName(1)), …
+                one per exported decision.
+            </small>
+        }
+        else
+        {
+            <div class="text-danger small mt-1">@xgpError</div>
+        }
+    </div>
+}
 
 <FilterPanel OnFilterConfigChanged="OnFilterConfigChanged"
              OnFilterDirty="OnFilterDirty" />
@@ -68,7 +118,9 @@ else
     <WebModePanel OutputFormat="_outputFormat"
                   FilterConfig="_filterConfig"
                   FilterApplied="_filterApplied"
-                  FilterDirty="_filterDirty" />
+                  FilterDirty="_filterDirty"
+                  XgpOptions="_xgpOptions"
+                  OnXgpExported="OnXgpExported" />
 }
 
 @code {
@@ -78,6 +130,19 @@ else
     private bool _filterDirty = false;
     private FilterConfig _filterConfig = new();
 
+    // XGP export options. Home owns the option state (and its persistence);
+    // the panels receive an immutable XgpExportOptions snapshot and report
+    // back through OnXgpExported so the counter can advance.
+    private string _xgpPrefix = "pos";
+    private int _xgpNextNumber = 1;
+    private int _xgpSuffixLength = 3;
+    private XgpExportOptions _xgpOptions = new();
+
+    // Last persisted prefix/number pair — the "next number" default follows
+    // the persisted counter only while the prefix still matches it.
+    private string? _xgpPersistedPrefix;
+    private int _xgpPersistedLastNumber;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -85,6 +150,18 @@ else
         var savedFormat = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputFormat");
         if (Enum.TryParse<OutputFormat>(savedFormat, out var fmt))
             _outputFormat = fmt;
+
+        _xgpPersistedPrefix = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpPrefix");
+        var savedLast = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpLastNumber");
+        var savedLength = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpSuffixLength");
+
+        _xgpPrefix = _xgpPersistedPrefix ?? "pos";
+        if (int.TryParse(savedLast, out var last) && last >= 0)
+            _xgpPersistedLastNumber = last;
+        _xgpNextNumber = _xgpPersistedLastNumber + 1;
+        if (int.TryParse(savedLength, out var len) && len is >= 1 and <= 9)
+            _xgpSuffixLength = len;
+        RebuildXgpOptions();
 
         try
         {
@@ -95,6 +172,8 @@ else
 
         if ((_outputFormat == OutputFormat.Pptx || _outputFormat == OutputFormat.Pdf)
             && _appMode != "Local")
+            _outputFormat = OutputFormat.Csv;
+        if (_outputFormat == OutputFormat.Xgp && _appMode == "Local")
             _outputFormat = OutputFormat.Csv;
 
         StateHasChanged();
@@ -119,6 +198,62 @@ else
     {
         _outputFormat = fmt;
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputFormat", fmt.ToString());
+        StateHasChanged();
+    }
+
+    private void RebuildXgpOptions() =>
+        _xgpOptions = new XgpExportOptions
+        {
+            Prefix = _xgpPrefix,
+            StartNumber = _xgpNextNumber,
+            SuffixLength = _xgpSuffixLength,
+        };
+
+    private void OnXgpPrefixChanged(ChangeEventArgs e)
+    {
+        _xgpPrefix = e.Value?.ToString() ?? string.Empty;
+        // Continue the persisted counter only while the prefix matches the
+        // one it was persisted under; a different prefix starts a fresh
+        // series at 1. The user can still override the number afterwards.
+        _xgpNextNumber = _xgpPrefix == _xgpPersistedPrefix
+            ? _xgpPersistedLastNumber + 1
+            : 1;
+        RebuildXgpOptions();
+    }
+
+    private void OnXgpNextNumberChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var n))
+            _xgpNextNumber = n;
+        RebuildXgpOptions();
+    }
+
+    private void OnXgpSuffixLengthChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var n))
+            _xgpSuffixLength = n;
+        RebuildXgpOptions();
+    }
+
+    /// <summary>
+    /// Raised by a panel after a successful .xgp export of
+    /// <paramref name="count"/> decisions. Advances and persists the
+    /// numbering counter so the next batch continues where this one ended.
+    /// </summary>
+    private async Task OnXgpExported(int count)
+    {
+        if (count <= 0) return;
+
+        _xgpPersistedLastNumber = _xgpOptions.StartNumber + count - 1;
+        _xgpPersistedPrefix = _xgpOptions.Prefix;
+        _xgpNextNumber = _xgpPersistedLastNumber + 1;
+        RebuildXgpOptions();
+
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpPrefix", _xgpPersistedPrefix);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpLastNumber",
+            _xgpPersistedLastNumber.ToString());
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpSuffixLength",
+            _xgpOptions.SuffixLength.ToString());
         StateHasChanged();
     }
 }

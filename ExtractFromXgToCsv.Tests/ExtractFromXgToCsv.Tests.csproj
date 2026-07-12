@@ -21,7 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\TestData\FixtureFiles\*.xg" Link="FixtureFiles\%(Filename)%(Extension)">
+    <Content Include="..\..\TestData\FixtureFiles\*.xg;..\..\TestData\FixtureFiles\*.xgp"
+             Link="FixtureFiles\%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

@@ -80,6 +80,79 @@ public class HomeWiringTests : BunitContext
     }
 
     [Fact]
+    public void XgpRadio_EnabledInWebMode()
+    {
+        RegisterHttpClient("Web");
+        var cut = Render<Home>();
+        cut.WaitForState(
+            () => cut.FindComponents<WebModePanel>().Any(),
+            TimeSpan.FromSeconds(5));
+        Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void XgpRadio_DisabledInLocalMode()
+    {
+        // Transient scaffolding until the server-side Xgp pathway lands —
+        // ProcessController would otherwise fall through to CSV for an
+        // Xgp POST.
+        RegisterHttpClient("Local");
+        var cut = Render<Home>();
+        cut.WaitForState(
+            () => cut.FindComponents<LocalModePanel>().Any(),
+            TimeSpan.FromSeconds(5));
+        Assert.True(cut.Find("#fmtXgp").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void XgpOptionsBlock_RendersOnlyWhileXgpSelected_AndPropagatesToWebPanel()
+    {
+        RegisterHttpClient("Web");
+
+        var cut = Render<Home>();
+        cut.WaitForState(
+            () => cut.FindComponents<WebModePanel>().Any(),
+            TimeSpan.FromSeconds(5));
+
+        Assert.Empty(cut.FindAll("#xgpOptions"));
+
+        cut.Find("#fmtXgp").Change(true);
+        Assert.Single(cut.FindAll("#xgpOptions"));
+
+        var webPanel = cut.FindComponent<WebModePanel>();
+        Assert.NotNull(webPanel.Instance.XgpOptions);
+        Assert.True(webPanel.Instance.XgpOptions.TryValidate(out _));
+
+        cut.Find("#fmtCsv").Change(true);
+        Assert.Empty(cut.FindAll("#xgpOptions"));
+    }
+
+    [Fact]
+    public void OnXgpExported_AdvancesAndPersistsTheCounter()
+    {
+        RegisterHttpClient("Web");
+
+        var cut = Render<Home>();
+        cut.WaitForState(
+            () => cut.FindComponents<WebModePanel>().Any(),
+            TimeSpan.FromSeconds(5));
+        cut.Find("#fmtXgp").Change(true);
+
+        var webPanel = cut.FindComponent<WebModePanel>();
+        Assert.Equal(1, webPanel.Instance.XgpOptions.StartNumber);
+
+        // Panel reports an export of 5 decisions → counter advances to 6
+        // and the last used number is persisted.
+        cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(5));
+
+        Assert.Equal(6, webPanel.Instance.XgpOptions.StartNumber);
+        Assert.Contains(JSInterop.Invocations, i =>
+            i.Identifier == "localStorage.setItem"
+            && (string?)i.Arguments[0] == "xg_xgpLastNumber"
+            && (string?)i.Arguments[1] == "5");
+    }
+
+    [Fact]
     public void OnFilterDirty_FlipsFilterDirtyWithoutClearingApplied()
     {
         RegisterHttpClient("Local");

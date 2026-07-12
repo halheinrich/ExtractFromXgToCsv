@@ -54,12 +54,20 @@
 
         <button class="btn btn-primary"
                 @onclick="DownloadAsync"
-                disabled="@(_busy || !FilterApplied || FilterDirty || _totalSelectedBytes > WebModeLimitBytes)">
-            @(_busy ? "Building…" : (OutputFormat == OutputFormat.DiagramJson ? "Download JSON" : "Download CSV"))
+                disabled="@(_busy || !FilterApplied || FilterDirty || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
+            @(_busy ? "Building…" : DownloadButtonLabel)
         </button>
         @if (!FilterApplied || FilterDirty)
         {
             <small class="text-muted ms-2">Apply filters first</small>
+        }
+        else if (XgpDownloadBlocked)
+        {
+            <small class="text-muted ms-2">
+                @(_filteredRows.Count == 0
+                    ? "No decisions match the filters"
+                    : "Fix the XGP export options first")
+            </small>
         }
     </div>
 }
@@ -113,6 +121,8 @@
     [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
     [Parameter, EditorRequired] public bool FilterDirty { get; set; }
+    [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
+    [Parameter] public EventCallback<int> OnXgpExported { get; set; }
 
     private string _csvFileName = "decisions.csv";
     private string _lastFolderHint = string.Empty;
@@ -125,6 +135,12 @@
     private List<BgDecisionData> _diagramRows = new();
     private List<BgDecisionData> _filteredDiagramRows = new();
     private int _filteredCount = 0;
+
+    // Raw bytes of each selected file, keyed by bare filename — retained so
+    // the .xgp slice export can re-parse its sources at download time. Raw
+    // (zlib-compressed) bytes are kept rather than parsed XgFiles: they are
+    // smaller and already bounded by WebModeLimitBytes.
+    private readonly Dictionary<string, byte[]> _fileBytes = new();
 
     // Cached materialization of FilterConfig. FilterPanel mints a new
     // FilterConfig instance on every Apply (XgFilter_Razor's RaiseAsync),
@@ -163,7 +179,12 @@
         // Update filename extension when output format changes
         if (!string.IsNullOrWhiteSpace(_csvFileName))
         {
-            var expectedExt = OutputFormat == OutputFormat.DiagramJson ? ".json" : ".csv";
+            var expectedExt = OutputFormat switch
+            {
+                OutputFormat.DiagramJson => ".json",
+                OutputFormat.Xgp         => ".zip",
+                _                        => ".csv",
+            };
             if (!_csvFileName.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
             {
                 _csvFileName = Path.ChangeExtension(_csvFileName, expectedExt);
@@ -177,6 +198,7 @@
         _hasError = false; _statusMessage = string.Empty;
         _rows.Clear(); _filteredRows.Clear();
         _diagramRows.Clear(); _filteredDiagramRows.Clear();
+        _fileBytes.Clear();
         _filteredCount = 0;
 
         var files = e.GetMultipleFiles(500).ToList();
@@ -202,6 +224,7 @@
                 using var ms = new MemoryStream();
                 await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
                 var bytes = ms.ToArray();
+                _fileBytes[file.Name] = bytes;
                 _rows.AddRange(Processor.ExtractDecisions(bytes, file.Name));
                 _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, file.Name));
             }
@@ -219,30 +242,63 @@
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
     }
 
+    // Xgp needs matching decisions and valid naming options before the
+    // Download button makes sense; the text formats tolerate an empty set
+    // (header-only CSV / empty JSON array), so they stay ungated.
+    private bool XgpDownloadBlocked =>
+        OutputFormat == OutputFormat.Xgp
+        && (_filteredRows.Count == 0 || !XgpOptions.TryValidate(out _));
+
+    private string DownloadButtonLabel => OutputFormat switch
+    {
+        OutputFormat.DiagramJson => "Download JSON",
+        OutputFormat.Xgp         => "Download ZIP",
+        _                        => "Download CSV",
+    };
+
     private async Task DownloadAsync()
     {
         _busy = true;
+        _hasError = false; _statusMessage = string.Empty;
         try
         {
-            string content;
+            byte[] bytes;
             string fileName;
             string mimeType;
 
-            if (OutputFormat == OutputFormat.DiagramJson)
+            if (OutputFormat == OutputFormat.Xgp)
             {
-                content = Processor.BuildDiagramJson(_filteredDiagramRows);
+                bytes = Processor.BuildXgpZip(
+                    _fileBytes,
+                    _filteredRows.Select(r => r.Id).ToList(),
+                    XgpOptions);
+                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.zip" : _csvFileName;
+                mimeType = "application/zip";
+            }
+            else if (OutputFormat == OutputFormat.DiagramJson)
+            {
+                var content = Processor.BuildDiagramJson(_filteredDiagramRows);
+                bytes = System.Text.Encoding.UTF8.GetBytes(content);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.json" : _csvFileName;
                 mimeType = "application/json";
             }
             else
             {
-                content = Processor.BuildCsv(_filteredRows);
+                var content = Processor.BuildCsv(_filteredRows);
+                bytes = System.Text.Encoding.UTF8.GetBytes(content);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
                 mimeType = "text/csv";
             }
 
-            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
             await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
+
+            if (OutputFormat == OutputFormat.Xgp)
+                await OnXgpExported.InvokeAsync(_filteredRows.Count);
+        }
+        catch (Exception ex)
+        {
+            _hasError = true;
+            _statusMessage = $"Error: {ex.Message}";
         }
         finally { _busy = false; }
     }

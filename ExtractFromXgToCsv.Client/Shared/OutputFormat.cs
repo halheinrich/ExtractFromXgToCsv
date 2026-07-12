@@ -5,5 +5,6 @@ public enum OutputFormat
     Csv,
     DiagramJson,
     Pptx,
-    Pdf
+    Pdf,
+    Xgp
 }

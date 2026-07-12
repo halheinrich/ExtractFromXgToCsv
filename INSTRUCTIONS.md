@@ -19,7 +19,8 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 ## Depends on
 
 - **ConvertXgToJson_Lib** — `XgDecisionIterator`, `XgFileReader`, `XgIteratorState`
-  for .xg/.xgp reading and decision iteration.
+  for .xg/.xgp reading and decision iteration; `XgpExporter` (slice surface)
+  for the per-decision .xgp export pathway.
 - **XgFilter_Lib** — `DecisionFilterSet`, `FilteredDecisionIterator`,
   `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
 - **BgDataTypes_Lib** — `DecisionRow`, `BgDecisionData`, `IDecisionFilterData`
@@ -87,9 +88,10 @@ ExtractFromXgToCsv.Client/              — WASM
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
     AppModeResponse.cs                  — { Mode } body for GET /api/appmode
-    OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf
+    OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf | Xgp
     ProcessRequest.cs                   — POST body for /api/process/start
     ProcessingProgress.cs
+    XgpExportOptions.cs                 — .xgp batch naming (prefix/number/length)
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
   bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
@@ -102,6 +104,8 @@ ExtractFromXgToCsv.Tests/
   Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
   WebModePanelFilteringTests.cs         — FilterConfig-identity rebuild cache (bUnit)
+  WebModePanelXgpExportTests.cs         — select→export→download wire (bUnit)
+  XgpExportServiceTests.cs              — BuildXgpZip round-trip oracle
   XgProcessingServiceTests.cs
 ```
 
@@ -134,7 +138,38 @@ load. (See Pitfalls.)
 
 Web mode extracts both `DecisionRow` (for CSV) and `BgDecisionData` (for
 Diagram JSON) on file selection — keeps the two output formats in sync so
-toggling the output-format radio doesn't require re-processing.
+toggling the output-format radio doesn't require re-processing. It also
+retains each selected file's **raw bytes** (keyed by bare filename) so the
+XGP export pathway can re-parse its source files at download time — raw
+zlib-compressed bytes are smaller than parsed record graphs and are already
+bounded by the 50 MB selection cap.
+
+### XGP export (Web mode)
+
+Selecting the **XGP positions** output format downloads the filtered
+decisions as one `.zip` containing a per-decision `.xgp` position file.
+`XgProcessingService.BuildXgpZip(sourceFiles, decisions, options)` is the
+encapsulation seam: the panel hands it retained file bytes plus
+`DecisionId`s — parsing stays inside the service; components never touch
+`XgFile`. Per decision:
+
+- `XgDecisionId` (from a `.xg` source) → `XgpExporter.ToBytes(xgFile, game,
+  moveNumber, isCube)` — the producer's **slice** surface, analysis panes
+  carried through, XG-SaveAs-equivalent, re-consumable by our own iterator.
+- `XgpDecisionId` (from an `.xgp` source) → the source file bytes
+  **verbatim** (see Pitfalls).
+
+Entry naming is `{prefix}{number:D{suffixLength}}.xgp` — single-sourced in
+`XgpExportOptions.EntryName`. `Home` owns the option state and its
+localStorage persistence (`xg_xgpPrefix`, `xg_xgpLastNumber`,
+`xg_xgpSuffixLength`): the "next number" field defaults to the persisted
+last number + 1 while the prefix matches the persisted prefix (else 1), and
+the panel reports a completed export through its `OnXgpExported(count)`
+callback so `Home` can advance and persist the counter.
+
+The XGP radio is currently **disabled in Local mode** — transient
+scaffolding until the server-side pathway lands (`ProcessController`'s
+switch would otherwise fall through to CSV for an Xgp POST).
 
 ### Components
 
@@ -315,9 +350,15 @@ project reference.
   (`record AppModeResponse(string Mode)`). Server returns it; client
   deserializes against it. Object-wrapped rather than a bare string so the
   shape stays extensible without breaking consumers.
-- `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf`. Server references
-  it too, which is why it lives under `Client/Shared` rather than being
-  duplicated. `Pptx` and `Pdf` are Local-mode only.
+- `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf | Xgp`. Server
+  references it too, which is why it lives under `Client/Shared` rather than
+  being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` is currently
+  Web-mode only (see the XGP export section).
+- `XgpExportOptions` — naming options for a batch of per-decision `.xgp`
+  exports (`Prefix`, `StartNumber`, `SuffixLength`). Single source of the
+  `{prefix}{number:D{len}}.xgp` rule via `EntryName(index)`. Permissive wire
+  DTO — validation is the separate `TryValidate(out error)` (the UI gates on
+  it; export pathways throw `ArgumentException`).
 - `ProcessRequest` — POST body for `/api/process/start`
   (`FolderPath`, `OutputPath`, `Filters` of type
   `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`).
@@ -379,6 +420,18 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **CA1859 in `OutputConsistencyTests`.** The interface usage is the thing
   under test (the shared-pipeline contract). Don't "fix" the warning by
   switching to concrete types — you'd defeat the test.
+- **`.xgp`-sourced decisions export verbatim, not sliced.** In
+  `BuildXgpZip`, an `XgpDecisionId` decision copies its source file
+  byte-for-byte: the source already is a single-position analyzed `.xgp`,
+  and re-slicing it would only strip comments. Don't "unify" this branch
+  through the slice surface — byte equality with the source is pinned by
+  `XgpExportServiceTests`.
+- **The XGP counter is client-owned.** The persisted numbering state
+  (`xg_xgpLastNumber` et al.) lives in `Home` and advances via the panels'
+  `OnXgpExported(count)` callback. Nothing scans previously exported files;
+  a user who bypasses the counter (edits "next number" backwards, exports
+  into the same place twice with a reset prefix) gets colliding names —
+  by design, the editable field is the escape hatch.
 - **Fixture files are not in this repo.** They live in umbrella `TestData/`
   and are not tracked by git (contents are gitignored; structure is held by
   `.gitkeep`). A fresh clone of this subproject alone cannot run the tests
