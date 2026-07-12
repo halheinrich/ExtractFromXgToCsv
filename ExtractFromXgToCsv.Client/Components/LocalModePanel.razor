@@ -78,6 +78,21 @@
                         ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
                         (@_progress.FilesPerSec files/sec) → @_outputPath
                     </span>
+                    @if (_progress.TotalRows == 0 && _builtSet is { IsEmpty: false })
+                    {
+                        // A successful run wrote zero rows through a non-empty
+                        // filter set. Because an empty (inactive) set admits
+                        // every decision, zero survivors can only mean the
+                        // filters are genuinely active — so we surface it as a
+                        // filtered-to-zero result rather than letting the bland
+                        // "Done — 0 rows" line read as a silent success. Sibling
+                        // of WebModePanel's zero-match notice; folder wording for
+                        // Local mode. IsEmpty is the seam — no FilterConfig peek.
+                        <div class="alert alert-warning zero-match-notice mt-2" role="alert">
+                            No decisions matched these filters — adjust the filters
+                            or point at a different folder.
+                        </div>
+                    }
                 }
                 else if (_progress.Cancelled)
                 {
@@ -121,6 +136,15 @@
     private string _statusMessage = string.Empty;
     private bool _lastFilterDirty = false;
 
+    // Cached materialization of FilterConfig — mirrors WebModePanel's
+    // reference-identity cache (FilterPanel mints a new FilterConfig on every
+    // Apply, so ref inequality signals "rebuild"). Local mode POSTs the
+    // unbuilt config to the server for the actual run; this local build exists
+    // solely so the post-run notice can consult DecisionFilterSet.IsEmpty — the
+    // SSOT for "filters active" — rather than re-inspecting FilterConfig fields.
+    private DecisionFilterSet? _builtSet;
+    private FilterConfig? _lastBuiltConfig;
+
     private static readonly JsonSerializerOptions _wireOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -148,6 +172,16 @@
 
     protected override void OnParametersSet()
     {
+        // Rebuild the cached filter set when the applied FilterConfig changes,
+        // by reference identity. Only used to gate the zero-match notice via
+        // DecisionFilterSet.IsEmpty; the run itself POSTs the unbuilt config.
+        if (FilterApplied && !FilterDirty
+            && !ReferenceEquals(_lastBuiltConfig, FilterConfig))
+        {
+            _builtSet = FilterConfig.Build();
+            _lastBuiltConfig = FilterConfig;
+        }
+
         // Update output path extension when output format changes.
         // Xgp is excluded: its output path is a folder, so no extension is
         // forced onto (or stripped from) whatever the user typed.
