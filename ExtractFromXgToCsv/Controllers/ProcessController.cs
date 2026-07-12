@@ -50,6 +50,11 @@ public class ProcessController(
                             request.FolderPath, request.OutputPath,
                             filterSet, progress, entry.Cts.Token);
                         break;
+                    case OutputFormat.Xgp:
+                        await processor.ProcessXgpAsync(
+                            request.FolderPath, request.OutputPath,
+                            filterSet, request.XgpOptions, progress, entry.Cts.Token);
+                        break;
                     default:
                         await processor.ProcessAsync(
                             request.FolderPath, request.OutputPath,

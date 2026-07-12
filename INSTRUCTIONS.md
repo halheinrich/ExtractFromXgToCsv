@@ -100,6 +100,7 @@ ExtractFromXgToCsv.Tests/
   LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
   LocalFolderProcessorPptxTests.cs
+  LocalFolderProcessorXgpTests.cs       — Local-mode .xgp folder output wiring
   LocalModePanelGateTests.cs            — Run-button dirty-gating + error render (bUnit)
   Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
@@ -144,14 +145,18 @@ XGP export pathway can re-parse its source files at download time — raw
 zlib-compressed bytes are smaller than parsed record graphs and are already
 bounded by the 50 MB selection cap.
 
-### XGP export (Web mode)
+### XGP export
 
-Selecting the **XGP positions** output format downloads the filtered
-decisions as one `.zip` containing a per-decision `.xgp` position file.
-`XgProcessingService.BuildXgpZip(sourceFiles, decisions, options)` is the
+Selecting the **XGP positions** output format emits the filtered decisions
+as per-decision `.xgp` position files — available in both modes. In Web
+mode the download is one `.zip` with a `.xgp` entry per decision, built by
+`XgProcessingService.BuildXgpZip(sourceFiles, decisions, options)` — the
 encapsulation seam: the panel hands it retained file bytes plus
-`DecisionId`s — parsing stays inside the service; components never touch
-`XgFile`. Per decision:
+`DecisionId`s; parsing stays inside the service and components never touch
+`XgFile`. In Local mode `LocalFolderProcessor.ProcessXgpAsync` writes the
+files server-side into the output **folder** (`OutputPath` is a directory
+for this format, created if absent; same-named files are overwritten).
+Per decision, both pathways apply the same routing rule:
 
 - `XgDecisionId` (from a `.xg` source) → `XgpExporter.ToBytes(xgFile, game,
   moveNumber, isCube)` — the producer's **slice** surface, analysis panes
@@ -164,12 +169,10 @@ Entry naming is `{prefix}{number:D{suffixLength}}.xgp` — single-sourced in
 localStorage persistence (`xg_xgpPrefix`, `xg_xgpLastNumber`,
 `xg_xgpSuffixLength`): the "next number" field defaults to the persisted
 last number + 1 while the prefix matches the persisted prefix (else 1), and
-the panel reports a completed export through its `OnXgpExported(count)`
-callback so `Home` can advance and persist the counter.
-
-The XGP radio is currently **disabled in Local mode** — transient
-scaffolding until the server-side pathway lands (`ProcessController`'s
-switch would otherwise fall through to CSV for an Xgp POST).
+both panels report a completed export through their `OnXgpExported(count)`
+callback so `Home` can advance and persist the counter. In Local mode the
+count is the final `ProcessingProgress.TotalRows`; cancelled runs advance
+the counter too (their files were written), error terminations don't.
 
 ### Components
 
@@ -207,7 +210,8 @@ to apply or discard pending changes before a run.
   with `ProcessAsync` (CSV) as the default branch — unknown / future enum
   values fall through to CSV. Cases:
   `ProcessDiagramAsync` (Diagram JSON), `ProcessPptxAsync` (PPTX),
-  `ProcessPdfAsync` (PDF). The PPTX and PDF public methods are one-line
+  `ProcessPdfAsync` (PDF), `ProcessXgpAsync` (XGP; also takes
+  `request.XgpOptions`). The PPTX and PDF public methods are one-line
   wrappers around a shared private `ProcessDeckAsync` helper parameterized
   on the renderer delegate — both collect filtered decisions, map them via
   `DiagramRequest.FromDecisionData`, and expand into Problem/Solution pairs
@@ -319,8 +323,11 @@ project via relative path — not duplicated here.
 
 ```
 POST /api/process/start
-  body:  ProcessRequest { FolderPath, OutputPath, Filters, OutputFormat }
+  body:  ProcessRequest { FolderPath, OutputPath, Filters, OutputFormat,
+                          XgpOptions }
   200 →  { JobId }
+         — for OutputFormat.Xgp, OutputPath names the output FOLDER;
+           for every other format it names the output file.
 
 GET  /api/process/{jobId}/status
   200 →  ProcessingProgress { Current, Total, FileName, TotalRows,
@@ -352,8 +359,8 @@ project reference.
   shape stays extensible without breaking consumers.
 - `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf | Xgp`. Server
   references it too, which is why it lives under `Client/Shared` rather than
-  being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` is currently
-  Web-mode only (see the XGP export section).
+  being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` works in
+  both modes (see the XGP export section).
 - `XgpExportOptions` — naming options for a batch of per-decision `.xgp`
   exports (`Prefix`, `StartNumber`, `SuffixLength`). Single source of the
   `{prefix}{number:D{len}}.xgp` rule via `EntryName(index)`. Permissive wire
@@ -361,7 +368,7 @@ project reference.
   it; export pathways throw `ArgumentException`).
 - `ProcessRequest` — POST body for `/api/process/start`
   (`FolderPath`, `OutputPath`, `Filters` of type
-  `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`).
+  `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`, `XgpOptions`).
 - `ProcessingProgress` — status-endpoint payload.
 
 `FilterConfig` is **not** in `Client/Shared` — it lives in
@@ -432,6 +439,17 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   a user who bypasses the counter (edits "next number" backwards, exports
   into the same place twice with a reset prefix) gets colliding names —
   by design, the editable field is the escape hatch.
+- **`ProcessXgpAsync` reports progress on every file, deliberately.** The
+  siblings use `reportEvery = 10`, but the Xgp pathway's final/last-reported
+  `TotalRows` is what the client persists as its numbering counter — so the
+  processor reports before each per-file cancellation point and keeps
+  decision writes non-cancellable within a file. Reintroducing `reportEvery`
+  (or observing the token between a file's decision writes) makes a
+  cancelled run's counter drift from what's on disk.
+- **Xgp `OutputPath` is a folder.** `ProcessXgpAsync` treats it as a
+  directory (created if absent) and `LocalModePanel` skips the
+  extension-swap logic for Xgp. Same-named files are overwritten; the
+  counter, not the processor, is the collision guard.
 - **Fixture files are not in this repo.** They live in umbrella `TestData/`
   and are not tracked by git (contents are gitignored; structure is held by
   `.gitkeep`). A fresh clone of this subproject alone cannot run the tests

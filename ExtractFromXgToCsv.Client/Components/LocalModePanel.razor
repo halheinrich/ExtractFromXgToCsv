@@ -14,8 +14,9 @@
                    @oninput="OnFolderPathChanged" />
         </div>
         <div class="mb-3">
-            <label class="form-label">Output path</label>
-            <input class="form-control" placeholder="e.g. D:\xg\decisions.csv"
+            <label class="form-label">@(OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
+            <input class="form-control"
+                   placeholder="@(OutputFormat == OutputFormat.Xgp ? "e.g. D:\\xg\\positions" : "e.g. D:\\xg\\decisions.csv")"
                    value="@_outputPath"
                    @oninput="OnOutputPathChanged" />
         </div>
@@ -30,7 +31,7 @@
 <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
     <button class="btn btn-primary"
             @onclick="RunLocalAsync"
-            disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty)">
+            disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty || XgpRunBlocked)">
         Run
     </button>
     @if (_busy)
@@ -45,6 +46,10 @@
     @if (!FilterApplied || FilterDirty)
     {
         <small class="text-muted">Apply filters first</small>
+    }
+    else if (XgpRunBlocked)
+    {
+        <small class="text-muted">Fix the XGP export options first</small>
     }
 </div>
 
@@ -100,6 +105,11 @@
     [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
     [Parameter, EditorRequired] public bool FilterDirty { get; set; }
+    [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
+    [Parameter] public EventCallback<int> OnXgpExported { get; set; }
+
+    private bool XgpRunBlocked =>
+        OutputFormat == OutputFormat.Xgp && !XgpOptions.TryValidate(out _);
 
     private string _folderPath = string.Empty;
     private string _outputPath = string.Empty;
@@ -137,8 +147,10 @@
 
     protected override void OnParametersSet()
     {
-        // Update output path extension when output format changes
-        if (!string.IsNullOrWhiteSpace(_outputPath))
+        // Update output path extension when output format changes.
+        // Xgp is excluded: its output path is a folder, so no extension is
+        // forced onto (or stripped from) whatever the user typed.
+        if (!string.IsNullOrWhiteSpace(_outputPath) && OutputFormat != OutputFormat.Xgp)
         {
             var expectedExt = OutputFormat switch
             {
@@ -195,7 +207,8 @@
                 FolderPath = _folderPath,
                 OutputPath = _outputPath,
                 Filters = FilterConfig,
-                OutputFormat = OutputFormat
+                OutputFormat = OutputFormat,
+                XgpOptions = XgpOptions
             };
 
             var startResponse = await Http.PostAsJsonAsync("/api/process/start", request, _wireOptions);
@@ -228,6 +241,16 @@
                     StateHasChanged();
                     if (p.Complete) break;
                 }
+            }
+
+            // Advance the export counter by what actually landed on disk.
+            // Cancelled runs count too — their files were written (the
+            // processor reports per file, so TotalRows is exact); error
+            // terminations don't advance anything.
+            if (OutputFormat == OutputFormat.Xgp
+                && _progress is { Complete: true, ErrorMessage: null } done)
+            {
+                await OnXgpExported.InvokeAsync(done.TotalRows);
             }
         }
         catch (Exception ex)

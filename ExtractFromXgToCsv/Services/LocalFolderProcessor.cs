@@ -201,6 +201,132 @@ public class LocalFolderProcessor
         });
     }
 
+    /// <summary>
+    /// Xgp pathway: writes one .xgp position file per filtered decision into
+    /// the <paramref name="outputPath"/> <b>folder</b> (created if absent;
+    /// same-named files are overwritten — counter discipline is the
+    /// client's). Decisions from .xg sources are sliced via
+    /// <see cref="XgpExporter"/> (analysis carried through); decisions from
+    /// .xgp sources are copied verbatim, mirroring the Web-mode rule in
+    /// <c>XgProcessingService.BuildXgpZip</c>.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="options"/> fails validation (surfaces to
+    /// the client through the job's ErrorMessage channel).
+    /// </exception>
+    public async Task ProcessXgpAsync(
+            string folderPath,
+            string outputPath,
+            DecisionFilterSet filterSet,
+            XgpExportOptions options,
+            IProgress<ProcessingProgress> progress,
+            CancellationToken cancellationToken = default)
+    {
+        if (!Directory.Exists(folderPath))
+            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.TryValidate(out var optionsError))
+            throw new ArgumentException(optionsError, nameof(options));
+
+        var files = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
+            .Where(f => f.EndsWith(".xg", StringComparison.OrdinalIgnoreCase)
+                     || f.EndsWith(".xgp", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f)
+            .ToList();
+
+        if (files.Count == 0)
+            throw new InvalidOperationException("No .xg or .xgp files found in folder.");
+
+        Directory.CreateDirectory(outputPath);
+
+        int totalRows = 0;
+        var stopwatch = Stopwatch.StartNew();
+
+        for (int i = 0; i < files.Count; i++)
+        {
+            // Unlike the siblings' reportEvery=10, this pathway reports on
+            // EVERY file, and reports before the cancellation check: the
+            // client persists its numbering counter from the last reported
+            // TotalRows, so a cancelled job must leave an exact count behind.
+            var elapsed = stopwatch.Elapsed.TotalSeconds;
+            progress.Report(new ProcessingProgress
+            {
+                Current = i + 1,
+                Total = files.Count,
+                FileName = Path.GetFileName(files[i]),
+                TotalRows = totalRows,
+                ElapsedSec = elapsed,
+                FilesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0
+            });
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var file = files[i];
+            var fileName = Path.GetFileName(file);
+
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
+                using var ms = new MemoryStream(bytes);
+                var xgFile = XgFileReader.ReadStream(ms);
+                var rows = XgDecisionIterator.Iterate(xgFile, fileName);
+
+                foreach (var row in rows.Where(r => filterSet.Matches(r)))
+                {
+                    var target = Path.Combine(outputPath, options.EntryName(totalRows));
+                    try
+                    {
+                        switch (row.Id)
+                        {
+                            case XgpDecisionId:
+                                // Already a single-position analyzed .xgp —
+                                // copy verbatim (same rule as Web mode).
+                                // Deliberately not cancellable: cancel
+                                // granularity is the file boundary, so the
+                                // reported TotalRows never lags a partial
+                                // batch of written decisions.
+                                await File.WriteAllBytesAsync(target, bytes);
+                                break;
+                            case XgDecisionId(_, var game, var moveNumber, var isCube):
+                                XgpExporter.WriteFile(xgFile, game, moveNumber, isCube, target);
+                                break;
+                            default:
+                                throw new NotSupportedException(
+                                    $"Unsupported DecisionId shape '{row.Id.GetType().Name}' for .xgp export.");
+                        }
+                        totalRows++; // failed decisions don't consume a number
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex,
+                            "Skipping decision {DecisionId} in {File}", row.Id, fileName);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Skipping {File}", fileName);
+            }
+        }
+
+        var totalElapsed = stopwatch.Elapsed.TotalSeconds;
+
+        progress.Report(new ProcessingProgress
+        {
+            Current = files.Count,
+            Total = files.Count,
+            FileName = "Done",
+            TotalRows = totalRows,
+            Complete = true,
+            ElapsedSec = totalElapsed,
+            FilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0
+        });
+    }
+
     public Task ProcessPptxAsync(
             string folderPath,
             string outputPath,

@@ -91,17 +91,18 @@ public class HomeWiringTests : BunitContext
     }
 
     [Fact]
-    public void XgpRadio_DisabledInLocalMode()
+    public void XgpRadio_EnabledInLocalMode_AndOptionsPropagateToLocalPanel()
     {
-        // Transient scaffolding until the server-side Xgp pathway lands —
-        // ProcessController would otherwise fall through to CSV for an
-        // Xgp POST.
         RegisterHttpClient("Local");
         var cut = Render<Home>();
         cut.WaitForState(
             () => cut.FindComponents<LocalModePanel>().Any(),
             TimeSpan.FromSeconds(5));
-        Assert.True(cut.Find("#fmtXgp").HasAttribute("disabled"));
+        Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
+
+        var localPanel = cut.FindComponent<LocalModePanel>();
+        Assert.NotNull(localPanel.Instance.XgpOptions);
+        Assert.True(localPanel.Instance.OnXgpExported.HasDelegate);
     }
 
     [Fact]

@@ -54,15 +54,8 @@
     <div class="form-check form-check-inline">
         <input class="form-check-input" type="radio" name="outputFormat" id="fmtXgp"
                checked="@(_outputFormat == OutputFormat.Xgp)"
-               disabled="@(_appMode == "Local")"
                @onchange="@(() => SetOutputFormat(OutputFormat.Xgp))" />
-        <label class="form-check-label" for="fmtXgp">
-            XGP positions
-            @if (_appMode == "Local")
-            {
-                <small class="text-muted ms-1">(Web mode only)</small>
-            }
-        </label>
+        <label class="form-check-label" for="fmtXgp">XGP positions</label>
     </div>
 </div>
 
@@ -111,7 +104,9 @@
     <LocalModePanel OutputFormat="_outputFormat"
                     FilterConfig="_filterConfig"
                     FilterApplied="_filterApplied"
-                    FilterDirty="_filterDirty" />
+                    FilterDirty="_filterDirty"
+                    XgpOptions="_xgpOptions"
+                    OnXgpExported="OnXgpExported" />
 }
 else
 {
@@ -172,8 +167,6 @@ else
 
         if ((_outputFormat == OutputFormat.Pptx || _outputFormat == OutputFormat.Pdf)
             && _appMode != "Local")
-            _outputFormat = OutputFormat.Csv;
-        if (_outputFormat == OutputFormat.Xgp && _appMode == "Local")
             _outputFormat = OutputFormat.Csv;
 
         StateHasChanged();
