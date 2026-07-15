@@ -436,9 +436,10 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **`.xgp`-sourced decisions export verbatim, not sliced.** In
   `BuildXgpZip`, an `XgpDecisionId` decision copies its source file
   byte-for-byte: the source already is a single-position analyzed `.xgp`,
-  and re-slicing it would only strip comments. Don't "unify" this branch
-  through the slice surface — byte equality with the source is pinned by
-  `XgpExportServiceTests`.
+  so the verbatim copy is byte-identical, cheaper than a re-slice, and stays
+  strictly more faithful — a re-slice would clear the match-level comments
+  the copy preserves. Don't "unify" this branch through the slice surface —
+  byte equality with the source is pinned by `XgpExportServiceTests`.
 - **The XGP counter is client-owned.** The persisted numbering state
   (`xg_xgpLastNumber` et al.) lives in `Home` and advances via the panels'
   `OnXgpExported(count)` callback. Nothing scans previously exported files;

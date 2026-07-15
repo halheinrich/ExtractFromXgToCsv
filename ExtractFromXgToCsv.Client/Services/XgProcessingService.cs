@@ -56,7 +56,9 @@ public class XgProcessingService
     /// <see cref="XgpExporter"/> (analysis panes carried through, XG-SaveAs
     /// equivalent). A decision from an <c>.xgp</c> source is the source file
     /// copied verbatim — it already is a single-position analyzed
-    /// <c>.xgp</c>; re-slicing would only strip its comments.
+    /// <c>.xgp</c>, so the copy is byte-identical and cheaper than a re-slice,
+    /// and stays strictly more faithful: a re-slice would clear the
+    /// match-level comments that the verbatim copy preserves.
     /// </para>
     ///
     /// <para>
