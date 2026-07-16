@@ -68,12 +68,16 @@ public class XgProcessingService
     ///
     /// <para>
     /// When <paramref name="anonymize"/> is <see langword="true"/>, every
-    /// entry's player names are rewritten to the neutral preset
+    /// entry's player names are rewritten to the anonymize preset
     /// (<see cref="XgpSliceOptions.Anonymized"/> — the producer's SSOT for
     /// what "anonymized" means): an <c>.xg</c> slice takes the options-bearing
     /// overload, and an <c>.xgp</c> source takes the whole-file anonymize-copy
     /// (comments and rollouts still preserved; only the header names change).
     /// The toggle therefore covers every entry, not just the sliced ones.
+    /// Every entry either way is a single decision, so the preset names by
+    /// role — "On-roll" for the decision-maker (a cube decision's doubler),
+    /// "Opponent" for the other — and the producer resolves which header slot
+    /// each role lands in, per entry.
     /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">

@@ -183,7 +183,7 @@ public class LocalFolderProcessorXgpTests
     }
 
     [Fact]
-    public async Task ProcessXgpAsync_Anonymize_RewritesEveryWrittenPositionToTheNeutralPreset()
+    public async Task ProcessXgpAsync_Anonymize_RewritesEveryWrittenPositionToTheRoleNames()
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-anon-{Guid.NewGuid():N}");
@@ -213,13 +213,10 @@ public class LocalFolderProcessorXgpTests
             Assert.Equal(expectedCount, written.Length);
 
             // Every entry — .xg-sliced and .xgp-copied alike (the fixture folder
-            // holds both) — must re-read with the neutral names.
+            // holds both) — must re-read named by decision role.
             foreach (var path in written)
-            {
-                var info = XgDecisionIterator.ExtractMatchInfo(XgFileReader.ReadFile(path))!;
-                Assert.Equal("Player 1", info.Player1);
-                Assert.Equal("Player 2", info.Player2);
-            }
+                XgpAnonymizeAssert.IsRoleAnonymized(
+                    File.ReadAllBytes(path), Path.GetFileName(path));
         }
         finally
         {

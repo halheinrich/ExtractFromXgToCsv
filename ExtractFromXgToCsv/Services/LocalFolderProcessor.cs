@@ -224,11 +224,15 @@ public class LocalFolderProcessor
     /// <c>XgProcessingService.BuildXgpZip</c>.
     /// <para>
     /// When <paramref name="anonymize"/> is <see langword="true"/>, every
-    /// written position has its player names rewritten to the neutral preset
+    /// written position has its player names rewritten to the anonymize preset
     /// (<see cref="XgpSliceOptions.Anonymized"/> — the producer's SSOT): an
     /// .xg slice takes the options-bearing overload, an .xgp source takes the
     /// whole-file anonymize-copy (comments and rollouts preserved, only the
-    /// header names change), so the toggle covers every entry.
+    /// header names change), so the toggle covers every entry. Every written
+    /// position is a single decision, so the preset names by role — "On-roll"
+    /// for the decision-maker (a cube decision's doubler), "Opponent" for the
+    /// other — with the producer resolving which header slot each role lands
+    /// in, per position.
     /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">

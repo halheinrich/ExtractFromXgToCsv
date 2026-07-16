@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using Bunit;
-using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -82,8 +81,8 @@ public class WebModePanelXgpExportTests : BunitContext
     public async Task SelectExportDownload_WithAnonymize_ProducesZipOfAnonymizedPositions()
     {
         // Same chain as above, but XgpAnonymize=true — the flag must ride the
-        // panel -> BuildXgpZip seam and every zip entry re-reads with the
-        // neutral names.
+        // panel -> BuildXgpZip seam and every zip entry re-reads named by
+        // decision role.
         var options = new XgpExportOptions
         {
             NamePattern = "pos{n}",
@@ -118,10 +117,7 @@ public class WebModePanelXgpExportTests : BunitContext
             using var es = entry.Open();
             using var ms = new MemoryStream();
             es.CopyTo(ms);
-            ms.Position = 0;
-            var info = XgDecisionIterator.ExtractMatchInfo(XgFileReader.ReadStream(ms))!;
-            Assert.Equal("Player 1", info.Player1);
-            Assert.Equal("Player 2", info.Player2);
+            XgpAnonymizeAssert.IsRoleAnonymized(ms.ToArray(), entry.FullName);
         }
     }
 

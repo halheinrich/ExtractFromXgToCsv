@@ -214,11 +214,11 @@ public class XgpExportServiceTests
     }
 
     [Fact]
-    public void Anonymize_RewritesBothXgSlicedAndXgpCopiedEntries_ToTheNeutralPreset()
+    public void Anonymize_RewritesBothXgSlicedAndXgpCopiedEntries_ToTheRoleNames()
     {
         // A mixed batch: one .xg decision (sliced) and the whole .xgp (copied).
-        // With anonymize on, BOTH must come back with the neutral names — the
-        // toggle closes the mixed-batch privacy gap or it lies.
+        // Both are single-decision surfaces, so BOTH must come back named by
+        // role — the toggle closes the mixed-batch privacy gap or it lies.
         var sources = Sources(XgFixture, XgpFixture);
         var xgRow = _service.ExtractDecisions(sources[XgFixture], XgFixture)
             .First(r => !r.IsCube);
@@ -235,11 +235,7 @@ public class XgpExportServiceTests
         {
             Assert.Equal(2, entries.Count);
             foreach (var entry in entries)
-            {
-                var (p1, p2) = ReadPlayerNames(EntryBytes(entry));
-                Assert.Equal("Player 1", p1);
-                Assert.Equal("Player 2", p2);
-            }
+                XgpAnonymizeAssert.IsRoleAnonymized(EntryBytes(entry), entry.FullName);
             // The .xgp entry is NOT the verbatim source when anonymizing —
             // it's a whole-file re-emit with the names rewritten.
             Assert.NotEqual(sources[XgpFixture], EntryBytes(entries[1]));
