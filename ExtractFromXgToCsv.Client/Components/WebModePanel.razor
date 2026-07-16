@@ -286,8 +286,9 @@
             {
                 bytes = Processor.BuildXgpZip(
                     _fileBytes,
-                    _filteredRows.Select(r => r.Id).ToList(),
+                    _filteredRows,
                     XgpOptions,
+                    FilterConfig,
                     anonymize: XgpAnonymize);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.zip" : _csvFileName;
                 mimeType = "application/zip";

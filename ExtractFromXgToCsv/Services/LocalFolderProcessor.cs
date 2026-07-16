@@ -211,7 +211,14 @@ public class LocalFolderProcessor
     /// Xgp pathway: writes one .xgp position file per filtered decision into
     /// the <paramref name="outputPath"/> <b>folder</b> (created if absent;
     /// same-named files are overwritten — counter discipline is the
-    /// client's). Decisions from .xg sources are sliced via
+    /// client's). Filenames come from <paramref name="options"/>' pattern via
+    /// an <see cref="XgpNameAllocator"/>: batch-constant tokens draw from
+    /// <paramref name="filters"/>, per-item tokens from each decision, and
+    /// duplicate rendered names within the run get Windows-style
+    /// <c>" (2)"</c> suffixes. The allocator's Peek/Commit split keeps the
+    /// counter honest: a decision's name is computed before the write and its
+    /// slot consumed only after the write succeeds, so failed decisions don't
+    /// burn a number. Decisions from .xg sources are sliced via
     /// <see cref="XgpExporter"/> (analysis carried through); decisions from
     /// .xgp sources are copied verbatim, mirroring the Web-mode rule in
     /// <c>XgProcessingService.BuildXgpZip</c>.
@@ -233,13 +240,14 @@ public class LocalFolderProcessor
             string outputPath,
             DecisionFilterSet filterSet,
             XgpExportOptions options,
+            FilterConfig filters,
             IProgress<ProcessingProgress> progress,
             bool anonymize = false,
             CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        if (!options.TryValidate(out var optionsError))
-            throw new ArgumentException(optionsError, nameof(options));
+        // Create validates the options — the single ArgumentException throw
+        // point shared with the Web-mode pathway.
+        var allocator = XgpNameAllocator.Create(options, filters);
 
         var files = DiscoverInputFiles(folderPath);
 
@@ -284,7 +292,11 @@ public class LocalFolderProcessor
 
                 foreach (var row in rows.Where(r => filterSet.Matches(r)))
                 {
-                    var target = Path.Combine(outputPath, options.EntryName(totalRows));
+                    // Peek, don't consume: the slot is committed only after
+                    // the write succeeds, so a failed decision doesn't burn
+                    // a name (the client persists its numbering counter from
+                    // the reported TotalRows).
+                    var target = Path.Combine(outputPath, allocator.Peek(row));
                     try
                     {
                         switch (row.Id)
@@ -319,6 +331,7 @@ public class LocalFolderProcessor
                                 throw new NotSupportedException(
                                     $"Unsupported DecisionId shape '{row.Id.GetType().Name}' for .xgp export.");
                         }
+                        allocator.Commit(row);
                         totalRows++; // failed decisions don't consume a number
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)

@@ -10,15 +10,17 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Wiring tests for the Local-mode Xgp pathway. Slice correctness is owned
-/// by ConvertXgToJson_Lib's XgpExporter tests and the app-side batching
-/// rules by <see cref="XgpExportServiceTests"/>; these tests verify that
+/// by ConvertXgToJson_Lib's XgpExporter tests, the app-side batching rules
+/// by <see cref="XgpExportServiceTests"/>, and naming mechanics by
+/// <see cref="XgpNameTemplateTests"/> / <see cref="XgpNameAllocatorTests"/>;
+/// these tests verify that
 /// <see cref="LocalFolderProcessor.ProcessXgpAsync"/> writes one correctly
 /// named .xgp per filtered decision into the output <b>folder</b> and that
 /// an exported file re-reads to its source decision.
 ///
-/// Expected counts are computed from the iterator over the same fixture
-/// folder, so adding/removing fixtures shifts both sides together
-/// (Make20Pt pattern).
+/// Expected counts and names are computed from the iterator (and a locally
+/// built <see cref="XgpNameAllocator"/>) over the same fixture folder, so
+/// adding/removing fixtures shifts both sides together (Make20Pt pattern).
 /// </summary>
 public class LocalFolderProcessorXgpTests
 {
@@ -27,13 +29,23 @@ public class LocalFolderProcessorXgpTests
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-test-{Guid.NewGuid():N}");
-        var options = new XgpExportOptions { Prefix = "loc", StartNumber = 5, SuffixLength = 4 };
+        var options = new XgpExportOptions
+        {
+            NamePattern = "loc{n}",
+            StartNumber = 5,
+            SuffixLength = 4,
+        };
+        var filters = new FilterConfig();
 
-        // Reference side: the same iterator walk the processor performs.
+        // Reference side: the same iterator walk the processor performs,
+        // named by a locally built allocator over the same options.
         var expected = XgDecisionIterator
             .IterateXgDirectory(FixtureHelper.FixtureDir)
             .ToList();
         Assert.True(expected.Count > 0, "fixture folder should yield decisions");
+
+        var namer = XgpNameAllocator.Create(options, filters);
+        var expectedNames = expected.Select(namer.Next).ToList();
 
         try
         {
@@ -45,6 +57,7 @@ public class LocalFolderProcessorXgpTests
                 outputDir,
                 new DecisionFilterSet(),
                 options,
+                filters,
                 progress);
 
             Assert.NotNull(lastProgress);
@@ -57,16 +70,16 @@ public class LocalFolderProcessorXgpTests
                 .ToList();
             Assert.Equal(expected.Count, written.Count);
             Assert.Equal(
-                Enumerable.Range(0, expected.Count).Select(options.EntryName)
-                    .OrderBy(n => n, StringComparer.Ordinal),
+                expectedNames.OrderBy(n => n, StringComparer.Ordinal),
                 written);
 
             // Semantic oracle on one sliced file: it re-reads to exactly one
             // decision whose XGID digests the same position/cube/dice/match
             // state as a decision in the reference walk.
-            var first = XgFileReader.ReadFile(Path.Combine(outputDir, options.EntryName(0)));
+            var firstName = expectedNames[0];
+            var first = XgFileReader.ReadFile(Path.Combine(outputDir, firstName));
             var reRead = XgDecisionIterator
-                .IterateDiagramRequests(first, options.EntryName(0))
+                .IterateDiagramRequests(first, firstName)
                 .Single();
             Assert.Contains(expected, r => r.Xgid == reRead.Xgid);
         }
@@ -81,20 +94,25 @@ public class LocalFolderProcessorXgpTests
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-order-{Guid.NewGuid():N}");
-        var options = new XgpExportOptions { Prefix = "ord", StartNumber = 1, SuffixLength = 4 };
+        var options = new XgpExportOptions
+        {
+            NamePattern = "ord{n}",
+            StartNumber = 1,
+            SuffixLength = 4,
+        };
+        var filters = new FilterConfig();
 
         // Reference sequence: the producer's *contractual* discovery order
         // (ascending full path, OrdinalIgnoreCase + Ordinal tiebreak) walked
         // per file. Deriving expected from the same enumeration the processor
         // now uses keeps this pin fixture-shift-proof rather than hardcoded —
         // add/remove a fixture and both sides move together.
-        var expected = XgFileReader
+        var expectedRows = XgFileReader
             .EnumerateXgFormatFiles(FixtureHelper.FixtureDir, SearchOption.AllDirectories)
             .SelectMany(path => XgDecisionIterator.Iterate(
                 XgFileReader.ReadFile(path), Path.GetFileName(path)))
-            .Select(r => r.Xgid)
             .ToList();
-        Assert.True(expected.Count > 0, "fixture folder should yield decisions");
+        Assert.True(expectedRows.Count > 0, "fixture folder should yield decisions");
 
         try
         {
@@ -103,18 +121,60 @@ public class LocalFolderProcessorXgpTests
                 outputDir,
                 new DecisionFilterSet(),
                 options,
+                filters,
                 new Progress<ProcessingProgress>());
 
-            // The i-th written file (EntryName(i)) must re-read to the i-th
-            // decision of the reference walk — pins numbering ORDER, not just
-            // the set of names or the count.
-            var actual = Enumerable.Range(0, expected.Count)
-                .Select(i => Path.Combine(outputDir, options.EntryName(i)))
+            // The i-th written file (the allocator's i-th name) must re-read
+            // to the i-th decision of the reference walk — pins numbering
+            // ORDER, not just the set of names or the count.
+            var namer = XgpNameAllocator.Create(options, filters);
+            var actual = expectedRows
+                .Select(r => Path.Combine(outputDir, namer.Next(r)))
                 .Select(p => XgDecisionIterator.IterateDiagramRequests(
                     XgFileReader.ReadFile(p), Path.GetFileName(p)).Single().Xgid)
                 .ToList();
 
-            Assert.Equal(expected, actual);
+            Assert.Equal(expectedRows.Select(r => r.Xgid), actual);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessXgpAsync_CounterlessPattern_UniquifiesOnDisk()
+    {
+        // A pattern without {n} renders the same base name for every
+        // decision — the per-run uniquifier is the only thing standing
+        // between the batch and a folder of overwrites.
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-uniq-{Guid.NewGuid():N}");
+        var options = new XgpExportOptions { NamePattern = "same" };
+
+        var expectedCount = XgDecisionIterator
+            .IterateXgDirectory(FixtureHelper.FixtureDir).Count();
+        Assert.True(expectedCount > 1, "fixture folder should yield several decisions");
+
+        try
+        {
+            await processor.ProcessXgpAsync(
+                FixtureHelper.FixtureDir,
+                outputDir,
+                new DecisionFilterSet(),
+                options,
+                new FilterConfig(),
+                new Progress<ProcessingProgress>());
+
+            var written = Directory.GetFiles(outputDir, "*.xgp")
+                .Select(p => Path.GetFileName(p)!)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var expectedNames = Enumerable.Range(1, expectedCount)
+                .Select(k => k == 1 ? "same.xgp" : $"same ({k}).xgp")
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(expectedNames, written);
         }
         finally
         {
@@ -127,7 +187,12 @@ public class LocalFolderProcessorXgpTests
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-anon-{Guid.NewGuid():N}");
-        var options = new XgpExportOptions { Prefix = "anon", StartNumber = 1, SuffixLength = 4 };
+        var options = new XgpExportOptions
+        {
+            NamePattern = "anon{n}",
+            StartNumber = 1,
+            SuffixLength = 4,
+        };
 
         var expectedCount = XgDecisionIterator
             .IterateXgDirectory(FixtureHelper.FixtureDir).Count();
@@ -140,6 +205,7 @@ public class LocalFolderProcessorXgpTests
                 outputDir,
                 new DecisionFilterSet(),
                 options,
+                new FilterConfig(),
                 new Progress<ProcessingProgress>(),
                 anonymize: true);
 
@@ -170,7 +236,8 @@ public class LocalFolderProcessorXgpTests
             FixtureHelper.FixtureDir,
             Path.Combine(Path.GetTempPath(), $"xgp-test-{Guid.NewGuid():N}"),
             new DecisionFilterSet(),
-            new XgpExportOptions { Prefix = "a?b" },
+            new XgpExportOptions { NamePattern = "a?b{n}" },
+            new FilterConfig(),
             new Progress<ProcessingProgress>()));
     }
 }

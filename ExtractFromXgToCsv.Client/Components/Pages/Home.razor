@@ -65,9 +65,20 @@
         <label class="form-label d-block fw-bold">XGP export options</label>
         <div class="row g-3">
             <div class="col-auto">
-                <label class="form-label" for="xgpPrefix">Filename prefix</label>
-                <input class="form-control" id="xgpPrefix" style="max-width:200px"
-                       value="@_xgpPrefix" @oninput="OnXgpPrefixChanged" />
+                <label class="form-label" for="xgpPattern">Name pattern</label>
+                <input class="form-control" id="xgpPattern" style="max-width:280px"
+                       value="@_xgpPattern" @oninput="OnXgpPatternChanged" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" for="xgpInsertToken">Insert token</label>
+                <select class="form-select" id="xgpInsertToken" style="max-width:280px"
+                        value="@_xgpTokenSelection" @onchange="OnXgpInsertTokenAsync">
+                    <option value="" disabled>Insert token…</option>
+                    @foreach (var token in XgpNameTokens.All)
+                    {
+                        <option value="@token.Name">{@token.Name} — @token.Description</option>
+                    }
+                </select>
             </div>
             <div class="col-auto">
                 <label class="form-label" for="xgpNextNumber">Next number</label>
@@ -94,9 +105,13 @@
         </div>
         @if (_xgpOptions.TryValidate(out var xgpError))
         {
-            <small class="text-muted">
-                Files are named @(_xgpOptions.EntryName(0)), @(_xgpOptions.EntryName(1)), …
-                one per exported decision.
+            // Throwaway allocator over a synthetic sample decision, rendered
+            // twice: shows the {n} advance for counter patterns and the
+            // " (2)" uniquifier for patterns without {n}.
+            var preview = XgpNameAllocator.Create(_xgpOptions, _filterConfig);
+            <small class="text-muted" id="xgpPreview">
+                Files are named @preview.Next(XgpNameTokens.SampleRow), @preview.Next(XgpNameTokens.SampleRow), …
+                one per exported decision (preview values come from a sample decision).
             </small>
         }
         else
@@ -140,15 +155,16 @@ else
     // XGP export options. Home owns the option state (and its persistence);
     // the panels receive an immutable XgpExportOptions snapshot and report
     // back through OnXgpExported so the counter can advance.
-    private string _xgpPrefix = "pos";
+    private string _xgpPattern = XgpExportOptions.DefaultNamePattern;
+    private string _xgpTokenSelection = string.Empty;
     private int _xgpNextNumber = 1;
     private int _xgpSuffixLength = 3;
     private bool _xgpAnonymize = false;
     private XgpExportOptions _xgpOptions = new();
 
-    // Last persisted prefix/number pair — the "next number" default follows
-    // the persisted counter only while the prefix still matches it.
-    private string? _xgpPersistedPrefix;
+    // Last persisted pattern/number pair — the "next number" default follows
+    // the persisted counter only while the pattern still matches it.
+    private string? _xgpPersistedPattern;
     private int _xgpPersistedLastNumber;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -159,11 +175,30 @@ else
         if (Enum.TryParse<OutputFormat>(savedFormat, out var fmt))
             _outputFormat = fmt;
 
-        _xgpPersistedPrefix = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpPrefix");
+        _xgpPersistedPattern = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpPattern");
+        if (_xgpPersistedPattern is null)
+        {
+            // One-time migration from the pre-pattern persistence shape: the
+            // legacy prefix becomes "{prefix}{n}" — the pattern that names
+            // files exactly the way the prefix did — and counts as the
+            // persisted pattern so counter continuation carries across the
+            // upgrade. A legacy prefix the pattern grammar rejects (it could
+            // contain braces) falls back to the default. xg_xgpPrefix is
+            // read-once legacy: never written again, and removed on the next
+            // successful export.
+            var legacyPrefix = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpPrefix");
+            if (legacyPrefix is not null)
+            {
+                var migrated = legacyPrefix + "{n}";
+                _xgpPersistedPattern = XgpNameTemplate.TryParse(migrated, out _, out _)
+                    ? migrated
+                    : XgpExportOptions.DefaultNamePattern;
+            }
+        }
         var savedLast = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpLastNumber");
         var savedLength = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpSuffixLength");
 
-        _xgpPrefix = _xgpPersistedPrefix ?? "pos";
+        _xgpPattern = _xgpPersistedPattern ?? XgpExportOptions.DefaultNamePattern;
         if (int.TryParse(savedLast, out var last) && last >= 0)
             _xgpPersistedLastNumber = last;
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
@@ -212,21 +247,41 @@ else
     private void RebuildXgpOptions() =>
         _xgpOptions = new XgpExportOptions
         {
-            Prefix = _xgpPrefix,
+            NamePattern = _xgpPattern,
             StartNumber = _xgpNextNumber,
             SuffixLength = _xgpSuffixLength,
         };
 
-    private void OnXgpPrefixChanged(ChangeEventArgs e)
+    private void OnXgpPatternChanged(ChangeEventArgs e) =>
+        ApplyPatternEdit(e.Value?.ToString() ?? string.Empty);
+
+    private void ApplyPatternEdit(string pattern)
     {
-        _xgpPrefix = e.Value?.ToString() ?? string.Empty;
-        // Continue the persisted counter only while the prefix matches the
-        // one it was persisted under; a different prefix starts a fresh
+        _xgpPattern = pattern;
+        // Continue the persisted counter only while the pattern matches the
+        // one it was persisted under; a different pattern starts a fresh
         // series at 1. The user can still override the number afterwards.
-        _xgpNextNumber = _xgpPrefix == _xgpPersistedPrefix
+        _xgpNextNumber = _xgpPattern == _xgpPersistedPattern
             ? _xgpPersistedLastNumber + 1
             : 1;
         RebuildXgpOptions();
+    }
+
+    private async Task OnXgpInsertTokenAsync(ChangeEventArgs e)
+    {
+        var name = e.Value?.ToString();
+        if (string.IsNullOrEmpty(name)) return;
+
+        // Caret-position insertion is deliberately out of scope — the token
+        // is appended to the pattern.
+        ApplyPatternEdit(_xgpPattern + "{" + name + "}");
+
+        // Snap the dropdown back to its placeholder in a second render:
+        // going straight to "" would diff as no change against the previous
+        // render's "" and leave the DOM showing the picked token.
+        _xgpTokenSelection = name;
+        await Task.Yield();
+        _xgpTokenSelection = string.Empty;
     }
 
     private void OnXgpNextNumberChanged(ChangeEventArgs e)
@@ -263,15 +318,18 @@ else
         if (count <= 0) return;
 
         _xgpPersistedLastNumber = _xgpOptions.StartNumber + count - 1;
-        _xgpPersistedPrefix = _xgpOptions.Prefix;
+        _xgpPersistedPattern = _xgpOptions.NamePattern;
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         RebuildXgpOptions();
 
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpPrefix", _xgpPersistedPrefix);
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpPattern", _xgpPersistedPattern);
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpLastNumber",
             _xgpPersistedLastNumber.ToString());
         await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpSuffixLength",
             _xgpOptions.SuffixLength.ToString());
+        // The legacy prefix key is read-once (migration input only) — clear
+        // it so it can never shadow the persisted pattern again.
+        await JS.InvokeVoidAsync("localStorage.removeItem", "xg_xgpPrefix");
         StateHasChanged();
     }
 }

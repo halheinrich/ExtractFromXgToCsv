@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.IO.Compression;
 using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
+using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -14,7 +16,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// equals the source decision's (the XGID digests position, cube, dice, and
 /// match state). Byte-level .xgp correctness is owned by the producer's
 /// XgpExporter tests; these tests own the app-side batching, naming, and
-/// source-routing rules.
+/// source-routing rules. Name-pattern grammar and uniquifier mechanics are
+/// owned by <see cref="XgpNameTemplateTests"/> /
+/// <see cref="XgpNameAllocatorTests"/> — here they're exercised through the
+/// zip seam.
 ///
 /// Fixtures are pinned by name — TestData/FixtureFiles is append-only.
 /// </summary>
@@ -43,21 +48,81 @@ public class XgpExportServiceTests
     }
 
     [Fact]
-    public void EntryNames_FollowPrefixStartNumberAndSuffixLength()
+    public void EntryNames_FollowPatternStartNumberAndSuffixLength()
     {
+        // Counter unification: "quiz{n}" must produce byte-identical names
+        // to what the removed Prefix="quiz" option produced.
         var sources = Sources(XgFixture);
-        var ids = _service.ExtractDecisions(sources[XgFixture], XgFixture)
-            .Take(3).Select(r => r.Id).ToList();
-        Assert.Equal(3, ids.Count);
+        var rows = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+            .Take(3).ToList();
+        Assert.Equal(3, rows.Count);
 
-        var options = new XgpExportOptions { Prefix = "quiz", StartNumber = 12, SuffixLength = 4 };
-        var zipBytes = _service.BuildXgpZip(sources, ids, options);
+        var options = new XgpExportOptions
+        {
+            NamePattern = "quiz{n}",
+            StartNumber = 12,
+            SuffixLength = 4,
+        };
+        var zipBytes = _service.BuildXgpZip(sources, rows, options, new FilterConfig());
 
         var entries = ReadEntries(zipBytes, out var zip);
         using (zip)
         {
             Assert.Equal(
                 new[] { "quiz0012.xgp", "quiz0013.xgp", "quiz0014.xgp" },
+                entries.Select(e => e.FullName));
+        }
+    }
+
+    [Fact]
+    public void TokenPattern_DrawsBatchTokensFromFiltersAndItemTokensFromEachRow()
+    {
+        var sources = Sources(XgFixture);
+        var all = _service.ExtractDecisions(sources[XgFixture], XgFixture).ToList();
+
+        // Two rows guaranteed to render distinct names, so no uniquifier
+        // muddies the expected strings.
+        var first = all[0];
+        var second = all.First(r =>
+            r.Roll != first.Roll || r.MatchScore != first.MatchScore);
+        var rows = new List<DecisionRow> { first, second };
+
+        var filters = new FilterConfig { MoveNumberMin = 5 };
+        var options = new XgpExportOptions
+        {
+            NamePattern = "Move{min-move}_{dice}_{score}",
+        };
+
+        var zipBytes = _service.BuildXgpZip(sources, rows, options, filters);
+
+        var entries = ReadEntries(zipBytes, out var zip);
+        using (zip)
+        {
+            Assert.Equal(
+                rows.Select(r =>
+                    $"Move5_{r.Roll.ToString("D2", CultureInfo.InvariantCulture)}_{r.MatchScore}.xgp"),
+                entries.Select(e => e.FullName));
+        }
+    }
+
+    [Fact]
+    public void CounterlessPattern_UniquifiesDuplicateEntryNames()
+    {
+        // Zip archives happily hold same-named entries, so without the
+        // uniquifier a {n}-less pattern would produce silently colliding
+        // members.
+        var sources = Sources(XgFixture);
+        var rows = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+            .Take(3).ToList();
+
+        var options = new XgpExportOptions { NamePattern = "pos" };
+        var zipBytes = _service.BuildXgpZip(sources, rows, options, new FilterConfig());
+
+        var entries = ReadEntries(zipBytes, out var zip);
+        using (zip)
+        {
+            Assert.Equal(
+                new[] { "pos.xgp", "pos (2).xgp", "pos (3).xgp" },
                 entries.Select(e => e.FullName));
         }
     }
@@ -72,7 +137,7 @@ public class XgpExportServiceTests
         const string cubeFixture = "match35253054.xg";
         var sources = Sources(XgFixture, cubeFixture);
 
-        var picked = new[]
+        var picked = new List<DecisionRow>
         {
             _service.ExtractDecisions(sources[XgFixture], XgFixture)
                 .First(r => !r.IsCube),
@@ -81,13 +146,13 @@ public class XgpExportServiceTests
         };
 
         var zipBytes = _service.BuildXgpZip(
-            sources, picked.Select(r => r.Id).ToList(), new XgpExportOptions());
+            sources, picked, new XgpExportOptions(), new FilterConfig());
 
         var entries = ReadEntries(zipBytes, out var zip);
         using (zip)
         {
-            Assert.Equal(picked.Length, entries.Count);
-            for (int i = 0; i < picked.Length; i++)
+            Assert.Equal(picked.Count, entries.Count);
+            for (int i = 0; i < picked.Count; i++)
             {
                 var reRead = _service
                     .ExtractDiagramRequests(EntryBytes(entries[i]), entries[i].FullName)
@@ -104,10 +169,11 @@ public class XgpExportServiceTests
         // An .xgp source already is a single-position analyzed file — the
         // export copies it byte-for-byte rather than re-slicing.
         var sources = Sources(XgpFixture);
-        var id = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single().Id;
-        Assert.IsType<XgpDecisionId>(id);
+        var row = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
+        Assert.IsType<XgpDecisionId>(row.Id);
 
-        var zipBytes = _service.BuildXgpZip(sources, [id], new XgpExportOptions());
+        var zipBytes = _service.BuildXgpZip(
+            sources, [row], new XgpExportOptions(), new FilterConfig());
 
         var entries = ReadEntries(zipBytes, out var zip);
         using (zip)
@@ -121,14 +187,15 @@ public class XgpExportServiceTests
     public void MixedSources_ParseEachXgSourceOnceAndNumberInGivenOrder()
     {
         var sources = Sources(XgFixture, XgpFixture);
-        var xgIds = _service.ExtractDecisions(sources[XgFixture], XgFixture)
-            .Take(2).Select(r => r.Id);
-        var xgpId = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single().Id;
+        var xgRows = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+            .Take(2).ToList();
+        var xgpRow = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
 
         // Interleave: xg, xgp, xg — numbering must follow list order.
-        var ids = new List<DecisionId> { xgIds.First(), xgpId, xgIds.Last() };
+        var rows = new List<DecisionRow> { xgRows.First(), xgpRow, xgRows.Last() };
 
-        var zipBytes = _service.BuildXgpZip(sources, ids, new XgpExportOptions());
+        var zipBytes = _service.BuildXgpZip(
+            sources, rows, new XgpExportOptions(), new FilterConfig());
 
         var entries = ReadEntries(zipBytes, out var zip);
         using (zip)
@@ -153,12 +220,14 @@ public class XgpExportServiceTests
         // With anonymize on, BOTH must come back with the neutral names — the
         // toggle closes the mixed-batch privacy gap or it lies.
         var sources = Sources(XgFixture, XgpFixture);
-        var xgId = _service.ExtractDecisions(sources[XgFixture], XgFixture).First(r => !r.IsCube).Id;
-        var xgpId = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single().Id;
-        Assert.IsType<XgpDecisionId>(xgpId);
+        var xgRow = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+            .First(r => !r.IsCube);
+        var xgpRow = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
+        Assert.IsType<XgpDecisionId>(xgpRow.Id);
 
         var zipBytes = _service.BuildXgpZip(
-            sources, new List<DecisionId> { xgId, xgpId }, new XgpExportOptions(),
+            sources, new List<DecisionRow> { xgRow, xgpRow },
+            new XgpExportOptions(), new FilterConfig(),
             anonymize: true);
 
         var entries = ReadEntries(zipBytes, out var zip);
@@ -186,11 +255,13 @@ public class XgpExportServiceTests
         var xgNames = ReadPlayerNames(sources[XgFixture]);
         var xgpNames = ReadPlayerNames(sources[XgpFixture]);
 
-        var xgId = _service.ExtractDecisions(sources[XgFixture], XgFixture).First(r => !r.IsCube).Id;
-        var xgpId = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single().Id;
+        var xgRow = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+            .First(r => !r.IsCube);
+        var xgpRow = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
 
         var zipBytes = _service.BuildXgpZip(
-            sources, new List<DecisionId> { xgId, xgpId }, new XgpExportOptions(),
+            sources, new List<DecisionRow> { xgRow, xgpRow },
+            new XgpExportOptions(), new FilterConfig(),
             anonymize: false);
 
         var entries = ReadEntries(zipBytes, out var zip);
@@ -206,7 +277,7 @@ public class XgpExportServiceTests
     public void EmptyDecisionList_YieldsEmptyZip()
     {
         var zipBytes = _service.BuildXgpZip(
-            Sources(XgFixture), [], new XgpExportOptions());
+            Sources(XgFixture), [], new XgpExportOptions(), new FilterConfig());
 
         var entries = ReadEntries(zipBytes, out var zip);
         using (zip)
@@ -218,23 +289,33 @@ public class XgpExportServiceTests
     [Fact]
     public void MissingSourceFile_Throws()
     {
-        var ids = new List<DecisionId> { new XgDecisionId("absent.xg", 1, 1, false) };
+        var rows = new List<DecisionRow>
+        {
+            new() { Id = new XgDecisionId("absent.xg", 1, 1, false) },
+        };
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            _service.BuildXgpZip(Sources(XgFixture), ids, new XgpExportOptions()));
+            _service.BuildXgpZip(
+                Sources(XgFixture), rows, new XgpExportOptions(), new FilterConfig()));
         Assert.Contains("absent.xg", ex.Message);
     }
 
     [Fact]
     public void InvalidOptions_Throw()
     {
-        var ids = new List<DecisionId> { new XgpDecisionId(XgpFixture) };
+        var rows = new List<DecisionRow>
+        {
+            new() { Id = new XgpDecisionId(XgpFixture) },
+        };
 
         Assert.Throws<ArgumentException>(() => _service.BuildXgpZip(
-            Sources(XgpFixture), ids, new XgpExportOptions { SuffixLength = 0 }));
+            Sources(XgpFixture), rows,
+            new XgpExportOptions { SuffixLength = 0 }, new FilterConfig()));
         Assert.Throws<ArgumentException>(() => _service.BuildXgpZip(
-            Sources(XgpFixture), ids, new XgpExportOptions { Prefix = "a/b" }));
+            Sources(XgpFixture), rows,
+            new XgpExportOptions { NamePattern = "a/b{n}" }, new FilterConfig()));
         Assert.Throws<ArgumentException>(() => _service.BuildXgpZip(
-            Sources(XgpFixture), ids, new XgpExportOptions { StartNumber = 0 }));
+            Sources(XgpFixture), rows,
+            new XgpExportOptions { StartNumber = 0 }, new FilterConfig()));
     }
 }

@@ -5,6 +5,7 @@ using ExtractFromXgToCsv.Client.Shared;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using XgFilter_Lib.Filtering;
 
 namespace ExtractFromXgToCsv.Client.Services;
 
@@ -46,10 +47,14 @@ public class XgProcessingService
 
     /// <summary>
     /// Builds a zip archive holding one <c>.xgp</c> position file per decision,
-    /// named per <paramref name="options"/> in the order given (numbering order
-    /// = filtered order). Parsing stays inside this service: callers hand over
-    /// the retained raw file bytes keyed by bare filename plus the decision
-    /// identities — never an <c>XgFile</c>.
+    /// named by <paramref name="options"/>' pattern via an
+    /// <see cref="XgpNameAllocator"/> in the order given (numbering order =
+    /// filtered order; duplicate rendered names get Windows-style
+    /// <c>" (2)"</c> suffixes). Batch-constant tokens draw from
+    /// <paramref name="filters"/>; per-item tokens from each row. Parsing
+    /// stays inside this service: callers hand over the retained raw file
+    /// bytes keyed by bare filename plus the decision rows — never an
+    /// <c>XgFile</c>.
     ///
     /// <para>
     /// A decision from an <c>.xg</c> source is sliced via
@@ -80,15 +85,17 @@ public class XgProcessingService
     /// </exception>
     public byte[] BuildXgpZip(
         IReadOnlyDictionary<string, byte[]> sourceFiles,
-        IReadOnlyList<DecisionId> decisions,
+        IReadOnlyList<DecisionRow> decisions,
         XgpExportOptions options,
+        FilterConfig filters,
         bool anonymize = false)
     {
         ArgumentNullException.ThrowIfNull(sourceFiles);
         ArgumentNullException.ThrowIfNull(decisions);
-        ArgumentNullException.ThrowIfNull(options);
-        if (!options.TryValidate(out var optionsError))
-            throw new ArgumentException(optionsError, nameof(options));
+
+        // Create validates the options — the single ArgumentException throw
+        // point shared with the Local-mode pathway.
+        var allocator = XgpNameAllocator.Create(options, filters);
 
         // The service owns the bool -> producer-type mapping: the UI carries
         // only intent. null keeps the current byte-for-byte behaviour; the
@@ -104,10 +111,13 @@ public class XgProcessingService
         // the entries again buys almost nothing — store fast.
         using (var zip = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            for (int i = 0; i < decisions.Count; i++)
+            foreach (var row in decisions)
             {
-                var bytes = ExportDecision(decisions[i], sourceFiles, parsed, nameOverrides);
-                var entry = zip.CreateEntry(options.EntryName(i), CompressionLevel.Fastest);
+                // Next (not Peek/Commit): any failure here aborts the whole
+                // zip, so there's no partial-success state to keep the
+                // counter honest for.
+                var bytes = ExportDecision(row.Id, sourceFiles, parsed, nameOverrides);
+                var entry = zip.CreateEntry(allocator.Next(row), CompressionLevel.Fastest);
                 using var entryStream = entry.Open();
                 entryStream.Write(bytes);
             }

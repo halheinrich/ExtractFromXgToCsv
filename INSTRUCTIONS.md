@@ -91,12 +91,19 @@ ExtractFromXgToCsv.Client/              — WASM
     OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf | Xgp
     ProcessRequest.cs                   — POST body for /api/process/start
     ProcessingProgress.cs
-    XgpExportOptions.cs                 — .xgp batch naming (prefix/number/length)
+    XgpExportOptions.cs                 — .xgp batch naming (pattern/number/length)
+    XgpNameAllocator.cs                 — per-run name source: render + " (2)" uniquifier
+    XgpNameContext.cs                   — token render inputs (primitives + lib types)
+    XgpNameTemplate.cs                  — parsed name pattern (TryParse/Render/Sanitize)
+    XgpNameToken.cs                     — one {token} definition
+    XgpNameTokens.cs                    — token registry (SSOT) + preview SampleRow
+    XgpTokenSource.cs                   — Batch | PerItem token classification
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
   bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
   FixtureHelper.cs
   HomeWiringTests.cs                    — FilterPanel → Home wiring (bUnit)
+  HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
   LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
   LocalFolderProcessorPptxTests.cs
@@ -107,6 +114,8 @@ ExtractFromXgToCsv.Tests/
   WebModePanelFilteringTests.cs         — FilterConfig-identity rebuild cache (bUnit)
   WebModePanelXgpExportTests.cs         — select→export→download wire (bUnit)
   XgpExportServiceTests.cs              — BuildXgpZip round-trip oracle
+  XgpNameAllocatorTests.cs              — uniquifier + Peek/Commit rules
+  XgpNameTemplateTests.cs               — pattern grammar + token rendering
   XgProcessingServiceTests.cs
 ```
 
@@ -164,15 +173,42 @@ Per decision, both pathways apply the same routing rule:
 - `XgpDecisionId` (from an `.xgp` source) → the source file bytes
   **verbatim** (see Pitfalls).
 
-Entry naming is `{prefix}{number:D{suffixLength}}.xgp` — single-sourced in
-`XgpExportOptions.EntryName`. `Home` owns the option state and its
-localStorage persistence (`xg_xgpPrefix`, `xg_xgpLastNumber`,
-`xg_xgpSuffixLength`): the "next number" field defaults to the persisted
-last number + 1 while the prefix matches the persisted prefix (else 1), and
-both panels report a completed export through their `OnXgpExported(count)`
-callback so `Home` can advance and persist the counter. In Local mode the
-count is the final `ProcessingProgress.TotalRows`; cancelled runs advance
-the counter too (their files were written), error terminations don't.
+Entry naming is a user-editable **name pattern** — literal text plus
+`{token}` placeholders (e.g. `Move{min-move}_{dice}_{score}` →
+`Move5_31_3a5a.xgp`), carried as `XgpExportOptions.NamePattern` and rendered
+by the naming engine in `Client/Shared`:
+
+- `XgpNameTokens.All` — the token registry, the SSOT for which tokens exist
+  (`{n}` counter, `{min-move}` from the active filters, `{dice}`, `{score}`).
+  Validation, rendering, and the UI's insert-token dropdown all derive from
+  it; adding a token is one added element. Tokens render against an
+  `XgpNameContext` (primitives + lib types only — the engine is deliberately
+  lib-ready).
+- `XgpNameTemplate.TryParse` — the pattern grammar (unmatched/empty braces,
+  unknown tokens, filename-illegal literals are parse-time errors; braces
+  are delimiters only, with no escape syntax). `Render` never fails; token
+  output is sanitized (illegal/control chars → `_`). Empty token values
+  render empty.
+- `XgpNameAllocator` — stateful per-run name source created via
+  `Create(options, filters)` (the single options-validation throw point for
+  both pathways). Appends `.xgp` and uniquifies duplicate rendered names
+  Windows-style (`name.xgp`, `name (2).xgp`, …; case-insensitive
+  bookkeeping). Web mode consumes names via `Next`; Local mode uses the
+  `Peek`/`Commit` split so failed decisions don't consume a number.
+
+The default pattern `pos{n}` names files byte-identically to the pre-pattern
+`{prefix}{number:D{suffixLength}}.xgp` rule; `StartNumber`/`SuffixLength`
+govern `{n}`. `Home` owns the option state and its localStorage persistence
+(`xg_xgpPattern`, `xg_xgpLastNumber`, `xg_xgpSuffixLength`): the "next
+number" field defaults to the persisted last number + 1 while the pattern
+matches the persisted pattern (else 1), and both panels report a completed
+export through their `OnXgpExported(count)` callback so `Home` can advance
+and persist the counter. A missing `xg_xgpPattern` migrates once from the
+legacy `xg_xgpPrefix` key (`{prefix}{n}`, falling back to `pos{n}` if the
+prefix breaks the grammar); the legacy key is removed on the next successful
+export. In Local mode the count is the final
+`ProcessingProgress.TotalRows`; cancelled runs advance the counter too
+(their files were written), error terminations don't.
 
 ### Components
 
@@ -322,6 +358,20 @@ project via relative path — not duplicated here.
   rebuild on a new ref; dirty filter doesn't rebuild. Reflection
   accessors are deliberate — the cache fields aren't a public seam, but
   the invariant is load-bearing enough to pin directly.
+- `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
+  failure shape) and per-token rendering, including the counter-unification
+  pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
+  coverage (internal, via `InternalsVisibleTo`).
+- `XgpNameAllocatorTests` — per-run uniquifier (`name.xgp`, `name (2).xgp`,
+  …), Peek idempotence and the Peek-without-Commit slot reuse that keeps
+  failed decisions from consuming a number, `{n}` never uniquifying, and
+  `Create`'s per-shape `ArgumentException`s. The case-insensitivity of the
+  bookkeeping is pinned by comparer reflection — no current token can render
+  case-differing base names, so it isn't behaviorally observable yet.
+- `HomeXgpPatternTests` — bUnit tests for the pattern UI wiring: textbox
+  binding, registry-driven insert-token dropdown, preview/error branches,
+  the one-time `xg_xgpPrefix` migration (including the brace-prefix
+  fallback), and post-export persistence.
 
 ## Public API
 
@@ -368,10 +418,18 @@ project reference.
   being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` works in
   both modes (see the XGP export section).
 - `XgpExportOptions` — naming options for a batch of per-decision `.xgp`
-  exports (`Prefix`, `StartNumber`, `SuffixLength`). Single source of the
-  `{prefix}{number:D{len}}.xgp` rule via `EntryName(index)`. Permissive wire
-  DTO — validation is the separate `TryValidate(out error)` (the UI gates on
-  it; export pathways throw `ArgumentException`).
+  exports (`NamePattern`, `StartNumber`, `SuffixLength`;
+  `DefaultNamePattern` = `"pos{n}"`). Rendering lives in the naming engine —
+  both export pathways name files through an `XgpNameAllocator` created from
+  these options. Permissive wire DTO — validation is the separate
+  `TryValidate(out error)` (the UI gates on it; export pathways throw
+  `ArgumentException` via `XgpNameAllocator.Create`).
+- Naming engine (`XgpNameTokens`, `XgpNameToken`, `XgpTokenSource`,
+  `XgpNameContext`, `XgpNameTemplate`, `XgpNameAllocator`) — see the XGP
+  export section. App-level home beside `XgpExportOptions`, but engine types
+  couple only to primitives and lib types (`FilterConfig`, `DecisionRow`);
+  the DTO stops at `XgpNameAllocator.Create`, so a future move into a
+  library is relocation-only.
 - `ProcessRequest` — POST body for `/api/process/start`
   (`FolderPath`, `OutputPath`, `Filters` of type
   `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`, `XgpOptions`).
@@ -444,8 +502,32 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   (`xg_xgpLastNumber` et al.) lives in `Home` and advances via the panels'
   `OnXgpExported(count)` callback. Nothing scans previously exported files;
   a user who bypasses the counter (edits "next number" backwards, exports
-  into the same place twice with a reset prefix) gets colliding names —
+  into the same place twice with a reset pattern) gets colliding names —
   by design, the editable field is the escape hatch.
+- **`XgpNameTokens.All` is the token SSOT.** Validation, rendering, and the
+  insert-token dropdown all derive from the registry — add tokens only
+  there, never as a special case in the template parser or the UI. Token
+  render functions must not fail: an unavailable value renders empty.
+- **The allocator's Peek/Commit split is load-bearing.** In
+  `ProcessXgpAsync`, a decision's name is Peeked before the write and the
+  slot Committed only after it succeeds — that's what keeps "failed
+  decisions don't consume a number" true, which the client's persisted
+  counter (advanced from the reported `TotalRows`) depends on. Collapsing
+  the split into an unconditional `Next` makes the next batch's numbers
+  collide with what's on disk.
+- **The name uniquifier is per-run only.** `XgpNameAllocator` appends
+  ` (2)`, ` (3)`, … within one export run; it never looks at the output
+  folder, so cross-run overwrites in Local mode remain by design — the
+  counter (`{n}`) stays the cross-run collision guard. Corollary: a pattern
+  without `{n}` relies entirely on the uniquifier and will overwrite its own
+  previous run's files.
+- **`xg_xgpPrefix` is a read-once legacy key.** It exists only as migration
+  input for a missing `xg_xgpPattern` and is removed on the next successful
+  export — never write it again.
+- **The naming engine is deliberately lib-ready.** `XgpNameContext` carries
+  primitives and lib types only; the app's `XgpExportOptions` DTO must not
+  leak below `XgpNameAllocator.Create`. Keep it that way so a future move of
+  the engine into a library stays relocation-only.
 - **`ProcessXgpAsync` reports progress on every file, deliberately.** The
   siblings use `reportEvery = 10`, but the Xgp pathway's final/last-reported
   `TotalRows` is what the client persists as its numbering counter — so the

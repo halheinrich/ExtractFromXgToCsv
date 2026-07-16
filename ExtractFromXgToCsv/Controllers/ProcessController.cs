@@ -51,10 +51,13 @@ public class ProcessController(
                             filterSet, progress, entry.Cts.Token);
                         break;
                     case OutputFormat.Xgp:
+                        // The unbuilt Filters ride along besides filterSet:
+                        // batch-constant name tokens (e.g. {min-move}) read
+                        // the configured values, not the materialized set.
                         await processor.ProcessXgpAsync(
                             request.FolderPath, request.OutputPath,
-                            filterSet, request.XgpOptions, progress,
-                            request.Anonymize, entry.Cts.Token);
+                            filterSet, request.XgpOptions, request.Filters,
+                            progress, request.Anonymize, entry.Cts.Token);
                         break;
                     default:
                         await processor.ProcessAsync(

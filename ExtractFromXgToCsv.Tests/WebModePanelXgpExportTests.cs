@@ -33,7 +33,14 @@ public class WebModePanelXgpExportTests : BunitContext
     public async Task SelectExportDownload_InvokesDownloadFileWithZip_AndRaisesOnXgpExported()
     {
         int exportedCount = -1;
-        var options = new XgpExportOptions { Prefix = "pos", StartNumber = 1, SuffixLength = 3 };
+        // The default pattern — pins that "pos{n}" still names entries
+        // byte-identically to the pre-pattern prefix naming.
+        var options = new XgpExportOptions
+        {
+            NamePattern = "pos{n}",
+            StartNumber = 1,
+            SuffixLength = 3,
+        };
 
         // Established flow: select files first, then Apply — filtering runs
         // in OnParametersSet on the FilterApplied parameter change.
@@ -77,7 +84,12 @@ public class WebModePanelXgpExportTests : BunitContext
         // Same chain as above, but XgpAnonymize=true — the flag must ride the
         // panel -> BuildXgpZip seam and every zip entry re-reads with the
         // neutral names.
-        var options = new XgpExportOptions { Prefix = "pos", StartNumber = 1, SuffixLength = 3 };
+        var options = new XgpExportOptions
+        {
+            NamePattern = "pos{n}",
+            StartNumber = 1,
+            SuffixLength = 3,
+        };
 
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
@@ -121,7 +133,7 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, false)
             .Add(c => c.FilterDirty, false)
-            .Add(c => c.XgpOptions, new XgpExportOptions { Prefix = "a/b" }));
+            .Add(c => c.XgpOptions, new XgpExportOptions { NamePattern = "a/b" }));
 
         cut.FindComponent<InputFile>().UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
