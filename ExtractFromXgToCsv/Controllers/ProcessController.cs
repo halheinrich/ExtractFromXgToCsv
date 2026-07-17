@@ -87,26 +87,24 @@ public class ProcessController(
 
     /// <summary>
     /// GET /api/process/{jobId}/status
-    /// Returns current ProcessingProgress for the job.
+    /// Returns current ProcessingProgress for the job. Reading a terminal
+    /// snapshot cleans the job up (see <see cref="JobStore.ReadStatus"/>): the
+    /// snapshot is served exactly once, so the polling client must consume the
+    /// completion it observes here — a repeat poll for a finished job is a 404.
     /// </summary>
     [HttpGet("{jobId}/status")]
     public IActionResult Status(string jobId)
     {
-        var entry = jobs.Get(jobId);
-        if (entry is null) return NotFound();
-        return Ok(entry.Progress);
+        var progress = jobs.ReadStatus(jobId);
+        return progress is null ? NotFound() : Ok(progress);
     }
 
     /// <summary>
     /// POST /api/process/{jobId}/cancel
-    /// Cancels the running job.
+    /// Cancels the running job. A late cancel for a job that already reached its
+    /// terminal snapshot (and was cleaned up) is a no-op 404, never a 500.
     /// </summary>
     [HttpPost("{jobId}/cancel")]
     public IActionResult Cancel(string jobId)
-    {
-        var entry = jobs.Get(jobId);
-        if (entry is null) return NotFound();
-        entry.Cts.Cancel();
-        return Ok();
-    }
+        => jobs.Cancel(jobId) ? Ok() : NotFound();
 }

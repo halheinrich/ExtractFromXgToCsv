@@ -13,14 +13,14 @@ QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var appMode = builder.Configuration["AppMode"] ?? "Web";
-builder.Services.AddSingleton(new AppModeService(appMode));
+var appMode = new AppModeService(builder.Configuration["AppMode"] ?? "Web");
+builder.Services.AddSingleton(appMode);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
-if (appMode == "Local")
+if (appMode.IsLocal)
 {
     builder.Services.AddScoped<LocalFolderProcessor>();
     builder.Services.AddSingleton<JobStore>();
