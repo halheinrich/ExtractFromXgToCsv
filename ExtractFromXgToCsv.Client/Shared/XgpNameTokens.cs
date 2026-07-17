@@ -13,7 +13,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// dropdown from it. Adding a token is one added element here; declaration
 /// order is dropdown order.
 /// </summary>
-public static class XgpNameTokens
+internal static class XgpNameTokens
 {
     /// <summary>Every available token, in dropdown display order.</summary>
     public static IReadOnlyList<XgpNameToken> All { get; } =

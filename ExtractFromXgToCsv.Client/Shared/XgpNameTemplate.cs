@@ -22,7 +22,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// duplicate-name uniquifier — both are <see cref="XgpNameAllocator"/>'s job.
 /// </para>
 /// </summary>
-public sealed class XgpNameTemplate
+internal sealed class XgpNameTemplate
 {
     /// <summary>
     /// Characters rejected in pattern literals and replaced with <c>'_'</c>

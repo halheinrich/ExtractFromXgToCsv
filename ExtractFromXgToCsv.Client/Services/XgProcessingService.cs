@@ -13,7 +13,7 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// Processes .xg / .xgp file bytes and exports decisions as CSV.
 /// Runs entirely in WebAssembly on the user's machine — no data is transferred to the server.
 /// </summary>
-public class XgProcessingService
+internal class XgProcessingService
 {
     public IReadOnlyList<DecisionRow> ExtractDecisions(byte[] fileBytes, string fileName)
     {

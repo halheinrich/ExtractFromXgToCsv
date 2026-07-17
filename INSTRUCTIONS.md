@@ -276,11 +276,19 @@ Each `JobEntry` carries a `ProcessingProgress` snapshot and a
 `CancellationTokenSource`. The client polls once per second
 (the processor uses `reportEvery = 10`, writing progress every 10th file).
 
-Jobs are not auto-removed — this is a single-user local app and the dictionary
-lives only for the process lifetime. `JobStore` exposes a `Remove(string jobId)`
-method, currently unused by callers (kept for an eventual explicit cleanup
-hook; see the "Job cleanup / expiry" entry under subproject-internal next
-steps).
+Cleanup rides the status read. `JobStore.ReadStatus` returns the current
+snapshot and, when it is terminal (`Complete` — success, cancellation, and
+failure alike), removes the entry and disposes its `CancellationTokenSource`
+after capturing the snapshot to return. So a job's terminal snapshot is served
+exactly once, and the polling client always consumes the terminal state (the
+Done line, the XGP counter advance) before the entry vanishes — nothing is
+removed on the background job's completion itself, which would race the poll and
+404 the client before it saw `Complete`. A late `POST /cancel` for an
+already-cleaned-up job no-ops (404) rather than throwing off the disposed CTS.
+The controller's `Status`/`Cancel` actions are thin pass-throughs to
+`ReadStatus`/`Cancel`, so CTS-lifecycle knowledge stays inside `JobStore`. One
+gap remains — an abandoned job whose client never polls to completion lingers
+for the process lifetime (see the "Abandoned-job expiry" next step).
 
 ### Filter pipeline
 
@@ -424,12 +432,19 @@ project reference.
   these options. Permissive wire DTO — validation is the separate
   `TryValidate(out error)` (the UI gates on it; export pathways throw
   `ArgumentException` via `XgpNameAllocator.Create`).
-- Naming engine (`XgpNameTokens`, `XgpNameToken`, `XgpTokenSource`,
-  `XgpNameContext`, `XgpNameTemplate`, `XgpNameAllocator`) — see the XGP
-  export section. App-level home beside `XgpExportOptions`, but engine types
-  couple only to primitives and lib types (`FilterConfig`, `DecisionRow`);
-  the DTO stops at `XgpNameAllocator.Create`, so a future move into a
-  library is relocation-only.
+- `XgpNameAllocator` — the naming engine's one public entry point: a stateful
+  per-run name source created via `Create(options, filters)` (the single
+  options-validation throw point for both export pathways). The server's
+  Local-mode processor and the WASM zip builder both name files through it.
+- Naming engine internals (`XgpNameTokens`, `XgpNameToken`, `XgpTokenSource`,
+  `XgpNameContext`, `XgpNameTemplate`) — **`internal`** to the client assembly
+  (test-reachable via the existing `InternalsVisibleTo`); reached only through
+  `XgpNameAllocator`. See the XGP export section. App-level home beside
+  `XgpExportOptions`, but they couple only to primitives and lib types
+  (`FilterConfig`, `DecisionRow`); the DTO stops at `XgpNameAllocator.Create`,
+  so a future move into a library is relocation-only. `XgProcessingService`
+  (the WASM extraction/zip service in `Client/Services`) is `internal` for the
+  same reason — a client-assembly implementation detail, not public surface.
 - `ProcessRequest` — POST body for `/api/process/start`
   (`FolderPath`, `OutputPath`, `Filters` of type
   `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`, `XgpOptions`).
@@ -451,6 +466,20 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `LocalFolderProcessor`, and `XgFilter_Lib` wiring are registered only
   inside the `Local` mode guard in `Program.cs`. Moving that registration
   outside the guard will break Azure deployment.
+- **Server services stay `public` by framework constraint, not by need.**
+  `JobStore`, `JobEntry`, `LocalFolderProcessor`, and `AppModeService` are
+  `public` even though nothing outside the server assembly consumes them,
+  because the MVC controllers constructor-inject them: a `public` controller
+  can't take an `internal` constructor parameter (CS0051), and controller
+  discovery only finds `public` classes, so the controllers can't be
+  internalized to match either. Best-practice constructor injection is worth
+  more than the surface narrowing here — don't re-flag these in a surface
+  audit, and don't reach for interface indirection, a service-locator, or a
+  custom controller feature-provider to force them `internal`. The client-side
+  naming engine (`XgpNameTemplate` et al., `XgProcessingService`) has no such
+  constraint — it's injected only into Razor components (whose generated
+  `@inject` properties are non-public) or reached statically, so it is
+  `internal`.
 - **Deck output (PPTX/PDF) requires server-side rendering.** Both deck
   paths go through `BackgammonDiagram_Lib.ExportRaster.DiagramRasterRenderer`
   (`RenderPptx` / `RenderPdf`), which renders SVG via the native-free core
@@ -550,10 +579,11 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   a single in-memory array. Very large corpora may need a streaming writer
   (NDJSON or JSON-array streaming) rather than building the full document
   before serializing.
-- **Job cleanup / expiry in `JobStore`.** Entries currently live for the
-  process lifetime. A single-user local app tolerates that, but long-running
-  sessions will accumulate completed jobs. A simple TTL or explicit
-  "clear completed" action would address it.
+- **Abandoned-job expiry in `JobStore`.** Completed jobs are now removed when
+  their terminal snapshot is read (see Job lifecycle), so normal runs
+  self-clear. What remains is the abandoned case — a client that never polls to
+  completion leaves its entry for the process lifetime. A TTL sweep would close
+  that gap; a single-user local app tolerates it until then.
 - **Pipeline performance.** The Local-mode pipeline is I/O-dominated but has
   not been profiled. Candidate wins: parallelizing per-file work, reducing
   per-decision allocations in `XgDecisionIterator` consumers, and cutting

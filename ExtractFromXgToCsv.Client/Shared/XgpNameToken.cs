@@ -7,7 +7,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <see cref="XgpNameTokens"/> registry — the single source of truth for
 /// which tokens exist; adding a token is one added registry element.
 /// </summary>
-public sealed record XgpNameToken
+internal sealed record XgpNameToken
 {
     /// <summary>Placeholder name as written between braces, e.g. <c>"min-move"</c>. Matched ordinally.</summary>
     public required string Name { get; init; }

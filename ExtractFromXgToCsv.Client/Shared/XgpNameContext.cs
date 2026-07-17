@@ -15,7 +15,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// stops, so a future move of the engine into a library is relocation-only.
 /// </para>
 /// </summary>
-public sealed record XgpNameContext
+internal sealed record XgpNameContext
 {
     /// <summary>Number the <c>{n}</c> token assigns to the batch's first decision.</summary>
     public required int StartNumber { get; init; }

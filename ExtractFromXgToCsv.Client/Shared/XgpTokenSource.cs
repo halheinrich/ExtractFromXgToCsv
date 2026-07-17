@@ -6,7 +6,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// individual decision being exported. Purely descriptive — UI grouping and
 /// documentation; the render pipeline treats every token identically.
 /// </summary>
-public enum XgpTokenSource
+internal enum XgpTokenSource
 {
     /// <summary>Driven by batch-level state (options or the active filters).</summary>
     Batch,
