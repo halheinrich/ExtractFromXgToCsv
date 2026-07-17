@@ -20,6 +20,7 @@ public class LocalFolderProcessor
 {
     private readonly ILogger<LocalFolderProcessor> _logger;
 
+    /// <summary>Creates the processor; <paramref name="logger"/> records per-file skip warnings.</summary>
     public LocalFolderProcessor(ILogger<LocalFolderProcessor> logger)
     {
         _logger = logger;
@@ -51,6 +52,12 @@ public class LocalFolderProcessor
         return files;
     }
 
+    /// <summary>
+    /// CSV pathway: streams the folder's <c>.xg</c>/<c>.xgp</c> files one at a
+    /// time, applies <paramref name="filterSet"/>, and writes matching
+    /// <see cref="DecisionRow"/>s to <paramref name="outputPath"/> as CSV,
+    /// reporting through <paramref name="progress"/>.
+    /// </summary>
     public async Task ProcessAsync(
         string folderPath,
         string outputPath,
@@ -127,6 +134,11 @@ public class LocalFolderProcessor
             FilesPerSec = finalFilesPerSec
         });
     }
+    /// <summary>
+    /// Diagram-JSON pathway: same per-file streaming as <see cref="ProcessAsync"/>,
+    /// but buffers matching decisions and writes them to
+    /// <paramref name="outputPath"/> as a single indented JSON array.
+    /// </summary>
     public async Task ProcessDiagramAsync(
             string folderPath,
             string outputPath,
@@ -369,6 +381,12 @@ public class LocalFolderProcessor
         });
     }
 
+    /// <summary>
+    /// PPTX pathway: collects filtered decisions into a Problem/Solution slide
+    /// deck at <paramref name="outputPath"/>. Thin wrapper over the shared deck
+    /// helper (PDF twin: <see cref="ProcessPdfAsync"/>). Local mode only —
+    /// rendering is server-side.
+    /// </summary>
     public Task ProcessPptxAsync(
             string folderPath,
             string outputPath,
@@ -380,6 +398,12 @@ public class LocalFolderProcessor
             (reqs, opts) => DiagramRasterRenderer.RenderPptx(reqs, opts),
             "PPTX", cancellationToken);
 
+    /// <summary>
+    /// PDF pathway: collects filtered decisions into a Problem/Solution page
+    /// deck at <paramref name="outputPath"/>. Thin wrapper over the shared deck
+    /// helper (the PDF twin of <see cref="ProcessPptxAsync"/>). Local mode only
+    /// — rendering is server-side.
+    /// </summary>
     public Task ProcessPdfAsync(
             string folderPath,
             string outputPath,

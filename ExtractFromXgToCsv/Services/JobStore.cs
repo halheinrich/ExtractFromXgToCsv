@@ -91,8 +91,17 @@ public class JobStore
     }
 }
 
+/// <summary>
+/// One registered job: its latest <see cref="ProcessingProgress"/> snapshot
+/// (replaced as the run reports) and the <see cref="CancellationTokenSource"/>
+/// that cancels it. <see cref="JobStore"/> owns the CTS lifecycle and disposes
+/// it on terminal cleanup.
+/// </summary>
 public class JobEntry
 {
+    /// <summary>The job's latest progress snapshot; replaced as the run reports.</summary>
     public ProcessingProgress Progress { get; set; } = new();
+
+    /// <summary>Cancels the running job. Disposed by <see cref="JobStore"/> on terminal cleanup.</summary>
     public CancellationTokenSource Cts { get; } = new();
 }

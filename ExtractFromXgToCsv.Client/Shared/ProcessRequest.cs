@@ -2,11 +2,29 @@ using XgFilter_Lib.Filtering;
 
 namespace ExtractFromXgToCsv.Client.Shared;
 
+/// <summary>
+/// POST body for <c>/api/process/start</c>. The client owns this wire shape;
+/// the server deserializes against it and dispatches on <see cref="OutputFormat"/>.
+/// </summary>
 public class ProcessRequest
 {
+    /// <summary>Folder to discover <c>.xg</c>/<c>.xgp</c> input files under, recursively.</summary>
     public string FolderPath    { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Destination path. Names the output <b>file</b> for every format except
+    /// <see cref="OutputFormat.Xgp"/>, where it names the output <b>folder</b>.
+    /// </summary>
     public string OutputPath    { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Filter configuration to apply, materialized server-side via
+    /// <see cref="FilterConfig.Build"/>. Default-initialized so a partial
+    /// payload deserializes cleanly.
+    /// </summary>
     public FilterConfig Filters { get; set; } = new();
+
+    /// <summary>Which output the run produces; the server switches on it.</summary>
     public OutputFormat OutputFormat { get; set; } = OutputFormat.Csv;
 
     /// <summary>

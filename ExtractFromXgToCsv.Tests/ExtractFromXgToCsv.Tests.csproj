@@ -1,11 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Warnings-as-errors is inherited from the repo-root Directory.Build.props
+         and kept. Doc-file generation is opted out here: a test assembly ships
+         no consumer-facing API, and its public xUnit methods aren't a
+         documented surface, so CS1591 would only demand noise docs on every
+         [Fact]. Settled policy — matches the XgToJson test project. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>

@@ -4,6 +4,14 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ExtractFromXgToCsv.Controllers;
 
+/// <summary>
+/// HTTP surface for Local-mode processing jobs: start a run, poll its status
+/// (self-cleaning on the terminal snapshot — see <see cref="JobStore.ReadStatus"/>),
+/// and cancel it.
+/// </summary>
+/// <param name="processor">The pipeline that runs a job's work.</param>
+/// <param name="jobs">The registry that tracks running jobs and their progress.</param>
+/// <param name="logger">Logs job-level failures.</param>
 [ApiController]
 [Route("api/[controller]")]
 public class ProcessController(
