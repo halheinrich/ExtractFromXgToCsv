@@ -1,5 +1,6 @@
 using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
+using ConvertXgToJson_Lib.Models;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -18,12 +19,43 @@ namespace ExtractFromXgToCsv.Tests;
 /// named .xgp per filtered decision into the output <b>folder</b> and that
 /// an exported file re-reads to its source decision.
 ///
-/// Expected counts and names are computed from the iterator (and a locally
-/// built <see cref="XgpNameAllocator"/>) over the same fixture folder, so
-/// adding/removing fixtures shifts both sides together (Make20Pt pattern).
+/// Expected counts and names are computed from <see cref="WalkFixtureDecisions"/>
+/// (and a locally built <see cref="XgpNameAllocator"/>) over the same fixture
+/// folder, so adding/removing fixtures shifts both sides together (Make20Pt
+/// pattern).
 /// </summary>
 public class LocalFolderProcessorXgpTests
 {
+    /// <summary>
+    /// Reference walk over the fixture folder: the decisions
+    /// <see cref="LocalFolderProcessor.ProcessXgpAsync"/> is expected to see,
+    /// in the order it sees them. Mirrors the processor's own walk —
+    /// <see cref="XgFileReader.EnumerateXgFormatFiles(string, SearchOption)"/>
+    /// recursively (the producer's contractual discovery order: ascending full
+    /// path, <c>OrdinalIgnoreCase</c> with an <c>Ordinal</c> tiebreak), each
+    /// file read and iterated by its own name, unreadable files skipped — so
+    /// the oracle tracks the code under test rather than a producer helper.
+    /// Deriving expectations from the same enumeration the processor uses keeps
+    /// these tests fixture-shift-proof: add or remove a fixture and both sides
+    /// move together.
+    /// </summary>
+    private static List<DecisionRow> WalkFixtureDecisions()
+    {
+        var rows = new List<DecisionRow>();
+
+        foreach (var path in XgFileReader.EnumerateXgFormatFiles(
+                     FixtureHelper.FixtureDir, SearchOption.AllDirectories))
+        {
+            XgFile file;
+            try { file = XgFileReader.ReadFile(path); }
+            catch { continue; }
+
+            rows.AddRange(XgDecisionIterator.Iterate(file, Path.GetFileName(path)));
+        }
+
+        return rows;
+    }
+
     [Fact]
     public async Task ProcessXgpAsync_WritesOneNamedXgpPerDecision_ThatRoundTrips()
     {
@@ -37,11 +69,9 @@ public class LocalFolderProcessorXgpTests
         };
         var filters = new FilterConfig();
 
-        // Reference side: the same iterator walk the processor performs,
-        // named by a locally built allocator over the same options.
-        var expected = XgDecisionIterator
-            .IterateXgDirectory(FixtureHelper.FixtureDir)
-            .ToList();
+        // Reference side: the same walk the processor performs, named by a
+        // locally built allocator over the same options.
+        var expected = WalkFixtureDecisions();
         Assert.True(expected.Count > 0, "fixture folder should yield decisions");
 
         var namer = XgpNameAllocator.Create(options, filters);
@@ -102,16 +132,8 @@ public class LocalFolderProcessorXgpTests
         };
         var filters = new FilterConfig();
 
-        // Reference sequence: the producer's *contractual* discovery order
-        // (ascending full path, OrdinalIgnoreCase + Ordinal tiebreak) walked
-        // per file. Deriving expected from the same enumeration the processor
-        // now uses keeps this pin fixture-shift-proof rather than hardcoded —
-        // add/remove a fixture and both sides move together.
-        var expectedRows = XgFileReader
-            .EnumerateXgFormatFiles(FixtureHelper.FixtureDir, SearchOption.AllDirectories)
-            .SelectMany(path => XgDecisionIterator.Iterate(
-                XgFileReader.ReadFile(path), Path.GetFileName(path)))
-            .ToList();
+        // Reference sequence: the processor's discovery order, walked per file.
+        var expectedRows = WalkFixtureDecisions();
         Assert.True(expectedRows.Count > 0, "fixture folder should yield decisions");
 
         try
@@ -152,8 +174,7 @@ public class LocalFolderProcessorXgpTests
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-uniq-{Guid.NewGuid():N}");
         var options = new XgpExportOptions { NamePattern = "same" };
 
-        var expectedCount = XgDecisionIterator
-            .IterateXgDirectory(FixtureHelper.FixtureDir).Count();
+        var expectedCount = WalkFixtureDecisions().Count;
         Assert.True(expectedCount > 1, "fixture folder should yield several decisions");
 
         try
@@ -194,8 +215,7 @@ public class LocalFolderProcessorXgpTests
             SuffixLength = 4,
         };
 
-        var expectedCount = XgDecisionIterator
-            .IterateXgDirectory(FixtureHelper.FixtureDir).Count();
+        var expectedCount = WalkFixtureDecisions().Count;
         Assert.True(expectedCount > 0, "fixture folder should yield decisions");
 
         try
