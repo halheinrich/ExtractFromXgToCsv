@@ -12,6 +12,26 @@
             <input class="form-control" placeholder="e.g. D:\xg\matches"
                    value="@_folderPath"
                    @oninput="OnFolderPathChanged" />
+            @if (_bookStatus is not null)
+            {
+                <div class="small mt-1" id="bookStatus">
+                    @if (_bookStatus.Loaded)
+                    {
+                        <span class="text-success">
+                            ✓ Opening book loaded on the server (@_bookStatus.EntryCount entries) —
+                            book decisions show their enriched depth.
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">
+                            No opening book loaded on the server — book decisions will show as
+                            level Unknown. Set the OpeningBookPath configuration key to enable
+                            enrichment.
+                        </span>
+                    }
+                </div>
+            }
         </div>
         <div class="mb-3">
             <label class="form-label">@(OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
@@ -136,6 +156,11 @@
     private string _statusMessage = string.Empty;
     private bool _lastFilterDirty = false;
 
+    // Server-side opening-book load state, fetched once on first render so the
+    // status line can tell the user which analysis-depth stamps to expect. Null
+    // until fetched (or if the fetch fails) — the line renders only when known.
+    private OpeningBookStatus? _bookStatus;
+
     // Cached materialization of FilterConfig — mirrors WebModePanel's
     // reference-identity cache (FilterPanel mints a new FilterConfig on every
     // Apply, so ref inequality signals "rebuild"). Local mode POSTs the
@@ -155,6 +180,12 @@
         if (!firstRender) return;
         _folderPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_folderPath") ?? string.Empty;
         _outputPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputPath") ?? string.Empty;
+
+        // Server-side book status (Local mode only). A failure leaves the line
+        // hidden rather than asserting a state we don't know.
+        try { _bookStatus = await Http.GetFromJsonAsync<OpeningBookStatus>("/api/openingbook/status"); }
+        catch { _bookStatus = null; }
+
         StateHasChanged();
     }
 

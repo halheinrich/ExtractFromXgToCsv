@@ -30,6 +30,41 @@ Xgid | Error | MatchScore | MatchLength | Player | SourceFile | Game | MoveNumbe
 
 ---
 
+## Opening-book enrichment
+
+`.xg` files stamp opening-book–analysed plays with a bare "book" marker that
+does not record which cached rollout XG used. When XG's opening-book database
+(`OpeningBookV2.ob`, ~13.6 MB, installed with eXtreme Gammon 2) is supplied,
+those decisions are **enriched**: the `AnalysisDepth` column reports the cached
+rollout's parameters — e.g. `Book V2: 12960 trials. 4-ply` instead of a bare
+`Book V2` — and the decision's analysis level is recovered, so depth filters
+see `4-ply` rather than `Unknown`. Enrichment is strictly additive: it changes
+labels and levels, never which decisions are emitted. The book is optional —
+without it, extraction still runs and book decisions report level `Unknown`.
+
+### Local mode (server)
+
+The server loads the book once. Path resolution:
+
+1. the `OpeningBookPath` key in `appsettings.json`, when set to a non-empty path;
+2. when the key is **absent**, the default install location
+   `C:\Program Files (x86)\eXtreme Gammon 2\OpeningBookV2.ob` is auto-detected;
+3. when the key is present but **empty** (`""`), enrichment is disabled.
+
+A missing or unreadable book is logged and skipped — it never fails a run. The
+folder-input status line reports whether the server loaded a book (and its
+entry count).
+
+### Web mode (browser)
+
+The browser parses `.xg` files client-side, so the book is offered the same
+way: an optional **Opening book (.ob)** file input beside the `.xg` picker.
+Pick `OpeningBookV2.ob` to enrich; skip it to extract unenriched. A status line
+shows the loaded entry count. A book chosen *after* the `.xg` files re-processes
+the retained bytes, so pick order doesn't matter.
+
+---
+
 ## Local vs Azure detection
 
 `XgProcessingService.IsLocalEnvironment` returns `true` when:

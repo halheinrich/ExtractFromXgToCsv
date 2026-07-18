@@ -1,4 +1,5 @@
 ﻿@using BgDataTypes_Lib
+@using ConvertXgToJson_Lib
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
@@ -22,6 +23,37 @@
         }
         <InputFile OnChange="HandleFileSelectionAsync" multiple
                    accept=".xg,.xgp" class="form-control mb-3" />
+    </div>
+</section>
+
+<section class="mb-4">
+    <div style="max-width:800px">
+        <label class="form-label">
+            Opening book (.ob) <span class="text-muted">— optional</span>
+        </label>
+        <InputFile OnChange="HandleOpeningBookSelectionAsync"
+                   accept=".ob" class="form-control mb-1" />
+        <div class="small" id="bookStatus">
+            @if (_bookEntryCount is int entries)
+            {
+                <span class="text-success">
+                    ✓ Book loaded (@entries entries) — book decisions show their enriched depth.
+                </span>
+            }
+            else if (_bookLoadFailed)
+            {
+                <span class="text-danger">
+                    ✗ That file isn't a valid opening book — book decisions will show as level Unknown.
+                </span>
+            }
+            else
+            {
+                <span class="text-muted">
+                    No book loaded — book decisions will show as level Unknown.
+                    Pick XG's OpeningBookV2.ob to enrich them.
+                </span>
+            }
+        </div>
     </div>
 </section>
 
@@ -152,11 +184,27 @@
     private List<BgDecisionData> _filteredDiagramRows = new();
     private int _filteredCount = 0;
 
+    // OpeningBookV2.ob is ~13.6 MB; the InputFile stream default cap (500 KB)
+    // would reject it, so the book stream is read with this larger ceiling. The
+    // book is a separate pick from the .xg files and is not counted against
+    // WebModeLimitBytes.
+    private const long OpeningBookMaxBytes = 64L * 1024 * 1024;
+
     // Raw bytes of each selected file, keyed by bare filename — retained so
     // the .xgp slice export can re-parse its sources at download time. Raw
     // (zlib-compressed) bytes are kept rather than parsed XgFiles: they are
     // smaller and already bounded by WebModeLimitBytes.
     private readonly Dictionary<string, byte[]> _fileBytes = new();
+
+    // Optional opening book, loaded client-side from an uploaded .ob file. When
+    // present it enriches book-analysed decisions (matching Local mode's
+    // server-loaded book); when absent they degrade to level Unknown. A book
+    // chosen after the .xg files triggers re-extraction so ordering doesn't
+    // matter. _bookEntryCount is the loaded-and-non-null signal (drives the
+    // status line); _bookLoadFailed marks a rejected upload.
+    private OpeningBook? _openingBook;
+    private int? _bookEntryCount;
+    private bool _bookLoadFailed;
 
     // Cached materialization of FilterConfig. FilterPanel mints a new
     // FilterConfig instance on every Apply (XgFilter_Razor's RaiseAsync),
@@ -175,22 +223,8 @@
 
     protected override void OnParametersSet()
     {
-        // Re-filter when filter config or applied state changes
-        if (FilterApplied && !FilterDirty)
-        {
-            if (!ReferenceEquals(_lastBuiltConfig, FilterConfig))
-            {
-                _builtSet = FilterConfig.Build();
-                _lastBuiltConfig = FilterConfig;
-            }
-
-            if (_rows.Count > 0)
-            {
-                _filteredRows = _rows.Where(r => _builtSet!.Matches(r)).ToList();
-                _filteredDiagramRows = _diagramRows.Where(r => _builtSet!.Matches(r)).ToList();
-                _filteredCount = _filteredRows.Count;
-            }
-        }
+        // Re-filter when filter config or applied state changes.
+        RefilterLoadedRows();
 
         // Update filename extension when output format changes
         if (!string.IsNullOrWhiteSpace(_csvFileName))
@@ -239,16 +273,89 @@
             {
                 using var ms = new MemoryStream();
                 await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
-                var bytes = ms.ToArray();
-                _fileBytes[file.Name] = bytes;
-                _rows.AddRange(Processor.ExtractDecisions(bytes, file.Name));
-                _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, file.Name));
+                _fileBytes[file.Name] = ms.ToArray();
             }
+            ExtractLoadedFiles();
         }
         catch (Exception ex)
         {
             _hasError = true;
             _statusMessage = $"Error: {ex.Message}";
+        }
+    }
+
+    private async Task HandleOpeningBookSelectionAsync(InputFileChangeEventArgs e)
+    {
+        _bookLoadFailed = false;
+        try
+        {
+            using var ms = new MemoryStream();
+            await e.File.OpenReadStream(maxAllowedSize: OpeningBookMaxBytes).CopyToAsync(ms);
+
+            if (Processor.TryLoadOpeningBook(ms.ToArray(), out var book))
+            {
+                _openingBook = book;
+                _bookEntryCount = book.EntryCount;
+            }
+            else
+            {
+                _openingBook = null;
+                _bookEntryCount = null;
+                _bookLoadFailed = true;
+            }
+        }
+        catch (Exception)
+        {
+            _openingBook = null;
+            _bookEntryCount = null;
+            _bookLoadFailed = true;
+        }
+
+        // Re-extract already-loaded files so a book chosen after the .xg files
+        // still enriches them — and a currently-applied filter view updates.
+        if (_fileBytes.Count > 0)
+            ExtractLoadedFiles();
+    }
+
+    // Re-derives every row from the retained file bytes using the current
+    // opening book, then re-applies the active filter. Called on a fresh file
+    // selection and whenever the book changes, so enrichment never depends on
+    // the order the two picks were made in.
+    private void ExtractLoadedFiles()
+    {
+        _rows.Clear(); _filteredRows.Clear();
+        _diagramRows.Clear(); _filteredDiagramRows.Clear();
+        _filteredCount = 0;
+
+        foreach (var (name, bytes) in _fileBytes)
+        {
+            _rows.AddRange(Processor.ExtractDecisions(bytes, name, _openingBook));
+            _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, name, _openingBook));
+        }
+
+        RefilterLoadedRows();
+    }
+
+    // Materializes the applied FilterConfig (cached by reference identity — see
+    // _builtSet) and recomputes the filtered rows. No-op until a filter is
+    // applied and settled. Shared by OnParametersSet and the extraction path so
+    // the filtered view stays in step with both filter and book changes.
+    private void RefilterLoadedRows()
+    {
+        if (!(FilterApplied && !FilterDirty))
+            return;
+
+        if (!ReferenceEquals(_lastBuiltConfig, FilterConfig))
+        {
+            _builtSet = FilterConfig.Build();
+            _lastBuiltConfig = FilterConfig;
+        }
+
+        if (_rows.Count > 0)
+        {
+            _filteredRows = _rows.Where(r => _builtSet!.Matches(r)).ToList();
+            _filteredDiagramRows = _diagramRows.Where(r => _builtSet!.Matches(r)).ToList();
+            _filteredCount = _filteredRows.Count;
         }
     }
 

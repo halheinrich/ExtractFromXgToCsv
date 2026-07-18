@@ -20,10 +20,27 @@ public class LocalFolderProcessor
 {
     private readonly ILogger<LocalFolderProcessor> _logger;
 
-    /// <summary>Creates the processor; <paramref name="logger"/> records per-file skip warnings.</summary>
-    public LocalFolderProcessor(ILogger<LocalFolderProcessor> logger)
+    // The opening-book iterator options, resolved once by OpeningBookProvider
+    // and passed to every XgDecisionIterator call so book-analysed decisions are
+    // enriched consistently across all pathways. Null when no book is available
+    // (provider absent, disabled, or the file was missing/unreadable) — the
+    // iterator reads null as "default behaviour" and stamps the unenriched
+    // "Book V2" / level Unknown form. Single field, single source: every
+    // extraction pathway below passes this same value.
+    private readonly XgIteratorOptions? _iteratorOptions;
+
+    /// <summary>
+    /// Creates the processor. <paramref name="logger"/> records per-file skip
+    /// warnings; <paramref name="bookProvider"/> supplies the loaded opening
+    /// book (optional — a null provider, like a provider that loaded no book,
+    /// runs the pipeline unenriched).
+    /// </summary>
+    public LocalFolderProcessor(
+        ILogger<LocalFolderProcessor> logger,
+        OpeningBookProvider? bookProvider = null)
     {
         _logger = logger;
+        _iteratorOptions = bookProvider?.IteratorOptions;
     }
 
     /// <summary>
@@ -106,7 +123,7 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var rows = XgDecisionIterator.Iterate(xgFile, fileName);
+                var rows = XgDecisionIterator.Iterate(xgFile, fileName, options: _iteratorOptions);
 
                 foreach (var row in rows.Where(r => filterSet.Matches(r)))
                 {
@@ -185,7 +202,8 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(xgFile, fileName);
+                var items = XgDecisionIterator.IterateDiagramRequests(
+                    xgFile, fileName, options: _iteratorOptions);
 
                 foreach (var item in items.Where(r => filterSet.Matches(r)))
                 {
@@ -304,7 +322,7 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var rows = XgDecisionIterator.Iterate(xgFile, fileName);
+                var rows = XgDecisionIterator.Iterate(xgFile, fileName, options: _iteratorOptions);
 
                 foreach (var row in rows.Where(r => filterSet.Matches(r)))
                 {
@@ -463,7 +481,8 @@ public class LocalFolderProcessor
                 var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
                 using var ms = new MemoryStream(bytes);
                 var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(xgFile, fileName, logger: _logger);
+                var items = XgDecisionIterator.IterateDiagramRequests(
+                    xgFile, fileName, options: _iteratorOptions, logger: _logger);
 
                 foreach (var item in items.Where(r => filterSet.Matches(r)))
                 {

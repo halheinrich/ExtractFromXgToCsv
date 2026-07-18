@@ -40,7 +40,8 @@ public class WebModePanelZeroMatchTests : BunitContext
             .Add(c => c.FilterApplied, false)
             .Add(c => c.FilterDirty, false));
 
-        cut.FindComponent<InputFile>().UploadFiles(
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
 
         // A filter naming a player who never appears rejects every row: the
@@ -71,7 +72,8 @@ public class WebModePanelZeroMatchTests : BunitContext
             .Add(c => c.FilterApplied, false)
             .Add(c => c.FilterDirty, false));
 
-        cut.FindComponent<InputFile>().UploadFiles(
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
 
         // An empty (inactive) filter passes every row → filtered == loaded > 0.

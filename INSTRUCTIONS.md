@@ -20,7 +20,9 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 
 - **ConvertXgToJson_Lib** — `XgDecisionIterator`, `XgFileReader`, `XgIteratorState`
   for .xg/.xgp reading and decision iteration; `XgpExporter` (slice surface)
-  for the per-decision .xgp export pathway.
+  for the per-decision .xgp export pathway; `OpeningBook` + `XgIteratorOptions`
+  for opening-book enrichment (the loaded book rides `XgIteratorOptions` into
+  the iterators — see "Opening-book enrichment").
 - **XgFilter_Lib** — `DecisionFilterSet`, `FilteredDecisionIterator`,
   `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
 - **BgDataTypes_Lib** — `DecisionRow`, `BgDecisionData`, `IDecisionFilterData`
@@ -61,6 +63,7 @@ ExtractFromXgToCsv/                     — server host (thin)
       Error.razor                       — server-rendered error page
   Controllers/
     AppModeController.cs
+    OpeningBookController.cs            — GET book status (Local mode only)
     ProcessController.cs                — primary-constructor DI
     ShutdownController.cs
   Properties/
@@ -69,6 +72,7 @@ ExtractFromXgToCsv/                     — server host (thin)
     AppModeService.cs                   — singleton, exposes configured mode
     JobStore.cs                         — singleton, job registry
     LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
+    OpeningBookProvider.cs              — singleton, resolves + loads the opening book
   wwwroot/
     app.css
     app.js
@@ -88,6 +92,7 @@ ExtractFromXgToCsv.Client/              — WASM
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
     AppModeResponse.cs                  — { Mode } body for GET /api/appmode
+    OpeningBookStatus.cs                — { Loaded, EntryCount } for GET /api/openingbook/status
     OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf | Xgp
     ProcessRequest.cs                   — POST body for /api/process/start
     ProcessingProgress.cs
@@ -107,15 +112,19 @@ ExtractFromXgToCsv.Tests/
   LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
   LocalFolderProcessorPptxTests.cs
+  LocalFolderProcessorOpeningBookTests.cs — book reaches every processor pathway
   LocalFolderProcessorXgpTests.cs       — Local-mode .xgp folder output wiring
   LocalModePanelGateTests.cs            — Run-button dirty-gating + error render (bUnit)
+  OpeningBookProviderTests.cs           — path resolution + load/degrade
   Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
   WebModePanelFilteringTests.cs         — FilterConfig-identity rebuild cache (bUnit)
+  WebModePanelOpeningBookTests.cs       — .ob input status + late-book re-extract (bUnit)
   WebModePanelXgpExportTests.cs         — select→export→download wire (bUnit)
   XgpExportServiceTests.cs              — BuildXgpZip round-trip oracle
   XgpNameAllocatorTests.cs              — uniquifier + Peek/Commit rules
   XgpNameTemplateTests.cs               — pattern grammar + token rendering
+  XgProcessingServiceOpeningBookTests.cs — book bridge + extract enrichment (WASM path)
   XgProcessingServiceTests.cs
 ```
 
@@ -290,6 +299,46 @@ The controller's `Status`/`Cancel` actions are thin pass-throughs to
 gap remains — an abandoned job whose client never polls to completion lingers
 for the process lifetime (see the "Abandoned-job expiry" next step).
 
+### Opening-book enrichment
+
+`.xg` files stamp opening-book–analysed candidates with a bare 998/999 "book"
+level that carries no rollout parameters. Supplying XG's opening-book database
+(`OpeningBookV2.ob`) lets the iterator recover the cached rollout XG used:
+book-analysed decisions then report an enriched `AnalysisDepth`
+(`Book V2: 12960 trials. 4-ply`) and a real `AnalysisLevel` instead of the
+degraded `BookRollout` + `Unknown` pair. The producer owns the enrichment; this
+app only *locates* the book and hands the loaded instance to the iterators via
+`XgIteratorOptions.OpeningBook`. Enrichment is strictly additive — it never
+changes which decisions or candidates are emitted, only their depth labels and
+levels — so a missing book degrades cleanly and never fails a run.
+
+**Local mode (server).** `OpeningBookProvider` (singleton, Local-guard only)
+resolves the path and loads the book once (~13.6 MB, immutable, concurrent-read
+safe). Resolution: the `OpeningBookPath` config key when set to a non-empty
+path; **absent** → auto-detect the default install
+(`C:\Program Files (x86)\eXtreme Gammon 2\OpeningBookV2.ob`); **empty** (`""`)
+→ disabled. `ResolvePath` (the three-branch decision) is pure and separately
+tested; loading is the IO half. The provider exposes `IteratorOptions`
+(null when no book); `LocalFolderProcessor` holds that single value in a field
+and passes it as `options:` at all four iterator call sites (CSV, Diagram JSON,
+Xgp, deck). A null provider, a disabled key, a missing file, or an unreadable
+book all resolve to the same null-options / unenriched path.
+`GET /api/openingbook/status` surfaces the load state so `LocalModePanel` can
+show a status line by the folder input.
+
+**Web mode (client).** The browser parses `.xg` files, so it loads the book too
+— from an optional **Opening book (.ob)** `InputFile` beside the `.xg` picker.
+`XgProcessingService.TryLoadOpeningBook(bytes, out book)` is the seam: the
+producer's loader is path-based and WASM has no real path for picked bytes, so
+it stages the image to an Emscripten MEMFS temp file, calls
+`OpeningBook.TryLoad`, and deletes it — keeping components off both the path API
+and the temp-file mechanics. `ExtractDecisions` / `ExtractDiagramRequests` take
+an optional `OpeningBook?` and map it to options through one private
+`OptionsFor` helper. `WebModePanel` retains the loaded book alongside the raw
+file bytes and **re-extracts** on a book change, so a book chosen after the
+files still enriches them — pick order is irrelevant. A status line reports the
+entry count (or an invalid-file error).
+
 ### Filter pipeline
 
 `FilterConfig.Build()` (lib-owned, in `XgFilter_Lib.Filtering`) materializes
@@ -380,6 +429,25 @@ project via relative path — not duplicated here.
   binding, registry-driven insert-token dropdown, preview/error branches,
   the one-time `xg_xgpPrefix` migration (including the brace-prefix
   fallback), and post-export persistence.
+- `OpeningBookProviderTests` — the provider's pure path resolution (absent →
+  auto-detect, empty → disabled, explicit) and load/degrade (real fixture book
+  loads and exposes `IteratorOptions`; empty config and a missing file both
+  degrade to no book without throwing).
+- `LocalFolderProcessorOpeningBookTests` — pins that the loaded book reaches
+  every server processing pathway. CSV and Diagram JSON assert the enriched
+  depth label directly (with book) vs. the bare "Book V2" (without); the Xgp and
+  deck pathways — whose output carries no label — use the `BookRollout` × `Ply4`
+  filter differential (book present ⇒ the enriched decisions survive and are
+  written / rendered; book absent ⇒ they degrade to Unknown and nothing does).
+  Runs against a temp folder holding only `ajhhBG0407.xg` for deterministic
+  counts. Enrichment correctness itself is owned by ConvertXgToJson_Lib.
+- `XgProcessingServiceOpeningBookTests` — the WASM counterpart: the bytes→book
+  bridge (`TryLoadOpeningBook` loads valid `.ob` bytes, rejects garbage without
+  throwing) and that both extract entry points enrich the `ajhhBG0407` book
+  decision with a book and degrade without one.
+- `WebModePanelOpeningBookTests` — bUnit wire tests for the `.ob` input: the
+  status line reports a loaded / invalid book, and a book chosen after the `.xg`
+  files re-extracts the retained bytes (pick order doesn't affect enrichment).
 
 ## Public API
 
@@ -406,6 +474,13 @@ POST /api/process/{jobId}/cancel
 GET  /api/appmode
   200 →  { Mode: "Local" | "Web" }
 
+GET  /api/openingbook/status                             (Local mode only)
+  200 →  OpeningBookStatus { Loaded, EntryCount }
+         — whether the server loaded the opening book, and its entry count
+           (0 when none). Local-only, like /api/process: OpeningBookProvider is
+           registered only in the Local guard, so the client only calls it in
+           Local mode.
+
 POST /api/shutdown
   200 →  (empty; host begins graceful shutdown)
 ```
@@ -421,6 +496,11 @@ project reference.
   (`record AppModeResponse(string Mode)`). Server returns it; client
   deserializes against it. Object-wrapped rather than a bare string so the
   shape stays extensible without breaking consumers.
+- `OpeningBookStatus` — response record for `GET /api/openingbook/status`
+  (`record OpeningBookStatus(bool Loaded, int EntryCount)`). Its own DTO rather
+  than folded into `AppModeResponse`: book status is Local-only, and
+  `AppModeController` serves both modes (where the book provider isn't
+  registered), so the concerns can't share an endpoint.
 - `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf | Xgp`. Server
   references it too, which is why it lives under `Client/Shared` rather than
   being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` works in
@@ -568,6 +648,37 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   directory (created if absent) and `LocalModePanel` skips the
   extension-swap logic for Xgp. Same-named files are overwritten; the
   counter, not the processor, is the collision guard.
+- **Opening-book config: absent ≠ empty.** `OpeningBookProvider.ResolvePath`
+  reads `configuration["OpeningBookPath"]`: `null` (key absent) auto-detects the
+  default install path; `""` (key present, empty) *disables* enrichment. Don't
+  add an empty `"OpeningBookPath": ""` to `appsettings.json` thinking it's a
+  harmless placeholder — it turns enrichment off. Leave the key out to keep
+  auto-detect, or set a real path.
+- **The opening book is Local-only server-side.** `OpeningBookProvider` and
+  `OpeningBookController` are registered/reached only in the Local guard (Web
+  mode parses client-side and loads its own book via the browser). Don't move
+  the provider registration outside the guard, and don't inject it into a
+  both-modes controller like `AppModeController` — Web deployments have no
+  provider to resolve.
+- **Web-mode book loading bridges through a temp file, by necessity.**
+  `OpeningBook`'s only public loader is path-based (`Load`/`TryLoad`); its
+  byte-image seam is `internal`. WASM has no real path for picked bytes, so
+  `XgProcessingService.TryLoadOpeningBook` stages the `.ob` bytes to an
+  Emscripten MEMFS temp file and loads that. Don't "simplify" this into a
+  UI-side `OpeningBook.Load(path)` call — components have neither a path nor any
+  business touching the loader — and don't reach for the lib's internal image
+  seam from here (that's an upstream change, out of scope).
+- **A late-chosen Web book must re-extract.** `WebModePanel` re-runs extraction
+  over the retained file bytes whenever the book changes, so the status line
+  ("Book loaded") never contradicts the data (enrichment applied). Dropping the
+  re-extract would silently leave files parsed before the book unenriched while
+  the UI claims otherwise.
+- **Enriched depth isn't in the Xgp/deck output.** The book only changes a
+  decision's depth metadata, not the exported `.xgp` bytes or the rendered deck.
+  So the Xgp and deck pathways' book wiring is pinned by a *filter differential*
+  (a `BookRollout` × `Ply4` filter admits the enriched decisions with a book and
+  nothing without one), not by reading a label out of the output — see
+  `LocalFolderProcessorOpeningBookTests`.
 - **Fixture files are not in this repo.** They live in umbrella `TestData/`
   and are not tracked by git (contents are gitignored; structure is held by
   `.gitkeep`). A fresh clone of this subproject alone cannot run the tests

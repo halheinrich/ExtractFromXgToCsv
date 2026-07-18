@@ -2,6 +2,7 @@ using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
 using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Shared;
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -15,13 +16,62 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// </summary>
 internal class XgProcessingService
 {
-    public IReadOnlyList<DecisionRow> ExtractDecisions(byte[] fileBytes, string fileName)
+    /// <summary>
+    /// Loads an opening book from an uploaded <c>.ob</c> file image so Web-mode
+    /// extraction can enrich book-analysed decisions the same way Local mode
+    /// does. The producer's loader is path-based and WASM has no real filesystem
+    /// path for picked bytes, so the image is staged to a temporary
+    /// (Emscripten MEMFS) file and read through
+    /// <see cref="OpeningBook.TryLoad"/>, then the temp file is removed. Bridging
+    /// the bytes here — not in the UI — keeps components off both
+    /// <see cref="OpeningBook"/>'s path API and the temp-file mechanics.
+    /// </summary>
+    /// <param name="fileBytes">The uploaded <c>.ob</c> file's raw bytes.</param>
+    /// <param name="book">On success, the loaded book; otherwise <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when the bytes were a valid opening book;
+    /// <see langword="false"/> when they were not (the caller then extracts
+    /// unenriched — a missing book is never fatal).
+    /// </returns>
+    public bool TryLoadOpeningBook(byte[] fileBytes, [NotNullWhen(true)] out OpeningBook? book)
+    {
+        ArgumentNullException.ThrowIfNull(fileBytes);
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"xg-openingbook-{Guid.NewGuid():N}.ob");
+        try
+        {
+            File.WriteAllBytes(tempPath, fileBytes);
+            return OpeningBook.TryLoad(tempPath, out book);
+        }
+        catch
+        {
+            // Staging failure degrades exactly like an invalid book: no throw.
+            book = null;
+            return false;
+        }
+        finally
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); }
+            catch { /* best-effort cleanup of the MEMFS temp file */ }
+        }
+    }
+
+    /// <summary>
+    /// The book, mapped to iterator options — the single "book → options"
+    /// mapping point for both extraction methods. A null book yields null
+    /// options (the iterator's unenriched default).
+    /// </summary>
+    private static XgIteratorOptions? OptionsFor(OpeningBook? book) =>
+        book is null ? null : new XgIteratorOptions(book);
+
+    public IReadOnlyList<DecisionRow> ExtractDecisions(
+        byte[] fileBytes, string fileName, OpeningBook? book = null)
     {
         using var ms = new MemoryStream(fileBytes);
         var xgFile = XgFileReader.ReadStream(ms);
 
         string sourceFile = Path.GetFileName(fileName);
-        return XgDecisionIterator.Iterate(xgFile, sourceFile).ToList();
+        return XgDecisionIterator.Iterate(xgFile, sourceFile, options: OptionsFor(book)).ToList();
     }
 
     public string BuildCsv(IEnumerable<DecisionRow> rows)
@@ -32,12 +82,15 @@ internal class XgProcessingService
             sb.AppendLine(row.ToCsvLine());
         return sb.ToString();
     }
-    public IReadOnlyList<BgDecisionData> ExtractDiagramRequests(byte[] fileBytes, string fileName)
+    public IReadOnlyList<BgDecisionData> ExtractDiagramRequests(
+        byte[] fileBytes, string fileName, OpeningBook? book = null)
     {
         using var ms = new MemoryStream(fileBytes);
         var xgFile = XgFileReader.ReadStream(ms);
         string sourceFile = Path.GetFileName(fileName);
-        return XgDecisionIterator.IterateDiagramRequests(xgFile, sourceFile).ToList();
+        return XgDecisionIterator
+            .IterateDiagramRequests(xgFile, sourceFile, options: OptionsFor(book))
+            .ToList();
     }
 
     public string BuildDiagramJson(IEnumerable<BgDecisionData> items)

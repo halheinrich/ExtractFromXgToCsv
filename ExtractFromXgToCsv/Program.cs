@@ -22,6 +22,10 @@ builder.Services.AddRazorComponents()
 
 if (appMode.IsLocal)
 {
+    // The opening book is read and decoded once (~13.6 MB) and shared across
+    // every job — hence singleton. Local mode only: Web mode parses .xg files
+    // client-side and offers the book through the browser file picker instead.
+    builder.Services.AddSingleton<OpeningBookProvider>();
     builder.Services.AddScoped<LocalFolderProcessor>();
     builder.Services.AddSingleton<JobStore>();
 }

@@ -52,7 +52,8 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.OnXgpExported, (int n) => exportedCount = n));
 
         var fixtureBytes = FixtureHelper.ReadFixture(XgFixture);
-        cut.FindComponent<InputFile>().UploadFiles(
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(fixtureBytes, XgFixture));
 
         cut.Render(p => p.Add(c => c.FilterApplied, true));
@@ -98,7 +99,8 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.XgpOptions, options)
             .Add(c => c.XgpAnonymize, true));
 
-        cut.FindComponent<InputFile>().UploadFiles(
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
         cut.Render(p => p.Add(c => c.FilterApplied, true));
 
@@ -131,7 +133,8 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, new XgpExportOptions { NamePattern = "a/b" }));
 
-        cut.FindComponent<InputFile>().UploadFiles(
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
         cut.Render(p => p.Add(c => c.FilterApplied, true));
 
