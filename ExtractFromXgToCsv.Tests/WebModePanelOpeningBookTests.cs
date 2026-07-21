@@ -36,8 +36,8 @@ public class WebModePanelOpeningBookTests : BunitContext
             .Add(c => c.FilterApplied, false)
             .Add(c => c.FilterDirty, false));
 
-    private static List<DecisionRow> Rows(IRenderedComponent<WebModePanel> cut) =>
-        bUnitTestHelpers.GetPrivateField<List<DecisionRow>>(cut.Instance, "_rows");
+    private static IReadOnlyList<DecisionRow> Rows(IRenderedComponent<WebModePanel> cut) =>
+        cut.Instance.RowCache.Rows;
 
     private static void UploadXg(IRenderedComponent<WebModePanel> cut) =>
         cut.FindComponents<InputFile>()[0].UploadFiles(

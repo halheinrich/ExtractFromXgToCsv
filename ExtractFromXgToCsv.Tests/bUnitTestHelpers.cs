@@ -5,9 +5,10 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Shared helpers for bUnit-based component tests. Kept narrow on purpose:
-/// reflection accessors for private state (used to pin cache invariants
-/// without modifying source for a test seam) and a minimal HttpMessageHandler
-/// for the one endpoint Home.razor calls during OnAfterRenderAsync.
+/// a reflection accessor for private state (used to pin the name allocator's
+/// bookkeeping without exposing it as a permanent seam) and a minimal
+/// HttpMessageHandler for the one endpoint Home.razor calls during
+/// OnAfterRenderAsync.
 /// </summary>
 internal static class bUnitTestHelpers
 {

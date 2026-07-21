@@ -62,12 +62,12 @@
     <div class="alert alert-danger mt-2">@_statusMessage</div>
 }
 
-@if (_rows.Count > 0)
+@if (_rowCache.Rows.Count > 0)
 {
     <div class="mb-4" style="max-width:800px">
         @if (FilterApplied && !FilterDirty)
         {
-            @if (_filteredCount == 0)
+            @if (_rowCache.FilteredRows.Count == 0)
             {
                 // Rows loaded but the applied filter set excluded every one of
                 // them. Because an empty (inactive) set passes every row, a zero
@@ -82,14 +82,14 @@
             else
             {
                 <div class="mb-2 text-muted">
-                    @_filteredCount of @_rows.Count rows match current filters
+                    @_rowCache.FilteredRows.Count of @_rowCache.Rows.Count rows match current filters
                 </div>
             }
         }
         else
         {
             <div class="mb-2 text-muted">
-                @_rows.Count rows loaded — set filters and click Apply Filter
+                @_rowCache.Rows.Count rows loaded — set filters and click Apply Filter
             </div>
         }
 
@@ -111,7 +111,7 @@
         else if (XgpDownloadBlocked)
         {
             <small class="text-muted ms-2">
-                @(_filteredRows.Count == 0
+                @(_rowCache.FilteredRows.Count == 0
                     ? "No decisions match the filters"
                     : "Fix the XGP export options first")
             </small>
@@ -119,9 +119,9 @@
     </div>
 }
 
-@if (FilterApplied && !FilterDirty && _filteredRows.Count > 0)
+@if (FilterApplied && !FilterDirty && _rowCache.FilteredRows.Count > 0)
 {
-    <h5>Preview (first @(Math.Min(20, _filteredRows.Count)) of @_filteredRows.Count filtered rows, @_rows.Count total)</h5>
+    <h5>Preview (first @(Math.Min(20, _rowCache.FilteredRows.Count)) of @_rowCache.FilteredRows.Count filtered rows, @_rowCache.Rows.Count total)</h5>
     <div style="overflow-x:auto">
         <table class="table table-sm table-striped table-bordered">
             <thead class="table-dark">
@@ -140,7 +140,7 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var r in _filteredRows.Take(20))
+                @foreach (var r in _rowCache.FilteredRows.Take(20))
                 {
                     <tr>
                         <td><code style="font-size:.75em">@r.Xgid</code></td>
@@ -178,11 +178,14 @@
     private bool _busy = false;
     private bool _hasError = false;
     private string _statusMessage = string.Empty;
-    private List<DecisionRow> _rows = new();
-    private List<DecisionRow> _filteredRows = new();
-    private List<BgDecisionData> _diagramRows = new();
-    private List<BgDecisionData> _filteredDiagramRows = new();
-    private int _filteredCount = 0;
+
+    // Live-preview row state — the loaded rows, the materialized filter, and
+    // the filtered projections all live in the cache; the panel only decides
+    // *when* the filter is in effect (the FilterApplied && !FilterDirty gate)
+    // and renders from the cache's properties. Exposed internally so wire
+    // tests can pin the panel→cache routing without reflection.
+    private readonly FilteredRowCache _rowCache = new();
+    internal FilteredRowCache RowCache => _rowCache;
 
     // OpeningBookV2.ob is ~13.6 MB; the InputFile stream default cap (500 KB)
     // would reject it, so the book stream is read with this larger ceiling. The
@@ -206,13 +209,6 @@
     private int? _bookEntryCount;
     private bool _bookLoadFailed;
 
-    // Cached materialization of FilterConfig. FilterPanel mints a new
-    // FilterConfig instance on every Apply (XgFilter_Razor's RaiseAsync),
-    // so reference inequality reliably signals "rebuild." This keeps the
-    // Build() call out of the per-row Matches hot path.
-    private DecisionFilterSet? _builtSet;
-    private FilterConfig? _lastBuiltConfig;
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -223,8 +219,11 @@
 
     protected override void OnParametersSet()
     {
-        // Re-filter when filter config or applied state changes.
-        RefilterLoadedRows();
+        // Re-filter when the filter config or applied state changes. The
+        // applied-and-settled gate is the panel's one filtering decision;
+        // materialization and projection live in the cache.
+        if (FilterApplied && !FilterDirty)
+            _rowCache.Refilter(FilterConfig);
 
         // Update filename extension when output format changes
         if (!string.IsNullOrWhiteSpace(_csvFileName))
@@ -246,10 +245,8 @@
     private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
     {
         _hasError = false; _statusMessage = string.Empty;
-        _rows.Clear(); _filteredRows.Clear();
-        _diagramRows.Clear(); _filteredDiagramRows.Clear();
+        _rowCache.Clear();
         _fileBytes.Clear();
-        _filteredCount = 0;
 
         var files = e.GetMultipleFiles(500).ToList();
         _totalSelectedBytes = files.Sum(f => f.Size);
@@ -318,45 +315,21 @@
     }
 
     // Re-derives every row from the retained file bytes using the current
-    // opening book, then re-applies the active filter. Called on a fresh file
-    // selection and whenever the book changes, so enrichment never depends on
-    // the order the two picks were made in.
+    // opening book and hands them to the cache, which re-projects them through
+    // the filter already in effect — so rows loaded after an Apply are
+    // filtered immediately, and enrichment never depends on the order the
+    // file and book picks were made in. Called on a fresh file selection and
+    // whenever the book changes.
     private void ExtractLoadedFiles()
     {
-        _rows.Clear(); _filteredRows.Clear();
-        _diagramRows.Clear(); _filteredDiagramRows.Clear();
-        _filteredCount = 0;
-
+        var rows = new List<DecisionRow>();
+        var diagramRows = new List<BgDecisionData>();
         foreach (var (name, bytes) in _fileBytes)
         {
-            _rows.AddRange(Processor.ExtractDecisions(bytes, name, _openingBook));
-            _diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, name, _openingBook));
+            rows.AddRange(Processor.ExtractDecisions(bytes, name, _openingBook));
+            diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, name, _openingBook));
         }
-
-        RefilterLoadedRows();
-    }
-
-    // Materializes the applied FilterConfig (cached by reference identity — see
-    // _builtSet) and recomputes the filtered rows. No-op until a filter is
-    // applied and settled. Shared by OnParametersSet and the extraction path so
-    // the filtered view stays in step with both filter and book changes.
-    private void RefilterLoadedRows()
-    {
-        if (!(FilterApplied && !FilterDirty))
-            return;
-
-        if (!ReferenceEquals(_lastBuiltConfig, FilterConfig))
-        {
-            _builtSet = FilterConfig.Build();
-            _lastBuiltConfig = FilterConfig;
-        }
-
-        if (_rows.Count > 0)
-        {
-            _filteredRows = _rows.Where(r => _builtSet!.Matches(r)).ToList();
-            _filteredDiagramRows = _diagramRows.Where(r => _builtSet!.Matches(r)).ToList();
-            _filteredCount = _filteredRows.Count;
-        }
+        _rowCache.ReplaceRows(rows, diagramRows);
     }
 
     private async Task OnCsvFileNameChanged(ChangeEventArgs e)
@@ -370,7 +343,7 @@
     // (header-only CSV / empty JSON array), so they stay ungated.
     private bool XgpDownloadBlocked =>
         OutputFormat == OutputFormat.Xgp
-        && (_filteredRows.Count == 0 || !XgpOptions.TryValidate(out _));
+        && (_rowCache.FilteredRows.Count == 0 || !XgpOptions.TryValidate(out _));
 
     private string DownloadButtonLabel => OutputFormat switch
     {
@@ -393,7 +366,7 @@
             {
                 bytes = Processor.BuildXgpZip(
                     _fileBytes,
-                    _filteredRows,
+                    _rowCache.FilteredRows,
                     XgpOptions,
                     FilterConfig,
                     anonymize: XgpAnonymize);
@@ -402,14 +375,14 @@
             }
             else if (OutputFormat == OutputFormat.DiagramJson)
             {
-                var content = Processor.BuildDiagramJson(_filteredDiagramRows);
+                var content = Processor.BuildDiagramJson(_rowCache.FilteredDiagramRows);
                 bytes = System.Text.Encoding.UTF8.GetBytes(content);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.json" : _csvFileName;
                 mimeType = "application/json";
             }
             else
             {
-                var content = Processor.BuildCsv(_filteredRows);
+                var content = Processor.BuildCsv(_rowCache.FilteredRows);
                 bytes = System.Text.Encoding.UTF8.GetBytes(content);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
                 mimeType = "text/csv";
@@ -418,7 +391,7 @@
             await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
 
             if (OutputFormat == OutputFormat.Xgp)
-                await OnXgpExported.InvokeAsync(_filteredRows.Count);
+                await OnXgpExported.InvokeAsync(_rowCache.FilteredRows.Count);
         }
         catch (Exception ex)
         {

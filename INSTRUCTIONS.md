@@ -89,6 +89,7 @@ ExtractFromXgToCsv.Client/              — WASM
   Properties/
     launchSettings.json
   Services/
+    FilteredRowCache.cs                 — Web-mode rows + filtered projections + identity-cached Build
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
     AppModeResponse.cs                  — { Mode } body for GET /api/appmode
@@ -106,6 +107,7 @@ ExtractFromXgToCsv.Client/              — WASM
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
   bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
+  FilteredRowCacheTests.cs              — projection + identity-cache invariants (direct)
   FixtureHelper.cs
   HomeWiringTests.cs                    — FilterPanel → Home wiring (bUnit)
   HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
@@ -118,7 +120,7 @@ ExtractFromXgToCsv.Tests/
   OpeningBookProviderTests.cs           — path resolution + load/degrade
   Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
-  WebModePanelFilteringTests.cs         — FilterConfig-identity rebuild cache (bUnit)
+  WebModePanelFilteringTests.cs         — panel → FilteredRowCache routing (bUnit)
   WebModePanelOpeningBookTests.cs       — .ob input status + late-book re-extract (bUnit)
   WebModePanelXgpExportTests.cs         — select→export→download wire (bUnit)
   XgpExportServiceTests.cs              — BuildXgpZip round-trip oracle
@@ -233,18 +235,26 @@ export. In Local mode the count is the final
   buttons, polling loop, progress bar. Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
   Takes `FilterConfig` (serializable) so it can POST it to the server.
-- **`WebModePanel.razor`** — file picker, in-memory rows and diagram rows,
-  live filtering in `OnParametersSet`, preview table, download. Parameters:
+- **`WebModePanel.razor`** — file picker, preview table, download. Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
-  Takes `FilterConfig` and materializes a `DecisionFilterSet` locally
-  (cached by `FilterConfig` reference identity) — no HTTP boundary to
-  serialize across. When an applied filter set excludes every loaded row
-  (`_rows.Count > 0` but `_filteredRows.Count == 0`) it renders an explicit
-  zero-match notice in place of the bland `N of M rows match` line, so a
-  filtered-to-zero result reads as a result rather than a silent success.
-  The "filters are active" signal is emergent, not a `FilterConfig`
-  re-inspection: an empty (inactive) set passes every row, so zero survivors
-  from a non-empty load can only mean the set is non-empty.
+  The live row state — loaded decision and diagram rows, the materialized
+  `DecisionFilterSet`, and the filtered projections — lives in
+  `FilteredRowCache` (Client `Services/`); the panel's own filtering logic
+  is one gate: `OnParametersSet` calls `Refilter(FilterConfig)` only when
+  `FilterApplied && !FilterDirty` (Apply remains the materialization
+  point — no HTTP boundary to serialize across). The cache builds via
+  `FilterConfig.Build()` once per config instance (reference-identity
+  cached) and re-projects rows handed to `ReplaceRows` through the set
+  already in effect, so files selected after an Apply are filtered
+  immediately. The panel exposes the cache internally (`RowCache`) as the
+  wire-test seam. When an applied filter set excludes every loaded row
+  (`Rows.Count > 0` but `FilteredRows.Count == 0`) the panel renders an
+  explicit zero-match notice in place of the bland `N of M rows match`
+  line, so a filtered-to-zero result reads as a result rather than a
+  silent success. The "filters are active" signal is emergent, not a
+  `FilterConfig` re-inspection: an empty (inactive) set passes every row,
+  so zero survivors from a non-empty load can only mean the set is
+  non-empty.
 
 Run button is disabled whenever the filter panel is dirty, forcing the user
 to apply or discard pending changes before a run.
@@ -343,8 +353,9 @@ entry count (or an invalid-file error).
 
 `FilterConfig.Build()` (lib-owned, in `XgFilter_Lib.Filtering`) materializes
 a `DecisionFilterSet` from the serializable DTO. The server calls
-`request.Filters.Build()` in `ProcessController.Start`; `WebModePanel` calls
-`FilterConfig.Build()` in `OnParametersSet`. Same method, two call-sites —
+`request.Filters.Build()` in `ProcessController.Start`; Web mode's build
+lives in `FilteredRowCache.Refilter`, driven by `WebModePanel`'s
+`OnParametersSet` gate. Same method, two call-sites —
 see "FilterConfig materialization differs by mode" in Pitfalls. CSV,
 Diagram JSON, PPTX, and PDF pathways all feed the same filter set via
 `IDecisionFilterData` — one filter implementation, four extraction outputs.
@@ -409,12 +420,18 @@ project via relative path — not duplicated here.
   !`FilterDirty` plus non-empty paths to enable) and the `ErrorMessage`
   render branch (a `Complete + ErrorMessage != null` `ProcessingProgress`
   renders in a `.text-danger` span, not the in-progress slot).
-- `WebModePanelFilteringTests` — bUnit tests pinning the `WebModePanel`
-  `FilterConfig`-by-reference-identity rebuild cache: no build before
-  Apply; build on first Apply; cache hit on same `FilterConfig` ref;
-  rebuild on a new ref; dirty filter doesn't rebuild. Reflection
-  accessors are deliberate — the cache fields aren't a public seam, but
-  the invariant is load-bearing enough to pin directly.
+- `FilteredRowCacheTests` — direct tests of `FilteredRowCache`: no build
+  before the first `Refilter`; build on the first; cache hit on the same
+  `FilterConfig` reference; rebuild on a new reference; `ReplaceRows`
+  re-projects through the set in effect without rebuilding; `Clear` empties
+  rows and projections but keeps the materialized filter.
+- `WebModePanelFilteringTests` — bUnit wire tests pinning that
+  `WebModePanel` routes live filtering through `FilteredRowCache` under
+  the `FilterApplied && !FilterDirty` gate (no materialization before
+  Apply, materialization on Apply, identity cache across re-renders,
+  dirty leaves the cache untouched), observed through the panel's
+  internal `RowCache` seam. Guards the migration failure mode of a panel
+  that compiles but filters beside the cache instead of through it.
 - `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
   failure shape) and per-token rendering, including the counter-unification
   pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
@@ -583,11 +600,12 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   to the server over HTTP; `ProcessController` calls
   `request.Filters.Build()` to materialize server-side before handing the
   set to `LocalFolderProcessor`. Web mode never crosses an HTTP boundary;
-  `WebModePanel` calls `FilterConfig.Build()` directly in
-  `OnParametersSet`, caching the result by `FilterConfig` reference
-  identity so the build runs once per Apply, not once per `Matches` call.
-  Same `FilterConfig.Build()` method on both sides; the materialization
-  point is the only difference.
+  the build lives in `FilteredRowCache.Refilter`, which `WebModePanel`
+  calls from `OnParametersSet` when the filter is applied and settled.
+  The cache keys the build on `FilterConfig` reference identity so it
+  runs once per Apply, not once per `Matches` call. Same
+  `FilterConfig.Build()` method on both sides; the materialization point
+  is the only difference.
 - **`FilterPanel` is not referenced server-side.** It lives in
   `XgFilter_Razor` (lib-owned) and is consumed only by the WASM client.
   The server's bridge from a configured filter to a runnable filter set is

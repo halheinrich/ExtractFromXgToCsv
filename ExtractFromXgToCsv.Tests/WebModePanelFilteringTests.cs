@@ -9,15 +9,16 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the materialization-cache invariants in
-/// <see cref="WebModePanel"/>. The brief-scoped intent is to prove
-/// the FilterConfig-change → rebuild path fires correctly; live row
-/// filtering correctness is owned by the lib's own filter tests and
-/// by <c>OutputConsistencyTests</c>.
-///
-/// Reflection accesses the cached fields directly. Refactoring those
-/// fields will require updating these tests; that's the cost of pinning
-/// the invariant without exposing internals as a permanent test seam.
+/// Wire tests pinning that <see cref="WebModePanel"/> routes its live
+/// filtering through <see cref="FilteredRowCache"/> under the
+/// applied-and-settled gate (<c>FilterApplied &amp;&amp; !FilterDirty</c>):
+/// no materialization before Apply; materialization on Apply; a same-reference
+/// re-render is a cache hit; a new reference rebuilds; a dirty filter leaves
+/// the cache untouched. The projection rules themselves are pinned by
+/// <c>FilteredRowCacheTests</c> — here only the panel→cache routing is under
+/// test, observed through the panel's internal <c>RowCache</c> seam (no
+/// reflection). The migration failure mode this guards: a panel that compiles
+/// but filters beside the cache instead of through it.
 /// </summary>
 public class WebModePanelFilteringTests : BunitContext
 {
@@ -30,17 +31,13 @@ public class WebModePanelFilteringTests : BunitContext
     [Fact]
     public void NotApplied_LeavesBuiltSetUnpopulated()
     {
-        var cfg = new FilterConfig();
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, cfg)
+            .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, false)
             .Add(c => c.FilterDirty, false));
 
-        Assert.Null(bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet"));
-        Assert.Null(bUnitTestHelpers.GetPrivateField<FilterConfig?>(
-            cut.Instance, "_lastBuiltConfig"));
+        Assert.Null(cut.Instance.RowCache.BuiltSet);
     }
 
     [Fact]
@@ -56,29 +53,21 @@ public class WebModePanelFilteringTests : BunitContext
             .Add(c => c.FilterApplied, false)
             .Add(c => c.FilterDirty, false));
 
-        Assert.Null(bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet"));
+        Assert.Null(cut.Instance.RowCache.BuiltSet);
 
         // Apply Alice — build fires.
         cut.Render(p => p.Add(c => c.FilterApplied, true));
-        var built1 = bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet");
+        var built1 = cut.Instance.RowCache.BuiltSet;
         Assert.NotNull(built1);
-        Assert.Same(aliceCfg, bUnitTestHelpers.GetPrivateField<FilterConfig?>(
-            cut.Instance, "_lastBuiltConfig"));
 
         // Re-render with the SAME FilterConfig instance — cache hit; ref unchanged.
         cut.Render(p => p.Add(c => c.FilterConfig, aliceCfg));
-        Assert.Same(built1, bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet"));
+        Assert.Same(built1, cut.Instance.RowCache.BuiltSet);
 
         // Re-render with a NEW FilterConfig instance — rebuild fires; new ref.
         cut.Render(p => p.Add(c => c.FilterConfig, bobCfg));
-        var built2 = bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet");
-        Assert.NotSame(built1, built2);
-        Assert.Same(bobCfg, bUnitTestHelpers.GetPrivateField<FilterConfig?>(
-            cut.Instance, "_lastBuiltConfig"));
+        Assert.NotSame(built1, cut.Instance.RowCache.BuiltSet);
+        Assert.NotNull(cut.Instance.RowCache.BuiltSet);
     }
 
     [Fact]
@@ -91,15 +80,15 @@ public class WebModePanelFilteringTests : BunitContext
             .Add(c => c.FilterApplied, true)
             .Add(c => c.FilterDirty, false));
 
-        var built1 = bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet");
+        var built1 = cut.Instance.RowCache.BuiltSet;
         Assert.NotNull(built1);
 
-        // Mark dirty — the rebuild gate is `FilterApplied && !FilterDirty`,
-        // so a dirty filter should leave the cached set untouched.
-        cut.Render(p => p.Add(c => c.FilterDirty, true));
-        var built2 = bUnitTestHelpers.GetPrivateField<DecisionFilterSet?>(
-            cut.Instance, "_builtSet");
-        Assert.Same(built1, built2);
+        // Mark dirty and hand in a NEW config instance in the same render —
+        // the panel's applied-and-settled gate must keep the cache on the
+        // set built from the last applied config, not build the pending one.
+        cut.Render(p => p
+            .Add(c => c.FilterConfig, new FilterConfig())
+            .Add(c => c.FilterDirty, true));
+        Assert.Same(built1, cut.Instance.RowCache.BuiltSet);
     }
 }

@@ -51,13 +51,8 @@ public class WebModePanelZeroMatchTests : BunitContext
                 new FilterConfig { Players = new List<string> { "__no_such_player__" } })
             .Add(c => c.FilterApplied, true));
 
-        Assert.True(
-            bUnitTestHelpers.GetPrivateField<List<BgDataTypes_Lib.DecisionRow>>(
-                cut.Instance, "_rows").Count > 0,
-            "fixture should load rows");
-        Assert.Empty(
-            bUnitTestHelpers.GetPrivateField<List<BgDataTypes_Lib.DecisionRow>>(
-                cut.Instance, "_filteredRows"));
+        Assert.True(cut.Instance.RowCache.Rows.Count > 0, "fixture should load rows");
+        Assert.Empty(cut.Instance.RowCache.FilteredRows);
 
         var notice = cut.Find(".zero-match-notice");
         Assert.Contains("No decisions matched", notice.TextContent);
@@ -79,9 +74,7 @@ public class WebModePanelZeroMatchTests : BunitContext
         // An empty (inactive) filter passes every row → filtered == loaded > 0.
         cut.Render(p => p.Add(c => c.FilterApplied, true));
 
-        Assert.True(
-            bUnitTestHelpers.GetPrivateField<List<BgDataTypes_Lib.DecisionRow>>(
-                cut.Instance, "_filteredRows").Count > 0,
+        Assert.True(cut.Instance.RowCache.FilteredRows.Count > 0,
             "empty filter should pass every loaded row");
         Assert.Empty(cut.FindAll(".zero-match-notice"));
     }

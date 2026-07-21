@@ -58,9 +58,7 @@ public class WebModePanelXgpExportTests : BunitContext
 
         cut.Render(p => p.Add(c => c.FilterApplied, true));
 
-        var expectedCount = bUnitTestHelpers
-            .GetPrivateField<List<BgDataTypes_Lib.DecisionRow>>(cut.Instance, "_filteredRows")
-            .Count;
+        var expectedCount = cut.Instance.RowCache.FilteredRows.Count;
         Assert.True(expectedCount > 0, "fixture should yield filtered decisions");
 
         await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
@@ -104,9 +102,7 @@ public class WebModePanelXgpExportTests : BunitContext
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
         cut.Render(p => p.Add(c => c.FilterApplied, true));
 
-        var expectedCount = bUnitTestHelpers
-            .GetPrivateField<List<BgDataTypes_Lib.DecisionRow>>(cut.Instance, "_filteredRows")
-            .Count;
+        var expectedCount = cut.Instance.RowCache.FilteredRows.Count;
         Assert.True(expectedCount > 0, "fixture should yield filtered decisions");
 
         await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
