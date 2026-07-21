@@ -122,6 +122,7 @@ ExtractFromXgToCsv.Tests/
   OutputConsistencyTests.cs
   WebModePanelFilteringTests.cs         — panel → FilteredRowCache routing (bUnit)
   WebModePanelOpeningBookTests.cs       — .ob input status + late-book re-extract (bUnit)
+  WebModePanelRefilterOnLoadTests.cs    — post-Apply file selection filters immediately (bUnit)
   WebModePanelXgpExportTests.cs         — select→export→download wire (bUnit)
   XgpExportServiceTests.cs              — BuildXgpZip round-trip oracle
   XgpNameAllocatorTests.cs              — uniquifier + Peek/Commit rules
@@ -465,6 +466,13 @@ project via relative path — not duplicated here.
 - `WebModePanelOpeningBookTests` — bUnit wire tests for the `.ob` input: the
   status line reports a loaded / invalid book, and a book chosen after the `.xg`
   files re-extracts the retained bytes (pick order doesn't affect enrichment).
+- `WebModePanelRefilterOnLoadTests` — bUnit wire tests pinning that a file
+  selection made while a filter set is applied is filtered through it
+  immediately (no second Apply): a selective filter yields the independently
+  computed count and the rendered `N of M` line for the fresh selection, and a
+  new selection the applied filter rejects entirely lands in the zero-match
+  notice. The eager load-time refilter arrived incidentally with the
+  opening-book re-extract restructure; these tests make it load-bearing.
 
 ## Public API
 
