@@ -64,14 +64,17 @@
     <div class="mb-3 border rounded p-3" style="max-width:800px" id="xgpOptions">
         <label class="form-label d-block fw-bold">XGP export options</label>
         <div class="row g-3">
-            <div class="col-auto">
+            @* The pattern column grows to take whatever the fixed-width
+               columns leave, so the pattern — the field users actually type
+               prose-length templates into — gets the widest share of the row. *@
+            <div class="col" style="min-width:220px">
                 <label class="form-label" for="xgpPattern">Name pattern</label>
-                <input class="form-control" id="xgpPattern" style="max-width:280px"
+                <input class="form-control" id="xgpPattern"
                        value="@_xgpPattern" @oninput="OnXgpPatternChanged" />
             </div>
             <div class="col-auto">
                 <label class="form-label" for="xgpInsertToken">Insert token</label>
-                <select class="form-select" id="xgpInsertToken" style="max-width:280px"
+                <select class="form-select" id="xgpInsertToken" style="max-width:200px"
                         value="@_xgpTokenSelection" @onchange="OnXgpInsertTokenAsync">
                     <option value="" disabled>Insert token…</option>
                     @foreach (var token in XgpNameTokens.All)
@@ -83,13 +86,13 @@
             <div class="col-auto">
                 <label class="form-label" for="xgpNextNumber">Next number</label>
                 <input class="form-control" id="xgpNextNumber" type="number" min="1"
-                       style="max-width:120px"
+                       style="max-width:90px"
                        value="@_xgpNextNumber" @oninput="OnXgpNextNumberChanged" />
             </div>
             <div class="col-auto">
                 <label class="form-label" for="xgpSuffixLength">Number length</label>
                 <input class="form-control" id="xgpSuffixLength" type="number" min="1" max="9"
-                       style="max-width:120px"
+                       style="max-width:90px"
                        value="@_xgpSuffixLength" @oninput="OnXgpSuffixLengthChanged" />
             </div>
         </div>
