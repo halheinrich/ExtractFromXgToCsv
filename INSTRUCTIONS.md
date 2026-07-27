@@ -725,3 +725,15 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   not been profiled. Candidate wins: parallelizing per-file work, reducing
   per-decision allocations in `XgDecisionIterator` consumers, and cutting
   reflection or LINQ in the filter hot path.
+- **CSV download button for Azure/browser mode.**
+- **PPTX download for Azure/browser mode** — SkiaSharp native isn't available
+  under Blazor WASM.
+- **`ColumnSelector` wired into UI.**
+- **Adopt `SavedFiltersPanel` (saved named filters) in Local mode.** The
+  finding-(Q) arc lands the shared document (`NamedFilterCollection`,
+  XgFilter_Lib) and picker component (XgFilter_Razor) in libraries this app
+  already references, so adoption is host wiring only: server-side disk
+  persistence (Local mode does real `System.IO`; no FS-Access ladder) + the
+  FilterPanel handshake. If/when the app deploys (Web mode), where its
+  saved-filters file lives is an open question for that arc. Surfaced by the
+  user during the finding-(Q) design pass (2026-07-22).
