@@ -361,6 +361,16 @@ see "FilterConfig materialization differs by mode" in Pitfalls. CSV,
 Diagram JSON, PPTX, and PDF pathways all feed the same filter set via
 `IDecisionFilterData` — one filter implementation, four extraction outputs.
 
+The analysis-depth facet is three symmetric per-mode pairs (XgFilter_Lib
+cbca4b3): `IncludeEvaluations`/`EvaluationLevels`,
+`IncludeRollouts`/`RolloutLevels`, `IncludeBookRollouts`/`BookRolloutLevels`.
+Build() unions one clause per enabled toggle, each qualified by its own level
+list (empty = any level), and a level list whose toggle is off is **inert** —
+it neither activates the facet nor constrains anything. Consumers here supply
+the six members verbatim and never re-derive the clauses; `Build()` is the
+derivation SSOT. Local mode's wire carries all six, pinned by
+`LocalModePanelFilterWireTests`.
+
 ### Diagram JSON output
 
 Emitted as a single in-memory JSON array, not NDJSON. Simpler consumer side;
@@ -421,6 +431,15 @@ project via relative path — not duplicated here.
   !`FilterDirty` plus non-empty paths to enable) and the `ErrorMessage`
   render branch (a `Complete + ErrorMessage != null` `ProcessingProgress`
   renders in a `.text-danger` span, not the in-progress slot).
+- `LocalModePanelFilterWireTests` — bUnit wire tests pinning the filter half of
+  the `/api/process/start` POST (the sibling `LocalModePanelXgpAnonymizeTests`
+  covers its format/anonymize half): the applied `FilterConfig` reaches the
+  server intact, the depth facet's three toggle+levels pairs cross verbatim
+  under an asymmetric selection, the bound config activates the same
+  `GetActiveFacets()` set the panel described, and untoggled level lists stay
+  inert rather than reviving the retired "levels alone activate" semantics.
+  Both halves of each pair are pinned because either one lost in transit widens
+  the run silently — no error, just different output.
 - `FilteredRowCacheTests` — direct tests of `FilteredRowCache`: no build
   before the first `Refilter`; build on the first; cache hit on the same
   `FilterConfig` reference; rebuild on a new reference; `ReplaceRows`
@@ -454,9 +473,11 @@ project via relative path — not duplicated here.
 - `LocalFolderProcessorOpeningBookTests` — pins that the loaded book reaches
   every server processing pathway. CSV and Diagram JSON assert the enriched
   depth label directly (with book) vs. the bare "Book V2" (without); the Xgp and
-  deck pathways — whose output carries no label — use the `BookRollout` × `Ply4`
-  filter differential (book present ⇒ the enriched decisions survive and are
-  written / rendered; book absent ⇒ they degrade to Unknown and nothing does).
+  deck pathways — whose output carries no label — use a filter differential over
+  a lone depth clause (`IncludeBookRollouts` qualified by
+  `BookRolloutLevels = [Ply4]`): book present ⇒ the enriched decisions survive
+  and are written / rendered; book absent ⇒ they degrade to Unknown and nothing
+  does.
   Runs against a temp folder holding only `ajhhBG0407.xg` for deterministic
   counts. Enrichment correctness itself is owned by ConvertXgToJson_Lib.
 - `XgProcessingServiceOpeningBookTests` — the WASM counterpart: the bytes→book
@@ -702,9 +723,11 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **Enriched depth isn't in the Xgp/deck output.** The book only changes a
   decision's depth metadata, not the exported `.xgp` bytes or the rendered deck.
   So the Xgp and deck pathways' book wiring is pinned by a *filter differential*
-  (a `BookRollout` × `Ply4` filter admits the enriched decisions with a book and
+  (a depth facet of one clause — `IncludeBookRollouts` qualified by
+  `BookRolloutLevels = [Ply4]` — admits the enriched decisions with a book and
   nothing without one), not by reading a label out of the output — see
-  `LocalFolderProcessorOpeningBookTests`.
+  `LocalFolderProcessorOpeningBookTests`. The toggle is what activates the
+  facet: the level list alone would be inert and the differential would vanish.
 - **Fixture files are not in this repo.** They live in umbrella `TestData/`
   and are not tracked by git (contents are gitignored; structure is held by
   `.gitkeep`). A fresh clone of this subproject alone cannot run the tests

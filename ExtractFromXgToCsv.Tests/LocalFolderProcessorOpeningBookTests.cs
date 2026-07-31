@@ -23,7 +23,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// "Book V2" / <see cref="AnalysisLevel.Unknown"/>. The CSV and Diagram-JSON
 /// pathways surface that label directly. The Xgp and deck pathways carry no
 /// depth label in their output, so they are probed with a book-specific filter
-/// (<see cref="AnalysisMode.BookRollout"/> × <see cref="AnalysisLevel.Ply4"/>):
+/// — a lone depth clause, <see cref="FilterConfig.IncludeBookRollouts"/>
+/// qualified by <see cref="FilterConfig.BookRolloutLevels"/> =
+/// <see cref="AnalysisLevel.Ply4"/>:
 /// with the book the enriched decisions survive; without it they degrade to
 /// Unknown and the filter admits nothing — an observable differential that can
 /// only come from the options reaching those iterators.
@@ -68,12 +70,14 @@ public class LocalFolderProcessorOpeningBookTests
         return dir;
     }
 
-    // Filter admitting exactly BookRollout × Ply4 — matches the enriched
-    // opening decisions only when a book recovered their level.
+    // Filter whose depth facet is a single clause — BookRollout qualified by
+    // Ply4 — so it matches the enriched opening decisions only when a book
+    // recovered their level. The toggle is what activates the facet; the level
+    // list is inert without it (XgFilter_Lib cbca4b3).
     private static FilterConfig BookPly4Filter() => new()
     {
         IncludeBookRollouts = true,
-        AnalysisLevels = [AnalysisLevel.Ply4],
+        BookRolloutLevels = [AnalysisLevel.Ply4],
     };
 
     // -----------------------------------------------------------------------
