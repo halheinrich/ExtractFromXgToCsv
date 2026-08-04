@@ -125,7 +125,7 @@
 }
 
 <FilterPanel OnFilterConfigChanged="OnFilterConfigChanged"
-             OnFilterDirty="OnFilterDirty" />
+             OnAppliedStateChanged="OnAppliedStateChanged" />
 
 @if (_appMode == "Local")
 {
@@ -234,11 +234,16 @@ else
         _filterDirty = false;
     }
 
-    private void OnFilterDirty()
-    {
-        _filterDirty = true;
-        StateHasChanged();
-    }
+    // The panel re-reports its applied state after every buffer-affecting
+    // gesture, carrying the committed config its buffers now equal — or null
+    // when they equal none. "Dirty" is exactly that null-ness, so the flag is
+    // assigned outright on every report rather than latched: an edit undone
+    // back to the applied values reports clean again and un-gates the run
+    // without a re-Apply (which the panel no longer offers for an unchanged
+    // selection). A non-null payload needs no further handling — it is the
+    // same committed config OnFilterConfigChanged already delivered.
+    private void OnAppliedStateChanged(FilterConfig? applied) =>
+        _filterDirty = applied is null;
 
     private async Task SetOutputFormat(OutputFormat fmt)
     {

@@ -229,9 +229,14 @@ export. In Local mode the count is the final
   `FilterPanel`, and delegates to `LocalModePanel` or `WebModePanel`.
 - **`FilterPanel.razor`** — owns all filter state. Raises
   `OnFilterConfigChanged EventCallback<FilterConfig>` on Apply / Reset, and
-  `OnFilterDirty EventCallback` on every input change so the parent can
-  disable Run until Apply. Always visible in both modes so the workflow
-  is consistent: configure filters → select files → run.
+  `OnAppliedStateChanged EventCallback<FilterConfig?>` after every gesture that
+  touches its edit buffers, carrying the committed config those buffers now
+  equal or `null` when they equal none. `Home` maps that null-ness straight
+  onto `_filterDirty` on every report, so Run is disabled until Apply — and
+  re-enabled when an edit is undone back to the applied values, which the
+  panel reports as clean (it disables Apply for an unchanged selection, so a
+  re-Apply is not available as a recovery gesture). Always visible in both
+  modes so the workflow is consistent: configure filters → select files → run.
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar. Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
@@ -421,9 +426,10 @@ project via relative path — not duplicated here.
   conformance is owned by `BackgammonDiagram_Lib`'s own tests.
 - `HomeWiringTests` — bUnit wire test pinning the `FilterPanel` →
   `Home` integration. Fails closed if a binding to
-  `OnFilterConfigChanged` or `OnFilterDirty` is ever silently dropped
+  `OnFilterConfigChanged` or `OnAppliedStateChanged` is ever silently dropped
   (Razor compiles unrecognized component attributes cleanly, so a stale
-  attribute name binds nothing and produces no error). Uses
+  attribute name binds nothing and produces no error; `[EditorRequired]`
+  catches only the missing-binding half of that, at compile time). Uses
   `StubAppModeHandler` from `bUnitTestHelpers` to drive the mode branch
   deterministically.
 - `LocalModePanelGateTests` — bUnit tests pinning two `LocalModePanel`
