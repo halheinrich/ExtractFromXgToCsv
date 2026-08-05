@@ -74,7 +74,8 @@ ExtractFromXgToCsv/                     — server host (thin)
     LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
     OpeningBookProvider.cs              — singleton, resolves + loads the opening book
   wwwroot/
-    app.css
+    app.css                             — the app's only bespoke CSS: the
+                                          busy-cursor rule (see Busy affordance)
     app.js
     bootstrap/
 ExtractFromXgToCsv.Client/              — WASM
@@ -108,6 +109,7 @@ ExtractFromXgToCsv.Client/              — WASM
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
   bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
+  BusyCursorTests.cs                    — busy marker ↔ busy state, both panels (bUnit)
   FilteredRowCacheTests.cs              — projection + identity-cache invariants (direct)
   FixtureHelper.cs
   HomeWiringTests.cs                    — FilterPanel → Home wiring (bUnit)
@@ -299,6 +301,33 @@ fraction and get an indeterminate striped bar instead:
   for PPTX and 405 s for PDF at corpus scale, during which the determinate bar
   would sit solid at 100% beside an elapsed figure frozen near 1 s. The
   branch also suppresses those stale elapsed/throughput numbers.
+
+**The cursor** is the half of the affordance the words can't cover, and the one
+the user found missing (issue #77): through that multi-minute deck render the
+bar and the phase message were right and the pointer stayed a plain arrow. Both
+panels put an `is-busy` class on their **root** element for exactly as long as
+their own busy flag is up — `_busy` in each, unchanged — and `wwwroot/app.css`
+turns that one class into `cursor: progress` for the root and everything under
+it. Two details are load-bearing:
+
+- **It rides the flag, not a window.** Local mode's pre-first-poll gap, its
+  determinate stretch and the atomic render are all inside one `_busy`, as is
+  every gesture `RunBusyAsync` wraps in Web mode — so all of them are covered by
+  one rule, and a busy window added later is covered without a second one.
+- **The rule's descendant half and its `!important` are not defensive.**
+  Bootstrap dresses the pointer over exactly the controls the wait started from
+  (`button:not(:disabled)`, `.form-control[type=file]:not(:disabled)…`), so
+  inheritance from the root reaches nothing that matters — and those selectors
+  outrank anything a single state class can raise its specificity to (0,1,1 and
+  0,4,0 against 0,1,0). Winning over every component's own cursor, everywhere,
+  for as long as the state holds, is what `!important` is for; a specificity
+  arms race would be the worse answer here, not the purer one.
+
+`progress` rather than `wait` across both panels: it is the keyword for
+"working, but the interface still responds", which is Local mode exactly (Stop
+and Exit stay live). Web mode's WASM gestures do block the thread and are
+strictly `wait` — one keyword is the price of one discipline. `BusyCursorTests`
+pins the state→class binding for both panels.
 
 ### Modes
 
@@ -510,6 +539,17 @@ project via relative path — not duplicated here.
   figures, and — the pin that catches a regression to prefix-matching — the
   same snapshot with a "Rendering…" `FileName` but `Phase = Processing` keeps
   the determinate bar and its figures.
+- `BusyCursorTests` — the busy-cursor binding for both panels in one file,
+  because it is one contract: each panel's root carries `is-busy` exactly while
+  its own busy flag is up (Local mode's pre-first-poll gap and its atomic-render
+  branch; Web mode's whole `RunBusyAsync` body, throwing bodies included), and
+  carries nothing once the flag drops — pinned against a terminal snapshot,
+  which keeps the progress block on screen after the flag is down, because a
+  busy cursor stranded over an idle app is worse than the arrow this replaced.
+  The marker is asserted to *enclose* the panel (the Run button included): a
+  marker on a leaf would satisfy a bare "class is present" check and dress
+  nothing. The cursor itself isn't observable from a component test, and the
+  class→rule half is deliberately unpinned — see the Pitfalls entry.
 - `LocalFolderProcessorPhaseTests` — the server half of the same contract: the
   deck pathway reports exactly one `Rendering` snapshot, it is non-terminal and
   the last thing sent before the terminal one, and the streaming pathways never
@@ -669,6 +709,16 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   halves separately — that the busy state is rendered before the body runs,
   and that the wrapper yields before it — because a bUnit assertion on the
   markup alone passes with or without the yield.
+- **The busy cursor is one class and one rule — don't add per-spot cursor CSS.**
+  The affordance is `is-busy` on each panel's root element plus the single
+  `wwwroot/app.css` rule. A new slow gesture inherits it by raising the busy
+  state the panel already holds (in Web mode: by going through `RunBusyAsync`);
+  putting `cursor:` on an individual button, notice or progress bar forks the
+  discipline and drifts. Corollary: nothing links the class to the rule at
+  compile or test time — `BusyCursorTests` pins state→class only — so the name
+  must be changed in the panels and the stylesheet together. That is the price
+  of the affordance living in CSS rather than in the components, which is where
+  it belongs.
 - **`ProcessingProgress.Phase` is the progress-stage SSOT; `FileName` is
   presentation.** The rendering line reads "Rendering PPTX (…)" for humans,
   but the client branches on `JobPhase.Rendering`. Don't re-derive the stage by

@@ -6,173 +6,181 @@
 @inject XgProcessingService Processor
 @inject IJSRuntime JS
 
-@if (_busy)
-{
-    // The panel's one busy surface. Every slow gesture here runs synchronously
-    // on the WASM thread, so this is the only thing the user can see while it
-    // does — it must be rendered *and* handed a frame to paint in before the
-    // work starts (see RunBusyAsync).
-    <div class="alert alert-info d-flex align-items-center gap-2 busy-notice"
-         role="status" aria-live="polite" style="max-width:800px">
-        <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
-        <span>@_busyMessage</span>
-    </div>
-}
+@* Panel root. It exists to carry the busy marker: everything the user can
+   point at while a gesture holds the WASM thread sits inside it, so one class
+   here dresses the whole panel with the busy cursor (app.css owns which
+   cursor that is). *@
+<div class="@BusyCssClass">
 
-<section class="mb-4">
-    <div style="max-width:800px">
-        <label class="form-label">Select .xg / .xgp files</label>
-        @if (!string.IsNullOrEmpty(_lastFolderHint))
-        {
-            <div><small class="text-muted">Last: @_lastFolderHint</small></div>
-        }
-        @if (_totalSelectedBytes > WebModeLimitBytes)
-        {
-            <div class="alert alert-warning mt-1 mb-1 py-1">
-                Selected files total @(_totalSelectedBytes / 1024 / 1024)MB —
-                limit is @(WebModeLimitBytes / 1024 / 1024)MB.
-                Please select fewer files.
-            </div>
-        }
-        <InputFile OnChange="HandleFileSelectionAsync" multiple
-                   accept=".xg,.xgp" class="form-control mb-3" disabled="@_busy" />
-    </div>
-</section>
-
-<section class="mb-4">
-    <div style="max-width:800px">
-        <label class="form-label">
-            Opening book (.ob) <span class="text-muted">— optional</span>
-        </label>
-        <InputFile OnChange="HandleOpeningBookSelectionAsync"
-                   accept=".ob" class="form-control mb-1" disabled="@_busy" />
-        <div class="small" id="bookStatus">
-            @if (_bookEntryCount is int entries)
-            {
-                <span class="text-success">
-                    ✓ Book loaded (@entries entries) — book decisions show their enriched depth.
-                </span>
-            }
-            else if (_bookLoadFailed)
-            {
-                <span class="text-danger">
-                    ✗ That file isn't a valid opening book — book decisions will show as level Unknown.
-                </span>
-            }
-            else
-            {
-                <span class="text-muted">
-                    No book loaded — book decisions will show as level Unknown.
-                    Pick XG's OpeningBookV2.ob to enrich them.
-                </span>
-            }
+    @if (_busy)
+    {
+        // The panel's one busy surface. Every slow gesture here runs synchronously
+        // on the WASM thread, so this is the only thing the user can see while it
+        // does — it must be rendered *and* handed a frame to paint in before the
+        // work starts (see RunBusyAsync).
+        <div class="alert alert-info d-flex align-items-center gap-2 busy-notice"
+             role="status" aria-live="polite" style="max-width:800px">
+            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+            <span>@_busyMessage</span>
         </div>
-    </div>
-</section>
+    }
 
-@if (_hasError && !string.IsNullOrEmpty(_statusMessage))
-{
-    <div class="alert alert-danger mt-2">@_statusMessage</div>
-}
-
-@if (_rowCache.Rows.Count > 0)
-{
-    <div class="mb-4" style="max-width:800px">
-        @if (FilterApplied && !FilterDirty)
-        {
-            @if (_rowCache.FilteredRows.Count == 0)
+    <section class="mb-4">
+        <div style="max-width:800px">
+            <label class="form-label">Select .xg / .xgp files</label>
+            @if (!string.IsNullOrEmpty(_lastFolderHint))
             {
-                // Rows loaded but the applied filter set excluded every one of
-                // them. Because an empty (inactive) set passes every row, a zero
-                // count here means the filters are genuinely active — so we can
-                // say so without re-inspecting FilterConfig. Replaces the bland
-                // "0 of N rows match" line that read as a silent success.
-                <div class="alert alert-warning zero-match-notice" role="alert">
-                    No decisions matched these filters — adjust the filters or
-                    select different files.
+                <div><small class="text-muted">Last: @_lastFolderHint</small></div>
+            }
+            @if (_totalSelectedBytes > WebModeLimitBytes)
+            {
+                <div class="alert alert-warning mt-1 mb-1 py-1">
+                    Selected files total @(_totalSelectedBytes / 1024 / 1024)MB —
+                    limit is @(WebModeLimitBytes / 1024 / 1024)MB.
+                    Please select fewer files.
                 </div>
+            }
+            <InputFile OnChange="HandleFileSelectionAsync" multiple
+                       accept=".xg,.xgp" class="form-control mb-3" disabled="@_busy" />
+        </div>
+    </section>
+
+    <section class="mb-4">
+        <div style="max-width:800px">
+            <label class="form-label">
+                Opening book (.ob) <span class="text-muted">— optional</span>
+            </label>
+            <InputFile OnChange="HandleOpeningBookSelectionAsync"
+                       accept=".ob" class="form-control mb-1" disabled="@_busy" />
+            <div class="small" id="bookStatus">
+                @if (_bookEntryCount is int entries)
+                {
+                    <span class="text-success">
+                        ✓ Book loaded (@entries entries) — book decisions show their enriched depth.
+                    </span>
+                }
+                else if (_bookLoadFailed)
+                {
+                    <span class="text-danger">
+                        ✗ That file isn't a valid opening book — book decisions will show as level Unknown.
+                    </span>
+                }
+                else
+                {
+                    <span class="text-muted">
+                        No book loaded — book decisions will show as level Unknown.
+                        Pick XG's OpeningBookV2.ob to enrich them.
+                    </span>
+                }
+            </div>
+        </div>
+    </section>
+
+    @if (_hasError && !string.IsNullOrEmpty(_statusMessage))
+    {
+        <div class="alert alert-danger mt-2">@_statusMessage</div>
+    }
+
+    @if (_rowCache.Rows.Count > 0)
+    {
+        <div class="mb-4" style="max-width:800px">
+            @if (FilterApplied && !FilterDirty)
+            {
+                @if (_rowCache.FilteredRows.Count == 0)
+                {
+                    // Rows loaded but the applied filter set excluded every one of
+                    // them. Because an empty (inactive) set passes every row, a zero
+                    // count here means the filters are genuinely active — so we can
+                    // say so without re-inspecting FilterConfig. Replaces the bland
+                    // "0 of N rows match" line that read as a silent success.
+                    <div class="alert alert-warning zero-match-notice" role="alert">
+                        No decisions matched these filters — adjust the filters or
+                        select different files.
+                    </div>
+                }
+                else
+                {
+                    <div class="mb-2 text-muted">
+                        @_rowCache.FilteredRows.Count of @_rowCache.Rows.Count rows match current filters
+                    </div>
+                }
             }
             else
             {
                 <div class="mb-2 text-muted">
-                    @_rowCache.FilteredRows.Count of @_rowCache.Rows.Count rows match current filters
+                    @_rowCache.Rows.Count rows loaded — set filters and click Apply Filter
                 </div>
             }
-        }
-        else
-        {
-            <div class="mb-2 text-muted">
-                @_rowCache.Rows.Count rows loaded — set filters and click Apply Filter
-            </div>
-        }
 
-        <label class="form-label">Filename</label>
-        <input class="form-control mb-3" style="max-width:400px"
-               placeholder="decisions.csv"
-               value="@_csvFileName"
-               @oninput="OnCsvFileNameChanged" />
+            <label class="form-label">Filename</label>
+            <input class="form-control mb-3" style="max-width:400px"
+                   placeholder="decisions.csv"
+                   value="@_csvFileName"
+                   @oninput="OnCsvFileNameChanged" />
 
-        <button class="btn btn-primary"
-                @onclick="DownloadAsync"
-                disabled="@(_busy || !FilterApplied || FilterDirty || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
-            @(_busy ? "Building…" : DownloadButtonLabel)
-        </button>
-        @if (!FilterApplied || FilterDirty)
-        {
-            <small class="text-muted ms-2">Apply filters first</small>
-        }
-        else if (XgpDownloadBlocked)
-        {
-            <small class="text-muted ms-2">
-                @(_rowCache.FilteredRows.Count == 0
-                    ? "No decisions match the filters"
-                    : "Fix the XGP export options first")
-            </small>
-        }
-    </div>
-}
+            <button class="btn btn-primary"
+                    @onclick="DownloadAsync"
+                    disabled="@(_busy || !FilterApplied || FilterDirty || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
+                @(_busy ? "Building…" : DownloadButtonLabel)
+            </button>
+            @if (!FilterApplied || FilterDirty)
+            {
+                <small class="text-muted ms-2">Apply filters first</small>
+            }
+            else if (XgpDownloadBlocked)
+            {
+                <small class="text-muted ms-2">
+                    @(_rowCache.FilteredRows.Count == 0
+                        ? "No decisions match the filters"
+                        : "Fix the XGP export options first")
+                </small>
+            }
+        </div>
+    }
 
-@if (FilterApplied && !FilterDirty && _rowCache.FilteredRows.Count > 0)
-{
-    <h5>Preview (first @(Math.Min(20, _rowCache.FilteredRows.Count)) of @_rowCache.FilteredRows.Count filtered rows, @_rowCache.Rows.Count total)</h5>
-    <div style="overflow-x:auto">
-        <table class="table table-sm table-striped table-bordered">
-            <thead class="table-dark">
-                <tr>
-                    <th>Xgid</th>
-                    <th>Error</th>
-                    <th>MatchScore</th>
-                    <th>MatchLength</th>
-                    <th>Player</th>
-                    <th>SourceFile</th>
-                    <th>Game</th>
-                    <th>MoveNumber</th>
-                    <th>Roll</th>
-                    <th>AnalysisDepth</th>
-                    <th>Equity</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var r in _rowCache.FilteredRows.Take(20))
-                {
+    @if (FilterApplied && !FilterDirty && _rowCache.FilteredRows.Count > 0)
+    {
+        <h5>Preview (first @(Math.Min(20, _rowCache.FilteredRows.Count)) of @_rowCache.FilteredRows.Count filtered rows, @_rowCache.Rows.Count total)</h5>
+        <div style="overflow-x:auto">
+            <table class="table table-sm table-striped table-bordered">
+                <thead class="table-dark">
                     <tr>
-                        <td><code style="font-size:.75em">@r.Xgid</code></td>
-                        <td>@r.Error</td>
-                        <td>@r.MatchScore</td>
-                        <td>@r.MatchLength</td>
-                        <td>@r.Player</td>
-                        <td>@r.SourceFile</td>
-                        <td>@r.Game</td>
-                        <td>@r.MoveNumber</td>
-                        <td>@r.Roll</td>
-                        <td>@r.AnalysisDepth</td>
-                        <td>@r.Equity</td>
+                        <th>Xgid</th>
+                        <th>Error</th>
+                        <th>MatchScore</th>
+                        <th>MatchLength</th>
+                        <th>Player</th>
+                        <th>SourceFile</th>
+                        <th>Game</th>
+                        <th>MoveNumber</th>
+                        <th>Roll</th>
+                        <th>AnalysisDepth</th>
+                        <th>Equity</th>
                     </tr>
-                }
-            </tbody>
-        </table>
-    </div>
-}
+                </thead>
+                <tbody>
+                    @foreach (var r in _rowCache.FilteredRows.Take(20))
+                    {
+                        <tr>
+                            <td><code style="font-size:.75em">@r.Xgid</code></td>
+                            <td>@r.Error</td>
+                            <td>@r.MatchScore</td>
+                            <td>@r.MatchLength</td>
+                            <td>@r.Player</td>
+                            <td>@r.SourceFile</td>
+                            <td>@r.Game</td>
+                            <td>@r.MoveNumber</td>
+                            <td>@r.Roll</td>
+                            <td>@r.AnalysisDepth</td>
+                            <td>@r.Equity</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+</div>
 
 @code {
     private const long WebModeLimitBytes = 50L * 1024 * 1024;
@@ -193,6 +201,13 @@
     // RunBusyAsync, which owns the paint discipline that makes it visible.
     private bool _busy = false;
     private string _busyMessage = string.Empty;
+
+    // Busy marker for the panel root. It rides _busy — the state the panel
+    // already keeps, unchanged — so every window RunBusyAsync opens gets the
+    // cursor, including any gesture routed through the wrapper later. The
+    // class carries no cursor of its own; app.css holds the single rule, the
+    // same one LocalModePanel's root uses (issue #77).
+    private string? BusyCssClass => _busy ? "is-busy" : null;
 
     private bool _hasError = false;
     private string _statusMessage = string.Empty;
@@ -370,7 +385,9 @@
     /// one place rather than being re-derived per handler. Each body keeps its
     /// own error handling; this wrapper owns only the busy state, and releases
     /// it in a <c>finally</c> so a throwing body can't strand the notice on
-    /// screen.
+    /// screen. The same render that paints the notice puts <c>is-busy</c> on the
+    /// panel root, so the busy cursor is on screen before the body takes the
+    /// thread — the yield is what buys both.
     /// </para>
     /// </remarks>
     private async Task RunBusyAsync(string message, Func<Task> body)

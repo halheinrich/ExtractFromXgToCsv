@@ -1,0 +1,36 @@
+﻿/* ---------------------------------------------------------------------------
+   Busy cursor (issue #77)
+
+   The panels already hold a busy state and already say so in words — a striped
+   indeterminate bar and a phase message in Local mode, an alert and a
+   "Building…" button label in Web mode. What they didn't say was anything at
+   the pointer: through a multi-minute PPTX/PDF render the cursor stayed the
+   plain arrow, which is the one thing the user is looking at while they wait to
+   find out whether their click did anything.
+
+   This is the whole cursor discipline: one class, one rule. Each panel puts
+   `is-busy` on its root for exactly as long as its own busy flag is up, so
+   every busy window that flag covers — today's and any added later — is dressed
+   without a second rule. Nothing in the components names a cursor.
+
+   `progress` rather than `wait`: it is the CSS keyword for "working, but the
+   interface still responds", which is Local mode exactly (Stop and Exit stay
+   live throughout a run). Web mode's WASM gestures do block the thread and are
+   strictly `wait`, but one keyword across both panels is what keeps this a
+   single discipline rather than a per-panel fork.
+
+   Both the descendant selector and `!important` are load-bearing, not
+   defensive. Bootstrap dresses the pointer over exactly the controls the wait
+   started from — `button:not(:disabled){cursor:pointer}` and
+   `.form-control[type=file]:not(:disabled):not([readonly]){cursor:pointer}` —
+   so inheritance from the root reaches nothing that matters, and those
+   selectors outrank anything a single state class can raise its specificity to
+   (0,1,1 and 0,4,0 against 0,1,0). A busy state that has to win over every
+   component's own cursor, everywhere, for as long as it holds, is the case
+   `!important` exists for; a specificity arms race here would be the worse
+   answer, not the purer one.
+   --------------------------------------------------------------------------- */
+.is-busy,
+.is-busy * {
+    cursor: progress !important;
+}

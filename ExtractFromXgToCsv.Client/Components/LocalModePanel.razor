@@ -5,169 +5,176 @@
 @inject IJSRuntime JS
 @inject HttpClient Http
 
-<section class="mb-4">
-    <div style="max-width:800px">
-        <div class="mb-3">
-            <label class="form-label">Folder path</label>
-            <input class="form-control" placeholder="e.g. D:\xg\matches"
-                   value="@_folderPath"
-                   @oninput="OnFolderPathChanged" />
-            @if (_bookStatus is not null)
+@* Panel root. It exists to carry the busy marker: everything the user can
+   point at while a run is in flight sits inside it, so one class here dresses
+   the whole panel with the busy cursor (app.css owns which cursor that is). *@
+<div class="@BusyCssClass">
+
+    <section class="mb-4">
+        <div style="max-width:800px">
+            <div class="mb-3">
+                <label class="form-label">Folder path</label>
+                <input class="form-control" placeholder="e.g. D:\xg\matches"
+                       value="@_folderPath"
+                       @oninput="OnFolderPathChanged" />
+                @if (_bookStatus is not null)
+                {
+                    <div class="small mt-1" id="bookStatus">
+                        @if (_bookStatus.Loaded)
+                        {
+                            <span class="text-success">
+                                ✓ Opening book loaded on the server (@_bookStatus.EntryCount entries) —
+                                book decisions show their enriched depth.
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="text-muted">
+                                No opening book loaded on the server — book decisions will show as
+                                level Unknown. Set the OpeningBookPath configuration key to enable
+                                enrichment.
+                            </span>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="mb-3">
+                <label class="form-label">@(OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
+                <input class="form-control"
+                       placeholder="@(OutputFormat == OutputFormat.Xgp ? "e.g. D:\\xg\\positions" : "e.g. D:\\xg\\decisions.csv")"
+                       value="@_outputPath"
+                       @oninput="OnOutputPathChanged" />
+            </div>
+        </div>
+    </section>
+
+    @if (_hasError && !string.IsNullOrEmpty(_statusMessage))
+    {
+        <div class="alert alert-danger mt-2">@_statusMessage</div>
+    }
+
+    <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
+        <button class="btn btn-primary"
+                @onclick="RunLocalAsync"
+                disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty || XgpRunBlocked)">
+            Run
+        </button>
+        @if (_busy)
+        {
+            <button class="btn btn-danger" @onclick="StopLocalAsync">
+                Stop
+            </button>
+        }
+        <button class="btn btn-outline-secondary" @onclick="ExitAsync">
+            Exit
+        </button>
+        @if (!FilterApplied || FilterDirty)
+        {
+            <small class="text-muted">Apply filters first</small>
+        }
+        else if (XgpRunBlocked)
+        {
+            <small class="text-muted">Fix the XGP export options first</small>
+        }
+    </div>
+
+    @if (_busy || _progress is not null)
+    {
+        <div style="max-width:800px">
+            @if (_progress is null)
             {
-                <div class="small mt-1" id="bookStatus">
-                    @if (_bookStatus.Loaded)
+                // Busy, but no status snapshot has landed yet — the polling loop's
+                // opening Task.Delay(1000) alone guarantees a second of this, and a
+                // cold server start makes it longer. Without this branch the whole
+                // block renders empty and the only acknowledgement of the click is
+                // the Run button greying out.
+                <div class="progress mb-2" style="height:24px">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                         role="progressbar" style="width:100%"></div>
+                </div>
+                <div class="small">
+                    <span class="text-muted" id="startingNotice">Starting…</span>
+                </div>
+            }
+            else if (_progress is { Complete: false, Phase: JobPhase.Rendering })
+            {
+                // The deck pathway's atomic render. Current/Total has stopped at
+                // 100% and ElapsedSec/FilesPerSec are frozen at the values they
+                // held when the last file was read — so the ordinary branch would
+                // show a full solid bar beside stale numbers for however long the
+                // render runs (minutes at corpus scale). An indeterminate bar and
+                // no figures is the honest reading of a phase with no fraction.
+                <div class="progress mb-2" style="height:24px">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                         role="progressbar" style="width:100%"></div>
+                </div>
+                <div class="small">
+                    <span class="text-muted" id="renderingNotice">
+                        @_progress.FileName — @_progress.TotalRows rows collected.
+                        This step can't report progress; it finishes in one go.
+                    </span>
+                </div>
+            }
+            else
+            {
+                <div class="progress mb-2" style="height:24px">
+                    <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"
+                         role="progressbar"
+                         style="width:@(_progress.PercentComplete)%">
+                        @_progress.PercentComplete%
+                    </div>
+                </div>
+                <div class="small">
+                    @if (_progress.Complete && _progress.ErrorMessage is not null)
                     {
-                        <span class="text-success">
-                            ✓ Opening book loaded on the server (@_bookStatus.EntryCount entries) —
-                            book decisions show their enriched depth.
+                        <span class="text-danger fw-bold">
+                            ✗ Error: @_progress.ErrorMessage
+                        </span>
+                    }
+                    else if (_progress.Complete && !_progress.Cancelled)
+                    {
+                        <span class="text-success fw-bold">
+                            ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
+                            (@_progress.FilesPerSec files/sec) → @_outputPath
+                        </span>
+                        @if (_progress.TotalRows == 0 && _builtSet is { IsEmpty: false })
+                        {
+                            // A successful run wrote zero rows through a non-empty
+                            // filter set. Because an empty (inactive) set admits
+                            // every decision, zero survivors can only mean the
+                            // filters are genuinely active — so we surface it as a
+                            // filtered-to-zero result rather than letting the bland
+                            // "Done — 0 rows" line read as a silent success. Sibling
+                            // of WebModePanel's zero-match notice; folder wording for
+                            // Local mode. IsEmpty is the seam — no FilterConfig peek.
+                            <div class="alert alert-warning zero-match-notice mt-2" role="alert">
+                                No decisions matched these filters — adjust the filters
+                                or point at a different folder.
+                            </div>
+                        }
+                    }
+                    else if (_progress.Cancelled)
+                    {
+                        <span class="text-warning fw-bold">
+                            ⏹ Stopped at file @_progress.Current of @_progress.Total
+                            — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
+                            (@_progress.FilesPerSec files/sec)
                         </span>
                     }
                     else
                     {
                         <span class="text-muted">
-                            No opening book loaded on the server — book decisions will show as
-                            level Unknown. Set the OpeningBookPath configuration key to enable
-                            enrichment.
+                            File @_progress.Current of @_progress.Total: @_progress.FileName
+                            — @_progress.TotalRows rows, @_progress.ElapsedSec.ToString("F1")s
+                            (@_progress.FilesPerSec files/sec)
                         </span>
                     }
                 </div>
             }
         </div>
-        <div class="mb-3">
-            <label class="form-label">@(OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
-            <input class="form-control"
-                   placeholder="@(OutputFormat == OutputFormat.Xgp ? "e.g. D:\\xg\\positions" : "e.g. D:\\xg\\decisions.csv")"
-                   value="@_outputPath"
-                   @oninput="OnOutputPathChanged" />
-        </div>
-    </div>
-</section>
+    }
 
-@if (_hasError && !string.IsNullOrEmpty(_statusMessage))
-{
-    <div class="alert alert-danger mt-2">@_statusMessage</div>
-}
-
-<div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
-    <button class="btn btn-primary"
-            @onclick="RunLocalAsync"
-            disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty || XgpRunBlocked)">
-        Run
-    </button>
-    @if (_busy)
-    {
-        <button class="btn btn-danger" @onclick="StopLocalAsync">
-            Stop
-        </button>
-    }
-    <button class="btn btn-outline-secondary" @onclick="ExitAsync">
-        Exit
-    </button>
-    @if (!FilterApplied || FilterDirty)
-    {
-        <small class="text-muted">Apply filters first</small>
-    }
-    else if (XgpRunBlocked)
-    {
-        <small class="text-muted">Fix the XGP export options first</small>
-    }
 </div>
-
-@if (_busy || _progress is not null)
-{
-    <div style="max-width:800px">
-        @if (_progress is null)
-        {
-            // Busy, but no status snapshot has landed yet — the polling loop's
-            // opening Task.Delay(1000) alone guarantees a second of this, and a
-            // cold server start makes it longer. Without this branch the whole
-            // block renders empty and the only acknowledgement of the click is
-            // the Run button greying out.
-            <div class="progress mb-2" style="height:24px">
-                <div class="progress-bar progress-bar-striped progress-bar-animated"
-                     role="progressbar" style="width:100%"></div>
-            </div>
-            <div class="small">
-                <span class="text-muted" id="startingNotice">Starting…</span>
-            </div>
-        }
-        else if (_progress is { Complete: false, Phase: JobPhase.Rendering })
-        {
-            // The deck pathway's atomic render. Current/Total has stopped at
-            // 100% and ElapsedSec/FilesPerSec are frozen at the values they
-            // held when the last file was read — so the ordinary branch would
-            // show a full solid bar beside stale numbers for however long the
-            // render runs (minutes at corpus scale). An indeterminate bar and
-            // no figures is the honest reading of a phase with no fraction.
-            <div class="progress mb-2" style="height:24px">
-                <div class="progress-bar progress-bar-striped progress-bar-animated"
-                     role="progressbar" style="width:100%"></div>
-            </div>
-            <div class="small">
-                <span class="text-muted" id="renderingNotice">
-                    @_progress.FileName — @_progress.TotalRows rows collected.
-                    This step can't report progress; it finishes in one go.
-                </span>
-            </div>
-        }
-        else
-        {
-            <div class="progress mb-2" style="height:24px">
-                <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"
-                     role="progressbar"
-                     style="width:@(_progress.PercentComplete)%">
-                    @_progress.PercentComplete%
-                </div>
-            </div>
-            <div class="small">
-                @if (_progress.Complete && _progress.ErrorMessage is not null)
-                {
-                    <span class="text-danger fw-bold">
-                        ✗ Error: @_progress.ErrorMessage
-                    </span>
-                }
-                else if (_progress.Complete && !_progress.Cancelled)
-                {
-                    <span class="text-success fw-bold">
-                        ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                        (@_progress.FilesPerSec files/sec) → @_outputPath
-                    </span>
-                    @if (_progress.TotalRows == 0 && _builtSet is { IsEmpty: false })
-                    {
-                        // A successful run wrote zero rows through a non-empty
-                        // filter set. Because an empty (inactive) set admits
-                        // every decision, zero survivors can only mean the
-                        // filters are genuinely active — so we surface it as a
-                        // filtered-to-zero result rather than letting the bland
-                        // "Done — 0 rows" line read as a silent success. Sibling
-                        // of WebModePanel's zero-match notice; folder wording for
-                        // Local mode. IsEmpty is the seam — no FilterConfig peek.
-                        <div class="alert alert-warning zero-match-notice mt-2" role="alert">
-                            No decisions matched these filters — adjust the filters
-                            or point at a different folder.
-                        </div>
-                    }
-                }
-                else if (_progress.Cancelled)
-                {
-                    <span class="text-warning fw-bold">
-                        ⏹ Stopped at file @_progress.Current of @_progress.Total
-                        — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                        (@_progress.FilesPerSec files/sec)
-                    </span>
-                }
-                else
-                {
-                    <span class="text-muted">
-                        File @_progress.Current of @_progress.Total: @_progress.FileName
-                        — @_progress.TotalRows rows, @_progress.ElapsedSec.ToString("F1")s
-                        (@_progress.FilesPerSec files/sec)
-                    </span>
-                }
-            </div>
-        }
-    </div>
-}
 
 @code {
     [Parameter] public OutputFormat OutputFormat { get; set; }
@@ -180,6 +187,14 @@
 
     private bool XgpRunBlocked =>
         OutputFormat == OutputFormat.Xgp && !XgpOptions.TryValidate(out _);
+
+    // Busy marker for the panel root. It rides _busy — the state the panel
+    // already keeps, unchanged — so every window that flag covers gets the
+    // cursor: the pre-first-poll "Starting…" gap, the deck pathway's
+    // multi-minute atomic render, the determinate stretch between them, and
+    // any busy window added later. The class carries no cursor of its own;
+    // app.css holds the single rule (issue #77).
+    private string? BusyCssClass => _busy ? "is-busy" : null;
 
     private string _folderPath = string.Empty;
     private string _outputPath = string.Empty;
