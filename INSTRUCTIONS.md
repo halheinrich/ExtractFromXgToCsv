@@ -120,6 +120,7 @@ ExtractFromXgToCsv.Tests/
   OpeningBookProviderTests.cs           — path resolution + load/degrade
   Make20PtSmokeTests.cs
   OutputConsistencyTests.cs
+  WebModePanelBusyAffordanceTests.cs    — busy render/yield ordering (bUnit)
   WebModePanelFilteringTests.cs         — panel → FilteredRowCache routing (bUnit)
   WebModePanelOpeningBookTests.cs       — .ob input status + late-book re-extract (bUnit)
   WebModePanelRefilterOnLoadTests.cs    — post-Apply file selection filters immediately (bUnit)
@@ -241,7 +242,8 @@ export. In Local mode the count is the final
   buttons, polling loop, progress bar. Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
   Takes `FilterConfig` (serializable) so it can POST it to the server.
-- **`WebModePanel.razor`** — file picker, preview table, download. Parameters:
+- **`WebModePanel.razor`** — file picker, preview table, download; every slow
+  gesture runs through `RunBusyAsync` (see "Busy affordance"). Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
   The live row state — loaded decision and diagram rows, the materialized
   `DecisionFilterSet`, and the filtered projections — lives in
@@ -264,6 +266,24 @@ export. In Local mode the count is the final
 
 Run button is disabled whenever the filter panel is dirty, forcing the user
 to apply or discard pending changes before a run.
+
+### Busy affordance
+
+Measured on a 266-file / 14.4 MB corpus (issue #53). Web mode is the severe
+half: the WASM interpreter runs this pipeline ~30–80× slower than native, so
+selecting five files freezes the tab for **3.8 s cold** (~760 ms/file cold,
+~240 ms/file once the jiterpreter warms), the full corpus for **57 s**, a
+`.xgp` zip of 386 decisions for **6.6 s**, and a 6,515-row Diagram JSON for
+**15.6 s**. Apply Filter, by contrast, is 30–71 ms and deliberately gets
+nothing.
+
+`WebModePanel` routes every slow gesture — file selection, opening-book pick,
+and all three download formats — through one private `RunBusyAsync(message,
+body)`, which raises `_busy`/`_busyMessage`, renders, **yields**, runs the
+body, and releases in a `finally`. It drives a single `busy-notice` alert at
+the top of the panel (the Download button's own "Building…" label is the local
+half of the same state). The yield is load-bearing, not stylistic — see
+Pitfalls. `RunBusyForTest` is its test seam, sibling of `RowCache`.
 
 ### Modes
 
@@ -458,6 +478,17 @@ project via relative path — not duplicated here.
   dirty leaves the cache untouched), observed through the panel's
   internal `RowCache` seam. Guards the migration failure mode of a panel
   that compiles but filters beside the cache instead of through it.
+- `WebModePanelBusyAffordanceTests` — the busy contract, pinned as two
+  independent halves because the failure mode is ordering, not duration: the
+  busy state is *rendered* before the body runs (drop the `StateHasChanged`
+  and it fails), and the wrapper *yields* before the body runs (drop the
+  `Task.Yield` and it fails). The yield half checks on the same synchronous
+  stack that called the wrapper — if the body already ran by the time the
+  returned task is in hand, the thread was never handed back, which is exactly
+  the state in which a queued render can't paint. Plus one pin per gesture
+  (file pick, book pick, each download format) that it routes through the
+  wrapper at all. A component test can only pin the wiring; the paint itself
+  was pinned against a real browser during the issue #53 measurement pass.
 - `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
   failure shape) and per-token rendering, including the counter-unification
   pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
@@ -591,6 +622,19 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **WASM can't stream HTTP responses.** Local-mode progress is delivered by
   client polling, not server-pushed streaming. Don't "fix" this by adding an
   `IAsyncEnumerable` endpoint expecting WASM to consume it.
+- **A Web-mode busy state raised immediately before its work never reaches
+  the screen.** WASM runs Blazor on one thread and `StateHasChanged` only
+  *queues* a render — the queue drains when the thread is handed back. So
+  `_busy = true; StateHasChanged(); DoSynchronousWork();` paints nothing,
+  while looking correct in review. `RunBusyAsync`'s `await Task.Yield()` is
+  the load-bearing line; don't "simplify" it away, and route new slow gestures
+  through the wrapper rather than raising `_busy` by hand. Measured before the
+  fix (issue #53): on a 6.6 s zip build the "Building…" label entered the DOM
+  **14 ms after the build finished** and reverted 22 ms later; on CSV and JSON
+  it never entered the DOM at all. `WebModePanelBusyAffordanceTests` pins both
+  halves separately — that the busy state is rendered before the body runs,
+  and that the wrapper yields before it — because a bUnit assertion on the
+  markup alone passes with or without the yield.
 - **`prerender:false` is required.** Filter state and file pickers live in
   the WASM runtime; a prerendered server pass would double-init components
   and lose state. Don't enable prerendering on the routable components.
@@ -744,7 +788,10 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **Streaming JSON write for large datasets.** Current Diagram JSON output is
   a single in-memory array. Very large corpora may need a streaming writer
   (NDJSON or JSON-array streaming) rather than building the full document
-  before serializing.
+  before serializing. Measured (issue #53, Web mode/WASM): 6,515 filtered rows
+  build a **50.9 MB** document in **15.6 s** of blocked main thread — the
+  in-memory build is the cost, and it is now behind a busy affordance rather
+  than fixed.
 - **Abandoned-job expiry in `JobStore`.** Completed jobs are now removed when
   their terminal snapshot is read (see Job lifecycle), so normal runs
   self-clear. What remains is the abandoned case — a client that never polls to

@@ -6,6 +6,19 @@
 @inject XgProcessingService Processor
 @inject IJSRuntime JS
 
+@if (_busy)
+{
+    // The panel's one busy surface. Every slow gesture here runs synchronously
+    // on the WASM thread, so this is the only thing the user can see while it
+    // does — it must be rendered *and* handed a frame to paint in before the
+    // work starts (see RunBusyAsync).
+    <div class="alert alert-info d-flex align-items-center gap-2 busy-notice"
+         role="status" aria-live="polite" style="max-width:800px">
+        <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+        <span>@_busyMessage</span>
+    </div>
+}
+
 <section class="mb-4">
     <div style="max-width:800px">
         <label class="form-label">Select .xg / .xgp files</label>
@@ -22,7 +35,7 @@
             </div>
         }
         <InputFile OnChange="HandleFileSelectionAsync" multiple
-                   accept=".xg,.xgp" class="form-control mb-3" />
+                   accept=".xg,.xgp" class="form-control mb-3" disabled="@_busy" />
     </div>
 </section>
 
@@ -32,7 +45,7 @@
             Opening book (.ob) <span class="text-muted">— optional</span>
         </label>
         <InputFile OnChange="HandleOpeningBookSelectionAsync"
-                   accept=".ob" class="form-control mb-1" />
+                   accept=".ob" class="form-control mb-1" disabled="@_busy" />
         <div class="small" id="bookStatus">
             @if (_bookEntryCount is int entries)
             {
@@ -175,7 +188,12 @@
     private string _csvFileName = "decisions.csv";
     private string _lastFolderHint = string.Empty;
     private long _totalSelectedBytes = 0;
+
+    // Busy state for every slow gesture on this panel — raised only through
+    // RunBusyAsync, which owns the paint discipline that makes it visible.
     private bool _busy = false;
+    private string _busyMessage = string.Empty;
+
     private bool _hasError = false;
     private string _statusMessage = string.Empty;
 
@@ -258,61 +276,129 @@
             return;
         }
 
-        if (files.Count > 0)
-        {
-            _lastFolderHint = $"{files.Count} file(s) — first: {files[0].Name}";
-            await JS.InvokeVoidAsync("localStorage.setItem", "xg_lastFolderHint", _lastFolderHint);
-        }
+        // A dismissed picker selects nothing: the clear above is the whole
+        // effect, and raising busy for it would flash a notice over no work
+        // (the wrapper's yield guarantees the flash would actually paint).
+        if (files.Count == 0) return;
 
-        try
-        {
-            foreach (var file in files)
+        _lastFolderHint = $"{files.Count} file(s) — first: {files[0].Name}";
+        await JS.InvokeVoidAsync("localStorage.setItem", "xg_lastFolderHint", _lastFolderHint);
+
+        await RunBusyAsync(
+            $"Reading {files.Count} file(s) and extracting decisions…",
+            async () =>
             {
-                using var ms = new MemoryStream();
-                await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
-                _fileBytes[file.Name] = ms.ToArray();
-            }
-            ExtractLoadedFiles();
-        }
-        catch (Exception ex)
-        {
-            _hasError = true;
-            _statusMessage = $"Error: {ex.Message}";
-        }
+                try
+                {
+                    foreach (var file in files)
+                    {
+                        using var ms = new MemoryStream();
+                        await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
+                        _fileBytes[file.Name] = ms.ToArray();
+                    }
+                    ExtractLoadedFiles();
+                }
+                catch (Exception ex)
+                {
+                    _hasError = true;
+                    _statusMessage = $"Error: {ex.Message}";
+                }
+            });
     }
 
     private async Task HandleOpeningBookSelectionAsync(InputFileChangeEventArgs e)
     {
         _bookLoadFailed = false;
-        try
-        {
-            using var ms = new MemoryStream();
-            await e.File.OpenReadStream(maxAllowedSize: OpeningBookMaxBytes).CopyToAsync(ms);
 
-            if (Processor.TryLoadOpeningBook(ms.ToArray(), out var book))
+        // One message has to cover the whole gesture: the load and the
+        // re-extract both hold the thread, so there is no frame in between to
+        // update it in. Naming the re-extract when there are files to re-read
+        // is what keeps the notice from under-promising a multi-second wait.
+        var message = _fileBytes.Count > 0
+            ? $"Loading opening book and re-reading {_fileBytes.Count} file(s)…"
+            : "Loading opening book…";
+
+        await RunBusyAsync(message, async () =>
+        {
+            try
             {
-                _openingBook = book;
-                _bookEntryCount = book.EntryCount;
+                using var ms = new MemoryStream();
+                await e.File.OpenReadStream(maxAllowedSize: OpeningBookMaxBytes).CopyToAsync(ms);
+
+                if (Processor.TryLoadOpeningBook(ms.ToArray(), out var book))
+                {
+                    _openingBook = book;
+                    _bookEntryCount = book.EntryCount;
+                }
+                else
+                {
+                    _openingBook = null;
+                    _bookEntryCount = null;
+                    _bookLoadFailed = true;
+                }
             }
-            else
+            catch (Exception)
             {
                 _openingBook = null;
                 _bookEntryCount = null;
                 _bookLoadFailed = true;
             }
-        }
-        catch (Exception)
-        {
-            _openingBook = null;
-            _bookEntryCount = null;
-            _bookLoadFailed = true;
-        }
 
-        // Re-extract already-loaded files so a book chosen after the .xg files
-        // still enriches them — and a currently-applied filter view updates.
-        if (_fileBytes.Count > 0)
-            ExtractLoadedFiles();
+            // Re-extract already-loaded files so a book chosen after the .xg
+            // files still enriches them — and a currently-applied filter view
+            // updates.
+            if (_fileBytes.Count > 0)
+                ExtractLoadedFiles();
+        });
     }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> with the panel's busy notice showing.
+    /// </summary>
+    /// <remarks>
+    /// The <c>await Task.Yield()</c> is the load-bearing line. WASM runs Blazor
+    /// on one thread and <c>StateHasChanged</c> only *queues* a render, so a
+    /// busy state raised immediately before synchronous work never reaches the
+    /// screen: the flag flips and reverts inside a single task and the
+    /// affordance does nothing while looking correct in review. The yield hands
+    /// the thread back so the queued render can paint before
+    /// <paramref name="body"/> takes it again. Measured on issue #53 — without
+    /// it, the "Building…" label entered the DOM 14 ms *after* a 6.6 s zip
+    /// build had already finished.
+    /// <para>
+    /// Every slow Web-mode gesture goes through here, so the discipline lives in
+    /// one place rather than being re-derived per handler. Each body keeps its
+    /// own error handling; this wrapper owns only the busy state, and releases
+    /// it in a <c>finally</c> so a throwing body can't strand the notice on
+    /// screen.
+    /// </para>
+    /// </remarks>
+    private async Task RunBusyAsync(string message, Func<Task> body)
+    {
+        _busy = true;
+        _busyMessage = message;
+        StateHasChanged();
+        await Task.Yield();
+        try
+        {
+            await body();
+        }
+        finally
+        {
+            _busy = false;
+            _busyMessage = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Test seam for the busy contract — the same wrapper every slow gesture
+    /// runs through, reachable without a real file pick so the ordering tests
+    /// can supply a body that observes when it was called. Sibling of the
+    /// <see cref="RowCache"/> seam; not a production entry point.
+    /// </summary>
+    internal Task RunBusyForTest(string message, Func<Task> body) =>
+        RunBusyAsync(message, body);
 
     // Re-derives every row from the retained file bytes using the current
     // opening book and hands them to the cache, which re-projects them through
@@ -352,9 +438,20 @@
         _                        => "Download CSV",
     };
 
-    private async Task DownloadAsync()
+    private string BuildingMessage => OutputFormat switch
     {
-        _busy = true;
+        OutputFormat.DiagramJson => "Building JSON…",
+        OutputFormat.Xgp         => "Building ZIP…",
+        _                        => "Building CSV…",
+    };
+
+    // Not format-gated: CSV is the fast one today, but the builders share this
+    // one path and the yield costs a single frame, so gating it would buy a
+    // special case and nothing else.
+    private Task DownloadAsync() => RunBusyAsync(BuildingMessage, DownloadCoreAsync);
+
+    private async Task DownloadCoreAsync()
+    {
         _hasError = false; _statusMessage = string.Empty;
         try
         {
@@ -398,6 +495,5 @@
             _hasError = true;
             _statusMessage = $"Error: {ex.Message}";
         }
-        finally { _busy = false; }
     }
 }
