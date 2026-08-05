@@ -506,10 +506,17 @@ public class LocalFolderProcessor
         // Render and write are atomic — the renderer returns the full byte[]
         // and mid-render cancellation isn't supported. Cancellation gating
         // happens during the per-file collect loop above.
+        //
+        // This is the last snapshot the client sees until the run finishes, and
+        // the render dominates the wall clock (minutes, at corpus scale), so it
+        // is stamped JobPhase.Rendering: the counter and the elapsed/throughput
+        // figures below have stopped advancing, and the phase is what tells the
+        // client to stop presenting them as live.
         progress.Report(new ProcessingProgress
         {
             Current = files.Count,
             Total = files.Count,
+            Phase = JobPhase.Rendering,
             FileName = $"Rendering {formatLabel} ({totalRows} decisions, {requests.Count} slides)…",
             TotalRows = totalRows,
             ElapsedSec = stopwatch.Elapsed.TotalSeconds,

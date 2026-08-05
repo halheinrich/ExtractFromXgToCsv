@@ -76,7 +76,41 @@
 @if (_busy || _progress is not null)
 {
     <div style="max-width:800px">
-        @if (_progress is not null)
+        @if (_progress is null)
+        {
+            // Busy, but no status snapshot has landed yet — the polling loop's
+            // opening Task.Delay(1000) alone guarantees a second of this, and a
+            // cold server start makes it longer. Without this branch the whole
+            // block renders empty and the only acknowledgement of the click is
+            // the Run button greying out.
+            <div class="progress mb-2" style="height:24px">
+                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                     role="progressbar" style="width:100%"></div>
+            </div>
+            <div class="small">
+                <span class="text-muted" id="startingNotice">Starting…</span>
+            </div>
+        }
+        else if (_progress is { Complete: false, Phase: JobPhase.Rendering })
+        {
+            // The deck pathway's atomic render. Current/Total has stopped at
+            // 100% and ElapsedSec/FilesPerSec are frozen at the values they
+            // held when the last file was read — so the ordinary branch would
+            // show a full solid bar beside stale numbers for however long the
+            // render runs (minutes at corpus scale). An indeterminate bar and
+            // no figures is the honest reading of a phase with no fraction.
+            <div class="progress mb-2" style="height:24px">
+                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                     role="progressbar" style="width:100%"></div>
+            </div>
+            <div class="small">
+                <span class="text-muted" id="renderingNotice">
+                    @_progress.FileName — @_progress.TotalRows rows collected.
+                    This step can't report progress; it finishes in one go.
+                </span>
+            </div>
+        }
+        else
         {
             <div class="progress mb-2" style="height:24px">
                 <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"

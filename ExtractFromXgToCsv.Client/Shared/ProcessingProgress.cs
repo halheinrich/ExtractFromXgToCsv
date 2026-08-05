@@ -14,7 +14,18 @@ public class ProcessingProgress
     public int Total { get; set; }
 
     /// <summary>Name of the file being processed, or a terminal marker such as <c>"Done"</c>.</summary>
+    /// <remarks>
+    /// Presentation only — a line to show the user. Which stage the run is in is
+    /// <see cref="Phase"/>; never re-derive it by inspecting this string.
+    /// </remarks>
     public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Which stage of the run this snapshot describes. Drives the client's
+    /// choice of a determinate or indeterminate busy affordance — see
+    /// <see cref="JobPhase"/>.
+    /// </summary>
+    public JobPhase Phase { get; set; } = JobPhase.Processing;
 
     /// <summary>Rows/decisions written so far; on a terminal snapshot, the run's final count.</summary>
     public int TotalRows { get; set; }

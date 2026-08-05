@@ -93,6 +93,7 @@ ExtractFromXgToCsv.Client/              — WASM
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
     AppModeResponse.cs                  — { Mode } body for GET /api/appmode
+    JobPhase.cs                         — Processing | Rendering (progress-snapshot stage)
     OpeningBookStatus.cs                — { Loaded, EntryCount } for GET /api/openingbook/status
     OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf | Xgp
     ProcessRequest.cs                   — POST body for /api/process/start
@@ -113,9 +114,11 @@ ExtractFromXgToCsv.Tests/
   HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
   LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
+  LocalFolderProcessorPhaseTests.cs     — JobPhase reporting per pathway
   LocalFolderProcessorPptxTests.cs
   LocalFolderProcessorOpeningBookTests.cs — book reaches every processor pathway
   LocalFolderProcessorXgpTests.cs       — Local-mode .xgp folder output wiring
+  LocalModePanelBusyAffordanceTests.cs  — no-fraction progress states (bUnit)
   LocalModePanelGateTests.cs            — Run-button dirty-gating + error render (bUnit)
   OpeningBookProviderTests.cs           — path resolution + load/degrade
   Make20PtSmokeTests.cs
@@ -239,7 +242,8 @@ export. In Local mode the count is the final
   re-Apply is not available as a recovery gesture). Always visible in both
   modes so the workflow is consistent: configure filters → select files → run.
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
-  buttons, polling loop, progress bar. Parameters:
+  buttons, polling loop, progress bar (determinate, plus the two
+  indeterminate states in "Busy affordance"). Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
   Takes `FilterConfig` (serializable) so it can POST it to the server.
 - **`WebModePanel.razor`** — file picker, preview table, download; every slow
@@ -284,6 +288,17 @@ body, and releases in a `finally`. It drives a single `busy-notice` alert at
 the top of the panel (the Download button's own "Building…" label is the local
 half of the same state). The yield is load-bearing, not stylistic — see
 Pitfalls. `RunBusyForTest` is its test seam, sibling of `RowCache`.
+
+Local mode's progress bar already covers the CSV, Diagram JSON and Xgp
+pathways end to end (2 s runs, reporting throughout). Two states carry no
+fraction and get an indeterminate striped bar instead:
+
+- **Before the first status poll** (`_busy && _progress is null`) — the
+  polling loop's opening `Task.Delay(1000)` alone guarantees a second of it.
+- **The deck pathway's atomic render** (`Phase == JobPhase.Rendering`) — 144 s
+  for PPTX and 405 s for PDF at corpus scale, during which the determinate bar
+  would sit solid at 100% beside an elapsed figure frozen near 1 s. The
+  branch also suppresses those stale elapsed/throughput numbers.
 
 ### Modes
 
@@ -489,6 +504,17 @@ project via relative path — not duplicated here.
   (file pick, book pick, each download format) that it routes through the
   wrapper at all. A component test can only pin the wiring; the paint itself
   was pinned against a real browser during the issue #53 measurement pass.
+- `LocalModePanelBusyAffordanceTests` — the two no-fraction progress states:
+  busy-before-first-poll and `JobPhase.Rendering` both render an indeterminate
+  striped bar, the rendering branch suppresses the frozen elapsed/throughput
+  figures, and — the pin that catches a regression to prefix-matching — the
+  same snapshot with a "Rendering…" `FileName` but `Phase = Processing` keeps
+  the determinate bar and its figures.
+- `LocalFolderProcessorPhaseTests` — the server half of the same contract: the
+  deck pathway reports exactly one `Rendering` snapshot, it is non-terminal and
+  the last thing sent before the terminal one, and the streaming pathways never
+  report `Rendering`. Runs one small fixture in a temp folder behind a narrow
+  filter — a full-corpus deck render costs minutes to learn the same thing.
 - `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
   failure shape) and per-token rendering, including the counter-unification
   pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
@@ -545,11 +571,13 @@ POST /api/process/start
            for every other format it names the output file.
 
 GET  /api/process/{jobId}/status
-  200 →  ProcessingProgress { Current, Total, FileName, TotalRows,
+  200 →  ProcessingProgress { Current, Total, Phase, FileName, TotalRows,
                               Complete, Cancelled, ElapsedSec, FilesPerSec,
                               ErrorMessage?, PercentComplete (computed) }
          — PercentComplete is derived from Current/Total; ErrorMessage is
-           non-null only on the catch path (terminal error state).
+           non-null only on the catch path (terminal error state); Phase is
+           the JobPhase discriminator the client picks its progress bar from
+           (FileName is presentation and is never parsed for it).
 
 POST /api/process/{jobId}/cancel
   200 →  (empty)
@@ -584,6 +612,12 @@ project reference.
   than folded into `AppModeResponse`: book status is Local-only, and
   `AppModeController` serves both modes (where the book provider isn't
   registered), so the concerns can't share an endpoint.
+- `JobPhase` — enum `Processing | Rendering`. Which stage of a Local-mode run a
+  `ProcessingProgress` snapshot describes, and the SSOT the client branches its
+  progress bar on. Deliberately has no terminal member: `Complete` /
+  `Cancelled` / `ErrorMessage` already are the terminal-state SSOT and a second
+  one could disagree with them. `Processing` is `0`, so every pathway with only
+  that one stage needs no assignment.
 - `OutputFormat` — enum `Csv | DiagramJson | Pptx | Pdf | Xgp`. Server
   references it too, which is why it lives under `Client/Shared` rather than
   being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` works in
@@ -635,6 +669,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   halves separately — that the busy state is rendered before the body runs,
   and that the wrapper yields before it — because a bUnit assertion on the
   markup alone passes with or without the yield.
+- **`ProcessingProgress.Phase` is the progress-stage SSOT; `FileName` is
+  presentation.** The rendering line reads "Rendering PPTX (…)" for humans,
+  but the client branches on `JobPhase.Rendering`. Don't re-derive the stage by
+  prefix-matching `FileName` — the two would drift, and the string is the half
+  that's meant to change freely. `LocalModePanelBusyAffordanceTests` pins the
+  direction that catches it: the same snapshot with a "Rendering…" `FileName`
+  but `Phase = Processing` keeps the determinate bar.
 - **`prerender:false` is required.** Filter state and file pickers live in
   the WASM runtime; a prerendered server pass would double-init components
   and lose state. Don't enable prerendering on the routable components.
