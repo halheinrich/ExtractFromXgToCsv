@@ -29,8 +29,14 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   and constituent types. All four output pathways
   (CSV, Diagram JSON, PPTX, and PDF) share the filter pipeline via
   `IDecisionFilterData`.
-- **XgFilter_Razor** — `FilterPanel` Razor component. Referenced by the
-  WASM Client csproj only; the server has no filter UI to host.
+- **XgFilter_Razor** — `FilterSurface` (the one consumer-facing filter
+  composite: filter panel + saved-filters panel + all wiring, the
+  applied-holder mediation, and the source-change rule) plus the non-visual
+  interaction model it drives: `AppliedFilter`, `FilterSourceToken`,
+  `IFilterDocumentStorage` / `FilterStorageException`, `SavedFiltersDocument`.
+  Referenced by the WASM Client csproj only — the server has no filter UI to
+  host, and its saved-filters file relay must stay ignorant of the document
+  names (see Pitfalls).
 - **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData` and the
   diagram model/options types. Native-free (SVG-only) core.
 - **BackgammonDiagram_Lib.ExportRaster** — `DiagramRasterRenderer.RenderPptx`
@@ -63,6 +69,7 @@ ExtractFromXgToCsv/                     — server host (thin)
       Error.razor                       — server-rendered error page
   Controllers/
     AppModeController.cs
+    FilterDocumentController.cs         — saved-filters file relay (Local-only via action guard)
     OpeningBookController.cs            — GET book status (Local mode only)
     ProcessController.cs                — primary-constructor DI
     ShutdownController.cs
@@ -70,6 +77,7 @@ ExtractFromXgToCsv/                     — server host (thin)
     launchSettings.json
   Services/
     AppModeService.cs                   — singleton, exposes configured mode
+    FilterDocumentStore.cs              — singleton, named-text-file IO + filename-shape rule
     JobStore.cs                         — singleton, job registry
     LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
     OpeningBookProvider.cs              — singleton, resolves + loads the opening book
@@ -91,6 +99,7 @@ ExtractFromXgToCsv.Client/              — WASM
     launchSettings.json
   Services/
     FilteredRowCache.cs                 — Web-mode rows + filtered projections + identity-cached Build
+    HttpFilterDocumentStorage.cs        — IFilterDocumentStorage over the server's file relay
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
     AppModeResponse.cs                  — { Mode } body for GET /api/appmode
@@ -108,11 +117,14 @@ ExtractFromXgToCsv.Client/              — WASM
     XgpTokenSource.cs                   — Batch | PerItem token classification
 ExtractFromXgToCsv.Tests/
   ExtractFromXgToCsv.Tests.csproj
-  bUnitTestHelpers.cs                   — reflection accessor + StubAppModeHandler
+  bUnitTestHelpers.cs                   — reflection accessor + stub HTTP handlers
   BusyCursorTests.cs                    — busy marker ↔ busy state, both panels (bUnit)
+  FilterDocumentEndpointTests.cs        — hosted wire pins for the file relay (WebApplicationFactory)
+  FilterDocumentStoreTests.cs           — filename-shape rule + IO contracts (direct)
   FilteredRowCacheTests.cs              — projection + identity-cache invariants (direct)
   FixtureHelper.cs
-  HomeWiringTests.cs                    — FilterPanel → Home wiring (bUnit)
+  HomeWiringTests.cs                    — FilterSurface → Home wiring + per-mode re-gate (bUnit)
+  HttpFilterDocumentStorageTests.cs     — client relay adapter contracts (direct)
   HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
   LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
@@ -230,27 +242,57 @@ export. In Local mode the count is the final
 
 ### Components
 
-- **`Home.razor`** — shell. Detects app mode, owns shared state (output format,
-  filter config, filter applied/dirty), renders the output-format radio and
-  `FilterPanel`, and delegates to `LocalModePanel` or `WebModePanel`.
-- **`FilterPanel.razor`** — owns all filter state. Raises
-  `OnFilterConfigChanged EventCallback<FilterConfig>` on Apply / Reset, and
-  `OnAppliedStateChanged EventCallback<FilterConfig?>` after every gesture that
-  touches its edit buffers, carrying the committed config those buffers now
-  equal or `null` when they equal none. `Home` maps that null-ness straight
-  onto `_filterDirty` on every report, so Run is disabled until Apply — and
-  re-enabled when an edit is undone back to the applied values, which the
-  panel reports as clean (it disables Apply for an unchanged selection, so a
-  re-Apply is not available as a recovery gesture). Always visible in both
-  modes so the workflow is consistent: configure filters → select files → run.
+- **`Home.razor`** — shell, and the `FilterSurface` host. Detects app mode,
+  owns shared state (output format, last-committed filter config, filter
+  dirty), renders the output-format radio and the producer composite, and
+  delegates to `LocalModePanel` or `WebModePanel`. As the host it binds
+  facts and side effects only:
+  - **The applied holder.** XgFilter_Razor's `AppliedFilter` (DI-scoped,
+    injected) is the applied-state SSOT: the composite mediates it — a
+    commit `Set`s it stamped with the source token, an uncommitted-edit
+    report `Clear`s it, a source change expires it. The mode panels'
+    `FilterApplied` parameter is fed straight from `AppliedFilter.IsApplied`;
+    `_filterDirty` is assigned from each `OnAppliedStateChanged` payload's
+    null-ness, statelessly per the producer contract. `_filterConfig` (the
+    last-committed config the panels POST / refilter with and the XGP
+    preview reads) is a distinct fact and stays a Home field.
+  - **Source identity (the #78 re-gate).** Local mode's source is the input
+    folder path, hoisted into Home: `_folderPathText` follows every
+    keystroke (and persists under `xg_folderPath`), while the separate
+    `_localSourcePath` latches only at the input's `@onchange` boundary —
+    and once at the localStorage restore, which is a committed value. The
+    token is minted from the latch only (`FromPath`, normalized: trailing
+    separator trimmed + upper-cased for Windows' case-insensitive identity;
+    IO keeps the user's spelling), never from the live text — per-keystroke
+    re-gating was ruled out. Web mode's source is the file selection:
+    Home bumps `_webSelectionGeneration` on the panel's selection event and
+    mints `FromGeneration`. Blank path / no selection yet = null token = no
+    source: applies made then are deliberately unrecorded, and the first
+    real source runs the composite's end-setup, re-arming Apply. The output
+    path is **not** a source and never re-gates (umbrella-ratified).
+  - **The saved-filters seam.** One `HttpFilterDocumentStorage` instance,
+    constructed over a delegate reading the latched path (the composite
+    rebuilds its store when the bound `Storage` *reference* changes, so the
+    live folder rides the delegate). Bound in Local mode while a folder is
+    latched; null otherwise — a blank path renders no saved-filters
+    section, never a load failure — and always null in Web mode (ruled: a
+    second store is forbidden drift; no localStorage fallback).
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar (determinate, plus the two
-  indeterminate states in "Busy affordance"). Parameters:
-  `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
-  Takes `FilterConfig` (serializable) so it can POST it to the server.
+  indeterminate states in "Busy affordance"). Parameters: `OutputFormat`,
+  `FilterConfig`, `FilterApplied`, `FilterDirty`, the folder input's
+  controlled-component trio (`FolderPath`, `FolderPathChanged` per
+  keystroke, `OnFolderPathCommitted` at the change boundary — Home owns the
+  value; all three `[EditorRequired]`, they are the re-gate's wiring), and
+  the XGP members. The output path stays panel-owned. Takes `FilterConfig`
+  (serializable) so it can POST it to the server.
 - **`WebModePanel.razor`** — file picker, preview table, download; every slow
   gesture runs through `RunBusyAsync` (see "Busy affordance"). Parameters:
-  `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`.
+  `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`,
+  `OnSelectionChanged` (`[EditorRequired]`; raised once per file-selection
+  gesture — every `HandleFileSelectionAsync` invocation, since each one
+  replaces or clears the retained selection — so Home can bump the
+  selection generation), and the XGP members.
   The live row state — loaded decision and diagram rows, the materialized
   `DecisionFilterSet`, and the filtered projections — lives in
   `FilteredRowCache` (Client `Services/`); the panel's own filtering logic
@@ -258,20 +300,26 @@ export. In Local mode the count is the final
   `FilterApplied && !FilterDirty` (Apply remains the materialization
   point — no HTTP boundary to serialize across). The cache builds via
   `FilterConfig.Build()` once per config instance (reference-identity
-  cached) and re-projects rows handed to `ReplaceRows` through the set
-  already in effect, so files selected after an Apply are filtered
-  immediately. The panel exposes the cache internally (`RowCache`) as the
-  wire-test seam. When an applied filter set excludes every loaded row
-  (`Rows.Count > 0` but `FilteredRows.Count == 0`) the panel renders an
-  explicit zero-match notice in place of the bland `N of M rows match`
-  line, so a filtered-to-zero result reads as a result rather than a
-  silent success. The "filters are active" signal is emergent, not a
-  `FilterConfig` re-inspection: an empty (inactive) set passes every row,
-  so zero survivors from a non-empty load can only mean the set is
-  non-empty.
+  cached); `ReplaceRows` re-projects fresh rows through the set already in
+  effect — a panel-layer rule only, since end to end a selection is a
+  source change that re-gates first (see Pitfalls). The panel exposes the
+  cache internally (`RowCache`) as the wire-test seam. When an applied
+  filter set excludes every loaded row (`Rows.Count > 0` but
+  `FilteredRows.Count == 0`) the panel renders an explicit zero-match
+  notice in place of the bland `N of M rows match` line, so a
+  filtered-to-zero result reads as a result rather than a silent success.
+  The "filters are active" signal is emergent, not a `FilterConfig`
+  re-inspection: an empty (inactive) set passes every row, so zero
+  survivors from a non-empty load can only mean the set is non-empty.
 
-Run button is disabled whenever the filter panel is dirty, forcing the user
-to apply or discard pending changes before a run.
+The Run/Download gate is `FilterApplied && !FilterDirty` — the holder half
+says a commit is recorded against the *current* source, the dirty half says
+the buffers still equal it. A source change (new folder commit, new file
+selection) closes the gate through the composite's end-setup: the setup ends,
+Apply re-arms, and the user re-applies against the new source. The old
+"configure filters → select files → run" ordering is superseded by that rule
+— filters can still be staged first, but the *commit* that arms a run is
+per-source.
 
 ### Busy affordance
 
@@ -488,14 +536,40 @@ project via relative path — not duplicated here.
   pathway. Runs the processor against the fixture folder, asserts the
   written file begins with the `%PDF-` magic bytes. Document-level
   conformance is owned by `BackgammonDiagram_Lib`'s own tests.
-- `HomeWiringTests` — bUnit wire test pinning the `FilterPanel` →
-  `Home` integration. Fails closed if a binding to
-  `OnFilterConfigChanged` or `OnAppliedStateChanged` is ever silently dropped
-  (Razor compiles unrecognized component attributes cleanly, so a stale
-  attribute name binds nothing and produces no error; `[EditorRequired]`
-  catches only the missing-binding half of that, at compile time). Uses
-  `StubAppModeHandler` from `bUnitTestHelpers` to drive the mode branch
-  deterministically.
+- `HomeWiringTests` — bUnit wire tests pinning the `FilterSurface` → `Home`
+  integration through the composite's rendered DOM (the panels are
+  producer-internal; `FindComponent` over them is banned, host tests
+  included): the holder derivation feeding both mode panels' gates, the
+  per-mode #78 re-gate (folder commit and file re-selection end the setup —
+  holder cleared, Run/Download re-gated, Apply re-armed without an edit),
+  the not-a-source pins (output path; a same-value folder recommit), the
+  first-latch transitions (an apply before any source is unrecorded; the
+  first folder commit / file selection re-arms), and the saved-filters
+  round-trip over the file relay (document rows render, save-as writes into
+  the latched folder under the producer's file name, a folder change
+  reloads the context, Web mode renders no section and never calls the
+  relay). Fails closed if a binding to `OnFilterConfigChanged` or
+  `OnAppliedStateChanged` is ever silently dropped (Razor compiles
+  unrecognized component attributes cleanly; `[EditorRequired]` catches only
+  the missing-binding half, at compile time). Uses `StubAppModeHandler` from
+  `bUnitTestHelpers` — which also serves an in-memory edition of the
+  filterdocument relay — to drive the mode branch and the saved-filters
+  context deterministically.
+- `FilterDocumentStoreTests` — the server relay's unit contracts: the
+  filename-shape rule's accept/reject matrix, absent file *and* absent
+  folder → null, the write round-trip + overwrite, the never-create-folder
+  write failure, and the argument guards behind the controller's 400s.
+- `FilterDocumentEndpointTests` — hosted wire pins
+  (`WebApplicationFactory` over the real `Program` pipeline) for what only
+  hosting observes: the Local-config round-trip landing on disk at the real
+  route, 204 for absent, 400 for non-simple names, and the Web-config 404
+  from the explicit action guard.
+- `HttpFilterDocumentStorageTests` — the client adapter's producer
+  contracts: 204 → null (absence is a value), body round-trips, folder and
+  name travel escaped with the folder read from the delegate at call time,
+  non-success and network failures wrap in `FilterStorageException`, and a
+  call with no current folder propagates unwrapped as the adapter-contract
+  bug it is.
 - `LocalModePanelGateTests` — bUnit tests pinning two `LocalModePanel`
   invariants: the Run-button dirty-gating contract (`FilterApplied` &&
   !`FilterDirty` plus non-empty paths to enable) and the `ErrorMessage`
@@ -590,13 +664,14 @@ project via relative path — not duplicated here.
 - `WebModePanelOpeningBookTests` — bUnit wire tests for the `.ob` input: the
   status line reports a loaded / invalid book, and a book chosen after the `.xg`
   files re-extracts the retained bytes (pick order doesn't affect enrichment).
-- `WebModePanelRefilterOnLoadTests` — bUnit wire tests pinning that a file
-  selection made while a filter set is applied is filtered through it
-  immediately (no second Apply): a selective filter yields the independently
-  computed count and the rendered `N of M` line for the fresh selection, and a
-  new selection the applied filter rejects entirely lands in the zero-match
-  notice. The eager load-time refilter arrived incidentally with the
-  opening-book re-extract restructure; these tests make it load-bearing.
+- `WebModePanelRefilterOnLoadTests` — bUnit tests pinning the *panel-layer*
+  projection rule: rows handed to the cache while the applied parameters are
+  held true are projected through the set in effect (`ReplaceRows`, no
+  rebuild). The end-to-end contract these once pinned — "files selected
+  after an Apply are filtered immediately" — is superseded by the #78
+  source-change rule (a selection re-gates first; `HomeWiringTests` pins
+  that); these isolate what the cache routing still guarantees to any host
+  that keeps the applied state across a selection.
 
 ## Public API
 
@@ -632,6 +707,26 @@ GET  /api/openingbook/status                             (Local mode only)
            registered only in the Local guard, so the client only calls it in
            Local mode.
 
+GET  /api/filterdocument?folder=…&name=…                 (Local mode only)
+  200 →  the named file's text (text/plain)
+  204 →  file (or folder) absent — a value, not an error: the client maps
+         it to the storage seam's null-for-absent contract
+  400 →  blank folder, or name that isn't a simple file name
+  404 →  Web mode (see the action-guard Pitfall)
+
+PUT  /api/filterdocument?folder=…&name=…                 (Local mode only)
+  body:  the file's full text, written verbatim (overwrite)
+  200 →  (empty)   400/404 → as GET; IO failures (e.g. missing folder) → 500,
+         which the client adapter degrades to its WriteFailed state
+```
+
+The `filterdocument` pair is the saved-filters file relay: the client-side
+`HttpFilterDocumentStorage` adapter is its only caller, supplying file names
+from `SavedFiltersDocument` (producer-owned) and the folder from Home's
+latched source path — the server validates the name's *shape* but never
+knows the names themselves.
+
+```
 POST /api/shutdown
   200 →  (empty; host begins graceful shutdown)
 ```
@@ -776,15 +871,70 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   runs once per Apply, not once per `Matches` call. Same
   `FilterConfig.Build()` method on both sides; the materialization point
   is the only difference.
-- **`FilterPanel` is not referenced server-side.** It lives in
-  `XgFilter_Razor` (lib-owned) and is consumed only by the WASM client.
-  The server's bridge from a configured filter to a runnable filter set is
-  `FilterConfig.Build()`, not the panel — see the materialization pitfall
-  above.
-- **Run button dirty-gating.** The Run button is disabled whenever the
-  filter panel has unapplied changes. If a test or UI change ever makes
-  the button appear enabled with a dirty filter, that's a regression — the
-  dirty state is the gate, not a cosmetic hint.
+- **`XgFilter_Razor` is not referenced server-side — and the file relay
+  depends on that.** The composite and its model types are consumed only by
+  the WASM client; the server's bridge from a configured filter to a
+  runnable filter set is `FilterConfig.Build()`, not the panel — see the
+  materialization pitfall above. The saved-filters relay
+  (`FilterDocumentStore` / `FilterDocumentController`) extends the rule
+  into a **shape-vs-policy split**: the server rejects anything but a
+  simple filename (no separators, no traversal, no rooted paths) but must
+  never hardcode or learn the filter document names — those are
+  `SavedFiltersDocument`'s (producer-owned), supplied per request by the
+  client adapter. Adding an XgFilter_Razor reference to the server csproj
+  "for the constants" would re-couple what the split exists to decouple.
+- **Run/Download gating is holder-plus-dirty — don't re-derive it.** The
+  mode panels' `FilterApplied` comes straight from `AppliedFilter.IsApplied`
+  (the composite-mediated SSOT) and `FilterDirty` from the per-gesture
+  report's null-ness. If a test or UI change ever makes Run or Download
+  appear enabled with a dirty filter — or with a commit recorded against a
+  *different* source — that's a regression: the holder is the gate, not a
+  cosmetic hint.
+- **A source change ends the setup (#78) — the token is minted from the
+  latch, never the live text.** Local mode latches the folder path at the
+  input's `@onchange` boundary (plus the restore); Web mode bumps a
+  selection generation once per `HandleFileSelectionAsync`. When the token
+  changes, the hosted `FilterSurface` clears the holder, re-arms Apply
+  (forget-commit; the null report closes the gate through the normal event
+  path), and reloads the saved-filters context — one gesture drives the
+  re-gate and the store reload because the source folder *is* the filter
+  store's folder. Three consequences that look like bugs but are the
+  contract: a re-selection in Web mode blanks the preview until re-Apply
+  (ruled UX delta — it supersedes the old "files selected after an Apply
+  are filtered immediately" contract, and with it the old "configure
+  filters → select files → run" ordering copy: the arming commit is
+  per-source); an apply made before any source exists is unrecorded (the
+  holder has nothing to stamp it against — the first real source re-arms
+  Apply instead); and the output path never re-gates — it is not a source
+  (umbrella-ratified). Don't "fix" any of them, and don't wire the token to
+  `@oninput` — per-keystroke re-gating was ruled out.
+- **The filterdocument Local guard is an explicit action guard —
+  deliberately unlike `OpeningBookController`.** The processing services
+  stay DI-guarded (registered only inside the Local branch), but
+  `FilterDocumentStore` registers unconditionally and the controller
+  answers 404 itself when `AppModeService.IsLocal` is false. The deviation
+  is the point: "this endpoint does not exist in Web mode" is observable
+  and pinned end to end (`FilterDocumentEndpointTests`), where an
+  unresolvable constructor dependency is only a 500. Don't "tidy" the store
+  registration into the Local guard — that converts the 404 back into a
+  container failure.
+- **`HttpFilterDocumentStorage` is one stable instance over a delegate —
+  and must never be called without a folder.** The composite rebuilds its
+  saved-filters store when the bound `Storage` reference changes, so Home
+  constructs the adapter once and the live folder rides the
+  `Func<string?>`. While the latched path is blank (and always in Web
+  mode) Home binds `Storage = null` — no section renders and nothing calls
+  the relay; a call with no folder is therefore an adapter-contract bug
+  and throws `InvalidOperationException` unwrapped, while everything that
+  means "the I/O failed" wraps in `FilterStorageException` so the store
+  degrades instead of faulting the page.
+- **`WebApplicationFactory` marker: never `Program`.** The Client's
+  top-level entry point generates its own `Program`, visible to the test
+  project through the `InternalsVisibleTo` grant — naming `Program` as the
+  factory's entry-point type draws CS0433 (ambiguous between Client and
+  server). `FilterDocumentEndpointTests` uses a server-assembly marker type
+  (`AppModeService`) instead; the factory only needs *a* type from the
+  entry assembly.
 - **CA1859 in `OutputConsistencyTests`.** The interface usage is the thing
   under test (the shared-pipeline contract). Don't "fix" the warning by
   switching to concrete types — you'd defeat the test.
@@ -896,11 +1046,3 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **PPTX download for Azure/browser mode** — SkiaSharp native isn't available
   under Blazor WASM.
 - **`ColumnSelector` wired into UI.**
-- **Adopt `SavedFiltersPanel` (saved named filters) in Local mode.** The
-  finding-(Q) arc lands the shared document (`NamedFilterCollection`,
-  XgFilter_Lib) and picker component (XgFilter_Razor) in libraries this app
-  already references, so adoption is host wiring only: server-side disk
-  persistence (Local mode does real `System.IO`; no FS-Access ladder) + the
-  FilterPanel handshake. If/when the app deploys (Web mode), where its
-  saved-filters file lives is an open question for that arc. Surfaced by the
-  user during the finding-(Q) design pass (2026-07-22).
