@@ -32,27 +32,81 @@ internal static class bUnitTestHelpers
 /// Minimal <see cref="HttpMessageHandler"/> stub. Returns the
 /// <see cref="ExtractFromXgToCsv.Client.Shared.AppModeResponse"/> JSON
 /// object shape for <c>/api/appmode</c>, matching the real server's
-/// <see cref="ExtractFromXgToCsv.Controllers.AppModeController"/>. Returns
-/// 404 for everything else so a stray request fails loudly rather than
-/// hanging.
+/// <see cref="ExtractFromXgToCsv.Controllers.AppModeController"/>, and an
+/// in-memory edition of the saved-filters file relay
+/// (<c>GET</c>/<c>PUT /api/filterdocument</c>, matching
+/// <see cref="ExtractFromXgToCsv.Controllers.FilterDocumentController"/>'s
+/// 200/204 contract) — Home hosts a <c>FilterSurface</c> whose store reads
+/// the document at mount and on every source change, so a Local-mode Home
+/// test without these routes would degrade to LoadFailed. Returns 404 for
+/// everything else so a stray request fails loudly rather than hanging.
 /// </summary>
 internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 {
-    protected override Task<HttpResponseMessage> SendAsync(
+    /// <summary>
+    /// The in-memory documents served and updated by the filterdocument
+    /// routes, keyed by (folder, name) exactly as the query names them.
+    /// Seed before rendering to give a folder a saved-filters document.
+    /// </summary>
+    public Dictionary<(string Folder, string Name), string> Documents { get; } = new();
+
+    /// <summary>Every filterdocument read, in order — (folder, name).</summary>
+    public List<(string Folder, string Name)> DocumentReads { get; } = new();
+
+    /// <summary>Every filterdocument write, in order — (folder, name, content).</summary>
+    public List<(string Folder, string Name, string Content)> DocumentWrites { get; } = new();
+
+    protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        if (request.RequestUri?.AbsolutePath == "/api/appmode")
+        var path = request.RequestUri?.AbsolutePath;
+
+        if (path == "/api/appmode")
         {
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
                     $"{{\"Mode\":\"{mode}\"}}",
                     System.Text.Encoding.UTF8,
                     "application/json"),
-            });
+            };
         }
-        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        if (path == "/api/filterdocument")
+        {
+            var query = ParseQuery(request.RequestUri!);
+            var key = (query["folder"], query["name"]);
+
+            if (request.Method == HttpMethod.Get)
+            {
+                DocumentReads.Add(key);
+                return Documents.TryGetValue(key, out var content)
+                    ? new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(content, Encoding.UTF8, "text/plain"),
+                    }
+                    : new HttpResponseMessage(HttpStatusCode.NoContent);
+            }
+
+            if (request.Method == HttpMethod.Put)
+            {
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                Documents[key] = body;
+                DocumentWrites.Add((key.Item1, key.Item2, body));
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
+
+    private static Dictionary<string, string> ParseQuery(Uri uri) =>
+        uri.Query.TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(pair => pair.Split('=', 2))
+            .ToDictionary(
+                kv => Uri.UnescapeDataString(kv[0]),
+                kv => kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : string.Empty);
 }
 
 /// <summary>

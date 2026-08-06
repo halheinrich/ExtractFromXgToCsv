@@ -30,6 +30,12 @@ if (appMode.IsLocal)
     builder.Services.AddSingleton<JobStore>();
 }
 
+// Deliberately outside the Local guard: the saved-filters file relay is inert
+// IO glue with no processing dependencies, and its Local-only gate lives in
+// FilterDocumentController as an explicit action guard so Web mode answers
+// with an observable 404 instead of a container resolution failure.
+builder.Services.AddSingleton<FilterDocumentStore>();
+
 builder.Services.AddControllers();
 
 var app = builder.Build();

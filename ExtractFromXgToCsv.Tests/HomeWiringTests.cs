@@ -2,94 +2,408 @@ using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
 using ExtractFromXgToCsv.Client.Services;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
-using XgFilter_Razor.Components;
+using XgFilter_Razor;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the wire integration between the lib-owned <see cref="FilterPanel"/>
-/// and the consumer-side <see cref="Home"/>. The original regression shipped
-/// because two of FilterPanel's earlier events (<c>OnFiltersChanged</c>) was
-/// silently dropped after the post-arc rename — the consumer's binding pointed
-/// at a parameter that no longer existed. These tests fail closed if the
-/// <c>OnFilterConfigChanged</c> or <c>OnAppliedStateChanged</c> wire ever gets
-/// unwired the same way. <c>[EditorRequired]</c> on both now
-/// catches a <em>missing</em> binding at compile time; only rendering catches a
-/// binding left pointing at a parameter name the panel no longer has.
+/// Pins the wire integration between the lib-owned <c>FilterSurface</c>
+/// composite and the consumer-side <see cref="Home"/> — the applied-holder
+/// derivation feeding both mode panels' gates, and the per-mode source-change
+/// rule (the #78 re-gate: a folder commit or file re-selection ends the
+/// setup — holder cleared, Apply re-armed, saved-filters context reloaded).
+/// The original regression class shipped because a renamed panel event left a
+/// consumer binding silently splatted; these tests fail closed if any of that
+/// wiring is dropped again.
+/// <para>
+/// All filter gestures drive <c>FilterSurface</c>'s rendered DOM — the panels
+/// are producer-internal now and <c>FindComponent</c> over them is banned,
+/// host tests included (no carve-out). Two banked traps honored throughout: a
+/// bare "Save" locator goes ambiguous once a saved-filter row exists (rows
+/// carry their own Save buttons — use the ids), and the panel's own gate
+/// refuses a DOM Apply for an unchanged selection, so a re-apply within one
+/// committed mount needs a real edit first — <em>except</em> after a source
+/// change, where the composite's forget-commit re-arms Apply; several tests
+/// below prove exactly that by re-applying without an edit.
+/// </para>
 /// </summary>
 public class HomeWiringTests : BunitContext
 {
+    private const string FixtureA = "MTCH4064.xg";
+    private const string FixtureB = "ajhhBG0407.xg";
+
     public HomeWiringTests()
     {
         // Every JS interop call (localStorage gets/sets) returns default — the
-        // tests don't depend on persisted state.
+        // tests don't depend on persisted state, so the folder latch starts
+        // blank (no source) and the panel buffers start at defaults.
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddSingleton<XgProcessingService>();
+        // The holder Home injects and FilterSurface mediates — registered like
+        // the app registers it, and resolved by tests to assert the gate SSOT.
+        Services.AddScoped<AppliedFilter>();
     }
 
-    private void RegisterHttpClient(string appMode) =>
-        Services.AddSingleton(new HttpClient(new StubAppModeHandler(appMode))
+    private StubAppModeHandler RegisterHttpClient(string appMode)
+    {
+        var stub = new StubAppModeHandler(appMode);
+        Services.AddSingleton(new HttpClient(stub)
         {
             BaseAddress = new Uri("http://localhost/"),
         });
+        return stub;
+    }
 
-    [Fact]
-    public void OnFilterConfigChanged_FlipsFilterAppliedAndPropagatesConfigToLocalPanel()
+    private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();
+
+    private IRenderedComponent<Home> RenderHome(string appMode)
     {
-        RegisterHttpClient("Local");
-
         var cut = Render<Home>();
         cut.WaitForState(
-            () => cut.FindComponents<LocalModePanel>().Any(),
+            () => appMode == "Local"
+                ? cut.FindComponents<LocalModePanel>().Any()
+                : cut.FindComponents<WebModePanel>().Any(),
             TimeSpan.FromSeconds(5));
+        return cut;
+    }
+
+    // ── DOM gesture helpers ─────────────────────────────────────────────────
+
+    /// <summary>Commit the panel's current selection via its own Apply button.</summary>
+    private static Task ApplyFiltersAsync(IRenderedComponent<Home> cut) =>
+        cut.FindAll("button")
+           .First(b => b.TextContent.Trim() == "Apply Filter")
+           .ClickAsync(new());
+
+    /// <summary>
+    /// A real edit on the always-visible error-range Min input, moving the
+    /// buffers off any committed config. Undo with <see cref="UndoFilterEditAsync"/>.
+    /// </summary>
+    private static Task EditFilterControlAsync(IRenderedComponent<Home> cut) =>
+        cut.Find("input[placeholder='Min']")
+           .InputAsync(new ChangeEventArgs { Value = "0.75" });
+
+    private static Task UndoFilterEditAsync(IRenderedComponent<Home> cut) =>
+        cut.Find("input[placeholder='Min']")
+           .InputAsync(new ChangeEventArgs { Value = "" });
+
+    /// <summary>
+    /// Type <paramref name="path"/> into the Local folder input and commit it
+    /// at the change boundary — the gesture that latches the source path and
+    /// (on an actual change) re-gates.
+    /// </summary>
+    private static async Task CommitFolderAsync(IRenderedComponent<Home> cut, string path)
+    {
+        await cut.Find("#folderPath").InputAsync(new ChangeEventArgs { Value = path });
+        await cut.Find("#folderPath").ChangeAsync(new ChangeEventArgs { Value = path });
+    }
+
+    private static Task SetOutputPathAsync(IRenderedComponent<Home> cut, string path) =>
+        cut.Find("#outputPath").InputAsync(new ChangeEventArgs { Value = path });
+
+    private static AngleSharp.Dom.IElement RunButton(IRenderedComponent<Home> cut) =>
+        cut.FindAll("button").First(b => b.TextContent.Trim() == "Run");
+
+    private static AngleSharp.Dom.IElement DownloadButton(IRenderedComponent<Home> cut) =>
+        cut.FindAll("button").First(b => b.TextContent.Trim().StartsWith("Download"));
+
+    private static void UploadFixture(IRenderedComponent<Home> cut, string fixture) =>
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(fixture), fixture));
+
+    // ── Applied-holder derivation → mode panels ─────────────────────────────
+
+    [Fact]
+    public async Task Apply_WithFolderSource_RecordsOnHolderAndEnablesRun()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
 
         var localPanel = cut.FindComponent<LocalModePanel>();
         Assert.False(localPanel.Instance.FilterApplied);
+        Assert.True(RunButton(cut).HasAttribute("disabled"));
 
-        var newConfig = new FilterConfig { Players = new List<string> { "Alice" } };
-        var filterPanel = cut.FindComponent<FilterPanel>();
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnFilterConfigChanged.InvokeAsync(newConfig));
+        await ApplyFiltersAsync(cut);
 
+        Assert.True(Holder.IsApplied);
         Assert.True(localPanel.Instance.FilterApplied);
         Assert.False(localPanel.Instance.FilterDirty);
-        Assert.Same(newConfig, localPanel.Instance.FilterConfig);
+        // One config, one truth: the holder's applied config is the same
+        // instance the panel would POST.
+        Assert.Same(Holder.Config, localPanel.Instance.FilterConfig);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
     [Fact]
-    public void OnFilterConfigChanged_PropagatesConfigToWebPanelInWebMode()
+    public async Task Apply_WithSelectionSource_RecordsOnHolderAndPropagatesToWebPanel()
     {
         RegisterHttpClient("Web");
-
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<WebModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        var cut = RenderHome("Web");
+        UploadFixture(cut, FixtureA);
 
         var webPanel = cut.FindComponent<WebModePanel>();
         Assert.False(webPanel.Instance.FilterApplied);
 
-        var newConfig = new FilterConfig { Players = new List<string> { "Bob" } };
-        var filterPanel = cut.FindComponent<FilterPanel>();
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnFilterConfigChanged.InvokeAsync(newConfig));
+        await ApplyFiltersAsync(cut);
 
+        Assert.True(Holder.IsApplied);
         Assert.True(webPanel.Instance.FilterApplied);
         Assert.False(webPanel.Instance.FilterDirty);
-        Assert.Same(newConfig, webPanel.Instance.FilterConfig);
+        Assert.Same(Holder.Config, webPanel.Instance.FilterConfig);
     }
+
+    [Fact]
+    public async Task EditAfterApply_ClearsHolderAndRegatesRun_UndoRestoresBoth()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
+        await ApplyFiltersAsync(cut);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+
+        // A keystroke moves the buffers off the committed config: the
+        // composite clears the holder and the null report flips the dirty
+        // flag — both halves of the gate close.
+        await EditFilterControlAsync(cut);
+        var localPanel = cut.FindComponent<LocalModePanel>();
+        Assert.False(Holder.IsApplied);
+        Assert.True(localPanel.Instance.FilterDirty);
+        Assert.True(RunButton(cut).HasAttribute("disabled"));
+
+        // Undo back to the applied values: the panel reports clean, the
+        // composite re-affirms the holder, and the gate re-opens without a
+        // re-Apply (which the panel refuses for an unchanged selection).
+        await UndoFilterEditAsync(cut);
+        Assert.True(Holder.IsApplied);
+        Assert.False(localPanel.Instance.FilterDirty);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+    }
+
+    // ── The #78 re-gate: source changes end the setup ───────────────────────
+
+    [Fact]
+    public async Task FolderChange_EndsSetup_RunRegatedAndApplyRearmed()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
+        await ApplyFiltersAsync(cut);
+        Assert.True(Holder.IsApplied);
+
+        // Committing a different folder is a source change: the setup ends —
+        // holder cleared, Run re-gated.
+        await CommitFolderAsync(cut, @"D:\xg\other");
+        Assert.False(Holder.IsApplied);
+        Assert.True(RunButton(cut).HasAttribute("disabled"));
+
+        // And Apply is re-armed: this click commits the *unchanged* selection,
+        // which the panel would refuse had the composite not forget-committed
+        // it — the re-open below is the proof.
+        await ApplyFiltersAsync(cut);
+        Assert.True(Holder.IsApplied);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task FolderRecommitSameValue_IsNotASourceChange()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
+        await ApplyFiltersAsync(cut);
+
+        // A blur that commits the same value latches the same path → same
+        // token → the setup survives.
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        Assert.True(Holder.IsApplied);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task OutputPathChange_IsNotASourceChange()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
+        await ApplyFiltersAsync(cut);
+
+        // The output path is not a source (umbrella-ratified): changing it
+        // must never end the setup.
+        await SetOutputPathAsync(cut, @"D:\elsewhere\out.csv");
+        Assert.True(Holder.IsApplied);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task WebReselection_EndsSetup_PreviewBlanksUntilReApply()
+    {
+        RegisterHttpClient("Web");
+        var cut = RenderHome("Web");
+        UploadFixture(cut, FixtureA);
+        await ApplyFiltersAsync(cut);
+        Assert.Contains("rows match current filters", cut.Markup);
+
+        // Re-selecting files bumps the selection generation: one source-change
+        // rule everywhere, so the preview blanks and Download re-gates until
+        // the user re-applies (ruled UX delta — supersedes the old "files
+        // selected after an Apply are filtered immediately" contract).
+        UploadFixture(cut, FixtureB);
+        Assert.False(Holder.IsApplied);
+        Assert.Contains("set filters and click Apply Filter", cut.Markup);
+        Assert.True(DownloadButton(cut).HasAttribute("disabled"));
+
+        // Apply is re-armed by the same rule — no edit needed.
+        await ApplyFiltersAsync(cut);
+        Assert.True(Holder.IsApplied);
+        Assert.Contains("rows match current filters", cut.Markup);
+        Assert.False(DownloadButton(cut).HasAttribute("disabled"));
+    }
+
+    // ── First-latch transitions (null → first source) ───────────────────────
+
+    [Fact]
+    public async Task ApplyBeforeAnyFolder_IsNotRecorded_FirstCommitRearmsApply()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
+
+        // No source yet: the apply is deliberately unrecorded — there is
+        // nothing to stamp it against, and Run stays gated.
+        await ApplyFiltersAsync(cut);
+        Assert.False(Holder.IsApplied);
+        Assert.True(RunButton(cut).HasAttribute("disabled"));
+
+        // The first folder commit is a source change (null → token): the
+        // end-setup runs, re-arming Apply — so this second click of an
+        // unchanged selection commits, and is recorded against the folder.
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await ApplyFiltersAsync(cut);
+        Assert.True(Holder.IsApplied);
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task ApplyBeforeAnySelection_IsNotRecorded_FirstSelectionRearmsApply()
+    {
+        RegisterHttpClient("Web");
+        var cut = RenderHome("Web");
+
+        // No selection yet: no source, so the apply is unrecorded.
+        await ApplyFiltersAsync(cut);
+        Assert.False(Holder.IsApplied);
+
+        // The first selection mints generation 1 (null → token): end-setup,
+        // Apply re-armed, and the re-apply is recorded — the preview follows.
+        UploadFixture(cut, FixtureA);
+        Assert.False(Holder.IsApplied);
+        await ApplyFiltersAsync(cut);
+        Assert.True(Holder.IsApplied);
+        Assert.Contains("rows match current filters", cut.Markup);
+    }
+
+    // ── Saved filters over the file relay ───────────────────────────────────
+
+    [Fact]
+    public async Task SavedFilters_DocumentInSourceFolder_RendersItsRows()
+    {
+        var stub = RegisterHttpClient("Local");
+        stub.Documents[(@"D:\xg\matches", SavedFiltersDocument.FileName)] =
+            NamedFilterCollection.Empty.With("Blitz", new FilterConfig()).ToJson();
+
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+
+        // The commit reloads the saved-filters context from the latched
+        // folder through the relay — the document's rows appear.
+        cut.WaitForAssertion(() =>
+            Assert.Contains(cut.FindAll("li"), li => li.TextContent.Contains("Blitz")));
+    }
+
+    [Fact]
+    public async Task SavedFilters_SaveAs_WritesDocumentIntoLatchedFolder()
+    {
+        var stub = RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        cut.WaitForState(() => cut.FindAll("#saveFilterName").Any(), TimeSpan.FromSeconds(5));
+
+        // Save-as by id — a bare "Save" locator goes ambiguous once a
+        // saved-filter row (with its own Save button) exists.
+        await cut.Find("#saveFilterName").InputAsync(new ChangeEventArgs { Value = "Blitz" });
+        await cut.Find("#saveFilterButton").ClickAsync(new());
+
+        cut.WaitForAssertion(() =>
+        {
+            var write = Assert.Single(stub.DocumentWrites);
+            Assert.Equal(@"D:\xg\matches", write.Folder);
+            // The name comes from the producer's document identity — the
+            // server never knows it, the client supplies it.
+            Assert.Equal(SavedFiltersDocument.FileName, write.Name);
+            Assert.True(NamedFilterCollection.TryFromJson(write.Content, out var saved));
+            Assert.True(saved.Contains("Blitz"));
+        });
+    }
+
+    [Fact]
+    public async Task SavedFilters_FolderChange_ReloadsContextFromNewFolder()
+    {
+        var stub = RegisterHttpClient("Local");
+        stub.Documents[(@"D:\xg\matches", SavedFiltersDocument.FileName)] =
+            NamedFilterCollection.Empty.With("Blitz", new FilterConfig()).ToJson();
+
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        cut.WaitForAssertion(() =>
+            Assert.Contains(cut.FindAll("li"), li => li.TextContent.Contains("Blitz")));
+
+        // The source folder and the filter store are the same folder: one
+        // change event drives both the re-gate and the store reload.
+        await CommitFolderAsync(cut, @"D:\xg\other");
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains(stub.DocumentReads,
+                r => r.Folder == @"D:\xg\other" && r.Name == SavedFiltersDocument.FileName);
+            Assert.DoesNotContain(cut.FindAll("li"), li => li.TextContent.Contains("Blitz"));
+        });
+    }
+
+    [Fact]
+    public async Task SavedFilters_WebMode_RendersNoSection()
+    {
+        var stub = RegisterHttpClient("Web");
+        var cut = RenderHome("Web");
+
+        // Web mode binds Storage = null (ruled: no second store — no
+        // localStorage fallback), so no saved-filters section exists in any
+        // Web state, selection or not — and nothing ever calls the relay.
+        UploadFixture(cut, FixtureA);
+        await ApplyFiltersAsync(cut);
+
+        Assert.Empty(cut.FindAll("#saveFilterName"));
+        Assert.DoesNotContain("Saved Filters", cut.Markup);
+        Assert.Empty(stub.DocumentReads);
+    }
+
+    // ── XGP option wiring (unchanged contracts, mode-shell level) ───────────
 
     [Fact]
     public void XgpRadio_EnabledInWebMode()
     {
         RegisterHttpClient("Web");
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<WebModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        var cut = RenderHome("Web");
         Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
     }
 
@@ -97,10 +411,7 @@ public class HomeWiringTests : BunitContext
     public void XgpRadio_EnabledInLocalMode_AndOptionsPropagateToLocalPanel()
     {
         RegisterHttpClient("Local");
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<LocalModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        var cut = RenderHome("Local");
         Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
 
         var localPanel = cut.FindComponent<LocalModePanel>();
@@ -112,11 +423,7 @@ public class HomeWiringTests : BunitContext
     public void XgpOptionsBlock_RendersOnlyWhileXgpSelected_AndPropagatesToWebPanel()
     {
         RegisterHttpClient("Web");
-
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<WebModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        var cut = RenderHome("Web");
 
         Assert.Empty(cut.FindAll("#xgpOptions"));
 
@@ -135,11 +442,7 @@ public class HomeWiringTests : BunitContext
     public void OnXgpExported_AdvancesAndPersistsTheCounter()
     {
         RegisterHttpClient("Web");
-
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<WebModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        var cut = RenderHome("Web");
         cut.Find("#fmtXgp").Change(true);
 
         var webPanel = cut.FindComponent<WebModePanel>();
@@ -154,65 +457,5 @@ public class HomeWiringTests : BunitContext
             i.Identifier == "localStorage.setItem"
             && (string?)i.Arguments[0] == "xg_xgpLastNumber"
             && (string?)i.Arguments[1] == "5");
-    }
-
-    [Fact]
-    public void OnAppliedStateChanged_NullPayload_FlipsFilterDirtyWithoutClearingApplied()
-    {
-        RegisterHttpClient("Local");
-
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<LocalModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
-
-        var localPanel = cut.FindComponent<LocalModePanel>();
-        var filterPanel = cut.FindComponent<FilterPanel>();
-
-        // First Apply → FilterApplied=true, FilterDirty=false
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnFilterConfigChanged.InvokeAsync(new FilterConfig()));
-        Assert.True(localPanel.Instance.FilterApplied);
-        Assert.False(localPanel.Instance.FilterDirty);
-
-        // Then a keystroke moves the buffers off the committed config, so the
-        // panel reports "matching nothing" — Applied stays true, Dirty flips.
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnAppliedStateChanged.InvokeAsync(null));
-        Assert.True(localPanel.Instance.FilterApplied);
-        Assert.True(localPanel.Instance.FilterDirty);
-    }
-
-    /// <summary>
-    /// The case the old one-way dirty flag could not express: the panel reports
-    /// clean again — an edit undone back to the applied values — and the run
-    /// gate re-opens without a second Apply, which the panel no longer offers
-    /// for an unchanged selection.
-    /// </summary>
-    [Fact]
-    public void OnAppliedStateChanged_NonNullPayload_ClearsFilterDirty()
-    {
-        RegisterHttpClient("Local");
-
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<LocalModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
-
-        var localPanel = cut.FindComponent<LocalModePanel>();
-        var filterPanel = cut.FindComponent<FilterPanel>();
-
-        var applied = new FilterConfig { Players = new List<string> { "Carol" } };
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnFilterConfigChanged.InvokeAsync(applied));
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnAppliedStateChanged.InvokeAsync(null));
-        Assert.True(localPanel.Instance.FilterDirty);
-
-        cut.InvokeAsync(() =>
-            filterPanel.Instance.OnAppliedStateChanged.InvokeAsync(applied));
-        Assert.False(localPanel.Instance.FilterDirty);
-        Assert.True(localPanel.Instance.FilterApplied);
-        Assert.Same(applied, localPanel.Instance.FilterConfig);
     }
 }

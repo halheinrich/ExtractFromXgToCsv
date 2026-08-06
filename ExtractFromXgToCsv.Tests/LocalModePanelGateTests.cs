@@ -31,22 +31,19 @@ public class LocalModePanelGateTests : BunitContext
     public void RunButton_DisabledGatesOnFilterAppliedAndDirty(
         bool filterApplied, bool filterDirty, bool expectDisabled)
     {
+        // The folder path is a Home-owned parameter since the source hoist;
+        // only the output path is still panel state (normally hydrated from
+        // localStorage in OnAfterRenderAsync), so only it needs the
+        // reflection seed. Both are set so the FilterApplied/FilterDirty
+        // gates are the deciding factor.
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, filterApplied)
-            .Add(c => c.FilterDirty, filterDirty));
+            .Add(c => c.FilterDirty, filterDirty)
+            .Add(c => c.FolderPath, "D:\\xg"));
 
-        // Folder/output paths are loaded from localStorage in
-        // OnAfterRenderAsync; in tests we set them directly so the
-        // FilterApplied/FilterDirty gates are the deciding factor.
-        var instance = cut.Instance;
-        instance.GetType()
-            .GetField("_folderPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .SetValue(instance, "D:\\xg");
-        instance.GetType()
-            .GetField("_outputPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .SetValue(instance, "D:\\xg\\out.csv");
+        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\out.csv");
         cut.Render();
 
         var runButton = (IHtmlButtonElement)cut.FindAll("button.btn-primary").Single();

@@ -10,15 +10,21 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins that a file selection made <em>while a filter set is already
-/// applied</em> is filtered through it immediately — no second Apply. The
-/// panel's original shape had this quirk (filtering ran only in
-/// <c>OnParametersSet</c>, so a post-Apply selection sat unfiltered until the
-/// next parameter change); the file-load pathway has filtered eagerly since
-/// the opening-book re-extract restructure, and after the
-/// <see cref="FilteredRowCache"/> extraction the rule lives in
-/// <c>ReplaceRows</c>. Nothing else pinned it — these tests make the
-/// behavior load-bearing instead of incidental.
+/// Pins the <em>panel-layer</em> projection rule: rows handed to the cache
+/// while <c>FilterApplied &amp;&amp; !FilterDirty</c> is (still) true are
+/// projected through the set in effect by <see cref="FilteredRowCache"/>'s
+/// <c>ReplaceRows</c> — no rebuild, no second Apply at this layer.
+/// <para>
+/// <b>The end-to-end user contract this once pinned is superseded</b> (#78):
+/// in the real app a file selection bumps Home's selection generation, the
+/// hosted <c>FilterSurface</c> ends the setup, and the panel receives
+/// <c>FilterApplied = false</c> — so a post-Apply selection now blanks the
+/// preview until re-Apply (pinned at Home level by
+/// <see cref="HomeWiringTests"/>). These tests drive the panel directly with
+/// the applied parameters held true, which is exactly what isolates the
+/// cache-routing half: if a host ever keeps the applied state across a
+/// selection again, this is the projection it gets.
+/// </para>
 /// </summary>
 public class WebModePanelRefilterOnLoadTests : BunitContext
 {

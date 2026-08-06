@@ -14,9 +14,16 @@
         <div style="max-width:800px">
             <div class="mb-3">
                 <label class="form-label">Folder path</label>
-                <input class="form-control" placeholder="e.g. D:\xg\matches"
-                       value="@_folderPath"
-                       @oninput="OnFolderPathChanged" />
+                @* Controlled input — Home owns the text, its persistence, and
+                   the change-boundary latch the filter source token is minted
+                   from (the folder is Local mode's filter *source*, so its
+                   identity lives with the FilterSurface host). Two events on
+                   purpose: @oninput follows every keystroke for persistence,
+                   @onchange marks the commit boundary that may re-gate. *@
+                <input id="folderPath" class="form-control" placeholder="e.g. D:\xg\matches"
+                       value="@FolderPath"
+                       @oninput="@(e => FolderPathChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty))"
+                       @onchange="@(e => OnFolderPathCommitted.InvokeAsync(e.Value?.ToString() ?? string.Empty))" />
                 @if (_bookStatus is not null)
                 {
                     <div class="small mt-1" id="bookStatus">
@@ -40,7 +47,7 @@
             </div>
             <div class="mb-3">
                 <label class="form-label">@(OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
-                <input class="form-control"
+                <input id="outputPath" class="form-control"
                        placeholder="@(OutputFormat == OutputFormat.Xgp ? "e.g. D:\\xg\\positions" : "e.g. D:\\xg\\decisions.csv")"
                        value="@_outputPath"
                        @oninput="OnOutputPathChanged" />
@@ -56,7 +63,7 @@
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(_folderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty || XgpRunBlocked)">
+                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty || XgpRunBlocked)">
             Run
         </button>
         @if (_busy)
@@ -181,6 +188,17 @@
     [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
     [Parameter, EditorRequired] public bool FilterDirty { get; set; }
+
+    // The folder input's controlled-component surface. Home owns the value
+    // (it is Local mode's filter-source identity, latched host-side at the
+    // change boundary); this panel renders it and forwards both event
+    // boundaries verbatim. All three are load-bearing for the #78 re-gate, so
+    // all three are EditorRequired — a silently splatted binding here would be
+    // a gate that never re-opens.
+    [Parameter, EditorRequired] public string FolderPath { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public EventCallback<string> FolderPathChanged { get; set; }
+    [Parameter, EditorRequired] public EventCallback<string> OnFolderPathCommitted { get; set; }
+
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
     [Parameter] public EventCallback<int> OnXgpExported { get; set; }
@@ -196,7 +214,6 @@
     // app.css holds the single rule (issue #77).
     private string? BusyCssClass => _busy ? "is-busy" : null;
 
-    private string _folderPath = string.Empty;
     private string _outputPath = string.Empty;
     private ProcessingProgress? _progress = null;
     private string? _currentJobId = null;
@@ -211,7 +228,7 @@
     private OpeningBookStatus? _bookStatus;
 
     // Cached materialization of FilterConfig — mirrors WebModePanel's
-    // reference-identity cache (FilterPanel mints a new FilterConfig on every
+    // reference-identity cache (the filter panel mints a new FilterConfig on every
     // Apply, so ref inequality signals "rebuild"). Local mode POSTs the
     // unbuilt config to the server for the actual run; this local build exists
     // solely so the post-run notice can consult DecisionFilterSet.IsEmpty — the
@@ -227,7 +244,8 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _folderPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_folderPath") ?? string.Empty;
+        // The folder path is restored by Home (its owner since the source
+        // hoist); only the output path — not a source — is still panel-owned.
         _outputPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputPath") ?? string.Empty;
 
         // Server-side book status (Local mode only). A failure leaves the line
@@ -236,12 +254,6 @@
         catch { _bookStatus = null; }
 
         StateHasChanged();
-    }
-
-    private async Task OnFolderPathChanged(ChangeEventArgs e)
-    {
-        _folderPath = e.Value?.ToString() ?? string.Empty;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_folderPath", _folderPath);
     }
 
     private async Task OnOutputPathChanged(ChangeEventArgs e)
@@ -319,7 +331,7 @@
         {
             var request = new ProcessRequest
             {
-                FolderPath = _folderPath,
+                FolderPath = FolderPath,
                 OutputPath = _outputPath,
                 Filters = FilterConfig,
                 OutputFormat = OutputFormat,

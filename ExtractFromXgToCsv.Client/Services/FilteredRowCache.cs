@@ -14,8 +14,8 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// </para>
 /// <para>
 /// <b>Materialization is cached by <see cref="FilterConfig"/> reference
-/// identity.</b> <c>FilterPanel</c> mints a new <see cref="FilterConfig"/>
-/// instance on every Apply (XgFilter_Razor's <c>RaiseAsync</c>), so reference
+/// identity.</b> The filter panel inside XgFilter_Razor's <c>FilterSurface</c>
+/// mints a new <see cref="FilterConfig"/> instance on every Apply, so reference
 /// inequality reliably signals "rebuild". <see cref="Refilter"/> calls
 /// <see cref="FilterConfig.Build"/> only when handed a config instance it has
 /// not built yet, keeping the build out of the per-row

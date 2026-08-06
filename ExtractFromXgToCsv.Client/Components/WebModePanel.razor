@@ -193,6 +193,19 @@
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
     [Parameter] public EventCallback<int> OnXgpExported { get; set; }
 
+    /// <summary>
+    /// Raised once per file-selection gesture — every
+    /// <see cref="HandleFileSelectionAsync"/> invocation, because every one
+    /// replaces (or clears) the retained selection before anything else runs.
+    /// The host bumps its selection generation off this, changing the filter
+    /// source token so the hosted FilterSurface ends the setup (#78): the
+    /// selection is Web mode's filter <em>source</em>, and a new selection
+    /// must re-gate exactly as a new Local folder does. EditorRequired for the
+    /// same reason as the panel's other gate wiring — a silently splatted
+    /// binding here is a re-gate that never fires.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback OnSelectionChanged { get; set; }
+
     private string _csvFileName = "decisions.csv";
     private string _lastFolderHint = string.Empty;
     private long _totalSelectedBytes = 0;
@@ -280,6 +293,12 @@
         _hasError = false; _statusMessage = string.Empty;
         _rowCache.Clear();
         _fileBytes.Clear();
+
+        // The old selection is gone as of the clears above, on every path out
+        // of this handler — success, over-limit error, and the dismissed
+        // picker's empty selection alike — so the source-change announcement
+        // is unconditional and fires before any outcome is known.
+        await OnSelectionChanged.InvokeAsync();
 
         var files = e.GetMultipleFiles(500).ToList();
         _totalSelectedBytes = files.Sum(f => f.Size);

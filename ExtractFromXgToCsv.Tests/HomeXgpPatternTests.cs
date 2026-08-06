@@ -23,6 +23,10 @@ public class HomeXgpPatternTests : BunitContext
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddSingleton<XgProcessingService>();
+        // Home injects the applied-filter holder since the FilterSurface
+        // adoption; these tests never touch it, but the page can't render
+        // without it registered.
+        Services.AddScoped<XgFilter_Razor.AppliedFilter>();
         Services.AddSingleton(new HttpClient(new StubAppModeHandler("Web"))
         {
             BaseAddress = new Uri("http://localhost/"),

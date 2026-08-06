@@ -131,11 +131,12 @@ public class LocalModePanelFilterWireTests : BunitContext
             .Add(c => c.FilterApplied, true)
             .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
+            .Add(c => c.XgpAnonymize, false)
+            .Add(c => c.FolderPath, "D:\\xg"));
 
-        // Folder/output paths are normally loaded from localStorage; set them
-        // directly so the Run button's path gate is satisfied.
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_folderPath", "D:\\xg");
+        // The folder path is a parameter since the source hoist; the output
+        // path is still panel state normally loaded from localStorage — seed
+        // it directly so the Run button's path gate is satisfied.
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\decisions.csv");
         cut.Render();
 
