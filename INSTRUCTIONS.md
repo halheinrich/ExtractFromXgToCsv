@@ -123,6 +123,7 @@ ExtractFromXgToCsv.Tests/
   FilterDocumentStoreTests.cs           — filename-shape rule + IO contracts (direct)
   FilteredRowCacheTests.cs              — projection + identity-cache invariants (direct)
   FixtureHelper.cs
+  HomeMountGateTests.cs                 — restore-gated FilterSurface mount + holder recovery (bUnit)
   HomeWiringTests.cs                    — FilterSurface → Home wiring + per-mode re-gate (bUnit)
   HttpFilterDocumentStorageTests.cs     — client relay adapter contracts (direct)
   HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
@@ -277,6 +278,28 @@ export. In Local mode the count is the final
     latched; null otherwise — a blank path renders no saved-filters
     section, never a load failure — and always null in Web mode (ruled: a
     second store is forbidden drift; no localStorage fallback).
+  - **The mount gate (#85).** The `FilterSurface` element is wrapped in
+    `@if (_restoreComplete)`, a flag set at the very end of Home's
+    first-render restore. Everything `Source` is minted from — the app mode
+    and the latched folder — arrives in that restore, and Blazor runs the
+    child's `OnAfterRenderAsync` *before* the parent's, so an ungated
+    composite would mount against a null `Source`, then see the correction
+    as a genuine source change and run #78's end-setup on every return to
+    the page. Gate on the restore, **not** on `Source` being non-null: a
+    null `Source` is a legitimate steady state here (blank path, no Web
+    selection) that the in-place source-change rule owns — unmounting on it
+    would destroy the composite's store and panel buffers every time the
+    user clears the folder.
+  - **Holder recovery at restore.** `AppliedFilter` is DI-scoped and
+    outlives the page, so the same restore reconciles it against the
+    restored source: stamp matches ⇒ `_filterConfig` is recovered from
+    `AppliedFilter.Config`; anything else (stamped for another source, or
+    no source restored) ⇒ `AppliedFilter.Clear()`. This is the host's half
+    of the composite's first-mount reconcile, which is silent by contract —
+    it seeds the *panel's* committed config and raises no event, so
+    `OnFilterConfigChanged` (otherwise the only writer of `_filterConfig`)
+    never fires. Without it the mount gate would reopen the run gate over a
+    *default* config, silently ignoring the applied filter.
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar (determinate, plus the two
   indeterminate states in "Busy affordance"). Parameters: `OutputFormat`,
@@ -555,6 +578,17 @@ project via relative path — not duplicated here.
   `bUnitTestHelpers` — which also serves an in-memory edition of the
   filterdocument relay — to drive the mode branch and the saved-filters
   context deterministically.
+- `HomeMountGateTests` — bUnit tests for the composite's mount gate (#85):
+  the composite is absent until the restore completes (proven with the
+  app-mode probe held open on a `TaskCompletionSource`, so the pre-restore
+  render is observed rather than raced); a return to Home over a restored
+  folder the holder is still stamped for keeps the applied config, the
+  panels' gate, and the run gate — with Apply disabled by #82's reconcile,
+  which before this gate could never fire in this host; a holder stamped for
+  *another* folder is not adopted, and neither is one left standing when Web
+  mode restores no selection at all; and neither half of #78 is disturbed —
+  committing a different folder still ends the setup, and blanking the
+  folder re-gates in place with the composite still mounted.
 - `FilterDocumentStoreTests` — the server relay's unit contracts: the
   filename-shape rule's accept/reject matrix, absent file *and* absent
   folder → null, the write round-trip + overwrite, the never-create-folder
@@ -908,6 +942,22 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   Apply instead); and the output path never re-gates — it is not a source
   (umbrella-ratified). Don't "fix" any of them, and don't wire the token to
   `@oninput` — per-keystroke re-gating was ruled out.
+- **Never publish `Source` before the restore has run (#85).** Home's mode
+  and folder latch arrive in its own `OnAfterRenderAsync(firstRender)`,
+  which Blazor runs *after* the child's, so anything bound before then is a
+  guess. The composite compares tokens and cannot distinguish "not yet
+  known" from "no source": a placeholder null followed by the real token
+  reads as a source change and ends the setup. Hence `@if
+  (_restoreComplete)` around `FilterSurface` — and hence the temptation to
+  gate on `Source is not null` instead, which is the wrong condition here
+  (BgQuiz gates its composite on `HasFiles`; copying that shape would
+  unmount on every folder clear and defeat #78). Same rule for anything
+  else Home ever binds into the composite: bind facts, not placeholders.
+  The gate costs a filter-surface-free window on every Home visit —
+  measured at **7–10 ms** (shell paint → surface paint, Debug WASM build,
+  six samples), i.e. under one frame, so it needs no spinner and no
+  reserved-space placeholder. Re-measure before adding anything to the
+  restore that could stretch it.
 - **The filterdocument Local guard is an explicit action guard —
   deliberately unlike `OpeningBookController`.** The processing services
   stay DI-guarded (registered only inside the Local branch), but

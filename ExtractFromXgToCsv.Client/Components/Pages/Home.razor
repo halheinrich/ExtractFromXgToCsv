@@ -133,12 +133,19 @@
    the source-change rule (#78). This host binds facts and side effects only:
    the holder, the current source's token, the storage seam, and the two
    re-raised panel events. Source and Storage are per-mode — see the @code
-   members. *@
-<FilterSurface AppliedFilter="AppliedFilter"
-               Source="Source"
-               Storage="Storage"
-               OnFilterConfigChanged="OnFilterConfigChanged"
-               OnAppliedStateChanged="OnAppliedStateChanged" />
+   members.
+
+   Held back until the restore has run (#85): mounting it earlier would bind a
+   Source this page cannot yet know, and the composite's source-change rule
+   would read the correction as a real change. See _restoreComplete. *@
+@if (_restoreComplete)
+{
+    <FilterSurface AppliedFilter="AppliedFilter"
+                   Source="Source"
+                   Storage="Storage"
+                   OnFilterConfigChanged="OnFilterConfigChanged"
+                   OnAppliedStateChanged="OnAppliedStateChanged" />
+}
 
 @if (_appMode == "Local")
 {
@@ -170,6 +177,28 @@ else
     private OutputFormat _outputFormat = OutputFormat.Csv;
     private bool _filterDirty = false;
     private FilterConfig _filterConfig = new();
+
+    // ── The composite's mount gate (#85) ──────────────────────────────────
+    //
+    // False until the first-render restore below has run. Everything the
+    // Source token is minted from — the app mode and the latched folder —
+    // arrives in that restore, so before it this page's answer to "what is the
+    // current source?" is not "none", it is "not yet known". Binding that
+    // non-answer would publish null and then correct it, and the composite's
+    // source-change rule (#78) reads a corrected null→token as a genuine
+    // source change: holder cleared, Apply re-armed, run gate closed. On every
+    // return to this page. Blazor renders children before parents on the
+    // after-render pass, so no ordering trick inside this component avoids it;
+    // the composite simply must not exist until the restore is done.
+    //
+    // Gated on the restore, NOT on Source being non-null — the tempting
+    // shape, and the wrong one here. A null Source is a legitimate steady
+    // state in this host (a blank folder path, no Web selection yet), handled
+    // in place by the source-change rule; unmounting on it would destroy the
+    // composite's store and panel state every time the user clears the folder
+    // and would defeat #78. Post-restore a null Source is truthful, and the
+    // composite handles it exactly as designed.
+    private bool _restoreComplete;
 
     // ── Source identity (the #78 re-gate's input) ─────────────────────────
     // Local mode's source is the input folder path, hoisted here so one owner
@@ -304,6 +333,44 @@ else
         if ((_outputFormat == OutputFormat.Pptx || _outputFormat == OutputFormat.Pdf)
             && _appMode != "Local")
             _outputFormat = OutputFormat.Csv;
+
+        // ── Reconcile the surviving holder against the restored source ──────
+        //
+        // AppliedFilter is DI-scoped, so it outlives this page: a fresh mount
+        // can open onto an apply the previous visit made — against this
+        // visit's source, or against one it no longer has. The composite's
+        // first-mount reconcile (#82) recovers the *panel's* committed config
+        // from the holder; this is the host's half of the same recovery, and
+        // Home must do it itself because that reconcile is silent by contract
+        // — it raises no event, and OnFilterConfigChanged is otherwise the
+        // only writer of _filterConfig.
+        //
+        // Stamp matches: recover _filterConfig, the last-committed config the
+        // panels POST and refilter with and the XGP preview reads. Without it
+        // the run gate would reopen over a *default* config and the applied
+        // filter would be silently ignored.
+        //
+        // Anything else — stamped for another source, or no source restored at
+        // all — is not this visit's applied state, so it must not hold the
+        // gate open. Dropping the config here is the whole correction: the
+        // composite isn't mounted yet, so there is no panel commitment to
+        // forget alongside it, and the stamp is left standing exactly as
+        // AppliedFilter.Clear always leaves it.
+        if (Source is { } restoredSource
+            && AppliedFilter.Config is { } appliedConfig
+            && AppliedFilter.WasAppliedFor(restoredSource))
+        {
+            _filterConfig = appliedConfig;
+        }
+        else
+        {
+            AppliedFilter.Clear();
+        }
+
+        // Last, after every fact Source is derived from: the composite may now
+        // mount, and its first parameters-set will see the real token rather
+        // than a placeholder it would later have to be corrected out of.
+        _restoreComplete = true;
 
         StateHasChanged();
     }

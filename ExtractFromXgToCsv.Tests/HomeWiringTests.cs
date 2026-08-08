@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
 using XgFilter_Razor;
+using XgFilter_Razor.Components;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -61,13 +62,19 @@ public class HomeWiringTests : BunitContext
 
     private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();
 
+    // Waits for the composite as well as the mode panel: Home holds
+    // FilterSurface back until its first-render restore completes (#85), and in
+    // Web mode the panel alone is up from the very first render — so the panel
+    // is not a restore-completed signal there. Every gesture below drives the
+    // composite's DOM, so this is the render the tests actually need.
     private IRenderedComponent<Home> RenderHome(string appMode)
     {
         var cut = Render<Home>();
         cut.WaitForState(
-            () => appMode == "Local"
-                ? cut.FindComponents<LocalModePanel>().Any()
-                : cut.FindComponents<WebModePanel>().Any(),
+            () => cut.FindComponents<FilterSurface>().Any()
+                && (appMode == "Local"
+                    ? cut.FindComponents<LocalModePanel>().Any()
+                    : cut.FindComponents<WebModePanel>().Any()),
             TimeSpan.FromSeconds(5));
         return cut;
     }
