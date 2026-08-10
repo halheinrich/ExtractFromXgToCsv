@@ -8,6 +8,7 @@
 @inject IJSRuntime JS
 @inject HttpClient Http
 @inject AppliedFilter AppliedFilter
+@inject FilterRestoreNotice FilterRestoreNotice
 @implements IDisposable
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
@@ -131,9 +132,14 @@
    saved-filters section with its degrade notices — is one producer composite:
    FilterSurface owns the panels and every interaction between them, including
    the source-change rule (#78). This host binds facts and side effects only:
-   the holder, the current source's token, the storage seam, and the two
-   re-raised panel events. Source and Storage are per-mode — see the @code
-   members.
+   the holder, the restore-notice state, the current source's token, the
+   storage seam, and the two re-raised panel events. Source and Storage are
+   per-mode — see the @code members.
+
+   RestoreNotice is the app-scoped instance registered in Program.cs, bound and
+   nothing more: the producer's panel owns arming and dismissal, and every
+   member that moves it is internal to it, so this host cannot make the notice
+   behave differently from any other host's.
 
    Held back until the restore has run (#85): mounting it earlier would bind a
    Source this page cannot yet know, and the composite's source-change rule
@@ -141,6 +147,7 @@
 @if (_restoreComplete)
 {
     <FilterSurface AppliedFilter="AppliedFilter"
+                   RestoreNotice="FilterRestoreNotice"
                    Source="Source"
                    Storage="Storage"
                    OnFilterConfigChanged="OnFilterConfigChanged"
@@ -151,7 +158,7 @@
 {
     <LocalModePanel OutputFormat="_outputFormat"
                     FilterConfig="_filterConfig"
-                    FilterApplied="AppliedFilter.IsApplied"
+                    FilterApplied="FilterInEffect is not null"
                     FilterDirty="_filterDirty"
                     FolderPath="@_folderPathText"
                     FolderPathChanged="OnFolderPathEdited"
@@ -164,7 +171,7 @@ else
 {
     <WebModePanel OutputFormat="_outputFormat"
                   FilterConfig="_filterConfig"
-                  FilterApplied="AppliedFilter.IsApplied"
+                  FilterApplied="FilterInEffect is not null"
                   FilterDirty="_filterDirty"
                   OnSelectionChanged="OnWebSelectionChanged"
                   XgpOptions="_xgpOptions"
@@ -239,6 +246,32 @@ else
         : _webSelectionGeneration > 0
             ? FilterSourceToken.FromGeneration(_webSelectionGeneration)
             : null;
+
+    /// <summary>
+    /// The filter in effect for the source on screen right now, or
+    /// <see langword="null"/> when none is — the one derived filter fact this
+    /// page publishes. Both mode panels' <c>FilterApplied</c> read it, and so
+    /// does the restore reconcile below, so the gate and the recovery cannot
+    /// disagree about what "applied" means here.
+    ///
+    /// <para>
+    /// Source-relative by construction: the holder is asked only
+    /// <see cref="AppliedFilter.ConfigFor"/>, against this page's live token,
+    /// so a config committed against a folder or selection this page no longer
+    /// has reads as nothing applied without anyone comparing histories. A null
+    /// <see cref="Source"/> — blank path, no Web selection — is likewise no
+    /// filter in effect, correctly: an apply made against nothing was never
+    /// recorded, so there is nothing to be in effect.
+    /// </para>
+    ///
+    /// <para>
+    /// Not the whole gate yet: <c>_filterDirty</c> still rides beside this as
+    /// a second parameter encoding the same fact, which the spec's §6.1 rules
+    /// should collapse onto this one. That collapse is its own change.
+    /// </para>
+    /// </summary>
+    private FilterConfig? FilterInEffect =>
+        Source is { } source ? AppliedFilter.ConfigFor(source) : null;
 
     /// <summary>
     /// The composite's storage seam: the HTTP adapter while Local mode has a
@@ -345,20 +378,29 @@ else
         // — it raises no event, and OnFilterConfigChanged is otherwise the
         // only writer of _filterConfig.
         //
-        // Stamp matches: recover _filterConfig, the last-committed config the
-        // panels POST and refilter with and the XGP preview reads. Without it
-        // the run gate would reopen over a *default* config and the applied
-        // filter would be silently ignored.
+        // A filter in effect for the restored source: recover _filterConfig,
+        // the last-committed config the panels POST and refilter with and the
+        // XGP preview reads. Without it the run gate would reopen over a
+        // *default* config and the applied filter would be silently ignored.
         //
-        // Anything else — stamped for another source, or no source restored at
-        // all — is not this visit's applied state, so it must not hold the
-        // gate open. Dropping the config here is the whole correction: the
-        // composite isn't mounted yet, so there is no panel commitment to
-        // forget alongside it, and the stamp is left standing exactly as
-        // AppliedFilter.Clear always leaves it.
-        if (Source is { } restoredSource
-            && AppliedFilter.Config is { } appliedConfig
-            && AppliedFilter.WasAppliedFor(restoredSource))
+        // Anything else — a config applied against another source, or no
+        // source restored at all — is not this visit's applied state, and
+        // FilterInEffect already reads it as nothing. The Clear is what stops
+        // it being *anything ever again*: this host mints its Local tokens
+        // from the folder path, so re-entering the same path yields an equal
+        // token and a surviving config would be re-adopted the moment that
+        // path came back. That equality is the ownership semantics — it is
+        // exactly what lets the branch above adopt a config across a
+        // navigate-back — but it means nothing expires by construction here
+        // the way a generation counter expires it in BgQuiz. The eager clears
+        // are the whole expiry mechanism in this host: this one, and the
+        // composite's in-place source-change rule (#78). Do not weaken either
+        // in the belief that the keying covers it.
+        //
+        // Nothing survives the Clear: the applied config and its key are one
+        // pair with one lifetime, and the composite isn't mounted yet, so
+        // there is no panel commitment to forget alongside it either.
+        if (FilterInEffect is { } appliedConfig)
         {
             _filterConfig = appliedConfig;
         }
@@ -379,9 +421,9 @@ else
 
     // The composite's re-raise of the panel's Apply / Clear-filters commit. By
     // the time this fires, FilterSurface has already recorded the applied
-    // state on the shared AppliedFilter holder, stamped with Source (or left
-    // the holder untouched while no source exists) — so this handler keeps
-    // only what the composite can't know: the last-committed config the mode
+    // state on the shared AppliedFilter holder, keyed to Source (or left the
+    // holder untouched while no source exists) — so this handler keeps only
+    // what the composite can't know: the last-committed config the mode
     // panels POST / refilter with and the XGP preview reads.
     private void OnFilterConfigChanged(FilterConfig fc)
     {
@@ -398,8 +440,8 @@ else
     // unchanged selection). The source-change path arrives here too — the
     // composite's forget-commit re-reports null — which is how a folder or
     // selection change re-gates the panels. The applied half of the gate isn't
-    // tracked here at all: the panels read AppliedFilter.IsApplied, which the
-    // composite mediates before this re-raise.
+    // tracked here at all: the panels read FilterInEffect, which asks the
+    // holder the composite has already mediated before this re-raise.
     private void OnAppliedStateChanged(FilterConfig? applied) =>
         _filterDirty = applied is null;
 

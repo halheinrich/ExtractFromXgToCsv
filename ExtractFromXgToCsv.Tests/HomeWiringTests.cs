@@ -48,6 +48,7 @@ public class HomeWiringTests : BunitContext
         // The holder Home injects and FilterSurface mediates — registered like
         // the app registers it, and resolved by tests to assert the gate SSOT.
         Services.AddScoped<AppliedFilter>();
+        Services.AddScoped<FilterRestoreNotice>();
     }
 
     private StubAppModeHandler RegisterHttpClient(string appMode)
@@ -61,6 +62,23 @@ public class HomeWiringTests : BunitContext
     }
 
     private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();
+
+    /// <summary>
+    /// What the holder reports as applied for <paramref name="folderPath"/> —
+    /// the same source-relative question Home's <c>FilterInEffect</c> asks, and
+    /// the only one the holder answers. Null covers both "nothing is applied"
+    /// and "what is applied belongs elsewhere", which is precisely the
+    /// distinction no gate is allowed to care about.
+    /// </summary>
+    private FilterConfig? AppliedForFolder(string folderPath) =>
+        Holder.ConfigFor(HomeSourceTokens.ForFolder(folderPath));
+
+    /// <summary>
+    /// The Web-mode counterpart: what is applied for the
+    /// <paramref name="generation"/>th selection gesture.
+    /// </summary>
+    private FilterConfig? AppliedForSelection(int generation) =>
+        Holder.ConfigFor(HomeSourceTokens.ForSelection(generation));
 
     // Waits for the composite as well as the mode panel: Home holds
     // FilterSurface back until its first-render restore completes (#85), and in
@@ -140,12 +158,13 @@ public class HomeWiringTests : BunitContext
 
         await ApplyFiltersAsync(cut);
 
-        Assert.True(Holder.IsApplied);
+        var recorded = AppliedForFolder(@"D:\xg\matches");
+        Assert.NotNull(recorded);
         Assert.True(localPanel.Instance.FilterApplied);
         Assert.False(localPanel.Instance.FilterDirty);
-        // One config, one truth: the holder's applied config is the same
-        // instance the panel would POST.
-        Assert.Same(Holder.Config, localPanel.Instance.FilterConfig);
+        // One config, one truth: the config applied for this folder is the
+        // same instance the panel would POST.
+        Assert.Same(recorded, localPanel.Instance.FilterConfig);
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
@@ -161,10 +180,13 @@ public class HomeWiringTests : BunitContext
 
         await ApplyFiltersAsync(cut);
 
-        Assert.True(Holder.IsApplied);
+        // The upload was this page's first selection gesture, so the commit is
+        // keyed to generation 1.
+        var recorded = AppliedForSelection(1);
+        Assert.NotNull(recorded);
         Assert.True(webPanel.Instance.FilterApplied);
         Assert.False(webPanel.Instance.FilterDirty);
-        Assert.Same(Holder.Config, webPanel.Instance.FilterConfig);
+        Assert.Same(recorded, webPanel.Instance.FilterConfig);
     }
 
     [Fact]
@@ -182,7 +204,7 @@ public class HomeWiringTests : BunitContext
         // flag — both halves of the gate close.
         await EditFilterControlAsync(cut);
         var localPanel = cut.FindComponent<LocalModePanel>();
-        Assert.False(Holder.IsApplied);
+        Assert.Null(AppliedForFolder(@"D:\xg\matches"));
         Assert.True(localPanel.Instance.FilterDirty);
         Assert.True(RunButton(cut).HasAttribute("disabled"));
 
@@ -190,7 +212,7 @@ public class HomeWiringTests : BunitContext
         // composite re-affirms the holder, and the gate re-opens without a
         // re-Apply (which the panel refuses for an unchanged selection).
         await UndoFilterEditAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
         Assert.False(localPanel.Instance.FilterDirty);
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
@@ -205,19 +227,27 @@ public class HomeWiringTests : BunitContext
         await CommitFolderAsync(cut, @"D:\xg\matches");
         await SetOutputPathAsync(cut, @"D:\xg\out.csv");
         await ApplyFiltersAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
 
         // Committing a different folder is a source change: the setup ends —
         // holder cleared, Run re-gated.
         await CommitFolderAsync(cut, @"D:\xg\other");
-        Assert.False(Holder.IsApplied);
+        Assert.Null(AppliedForFolder(@"D:\xg\other"));
         Assert.True(RunButton(cut).HasAttribute("disabled"));
+
+        // Nothing survives for the *old* folder either, and in this host that
+        // is the load-bearing half. Local tokens are minted from the path, so
+        // re-entering "matches" mints an equal token again — a config merely
+        // left unmatched would be silently re-adopted the moment the user
+        // typed the old path back. #78's clear is what retires it; the keying
+        // alone expires nothing here.
+        Assert.Null(AppliedForFolder(@"D:\xg\matches"));
 
         // And Apply is re-armed: this click commits the *unchanged* selection,
         // which the panel would refuse had the composite not forget-committed
         // it — the re-open below is the proof.
         await ApplyFiltersAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\other"));
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
@@ -233,7 +263,7 @@ public class HomeWiringTests : BunitContext
         // A blur that commits the same value latches the same path → same
         // token → the setup survives.
         await CommitFolderAsync(cut, @"D:\xg\matches");
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
@@ -249,7 +279,7 @@ public class HomeWiringTests : BunitContext
         // The output path is not a source (umbrella-ratified): changing it
         // must never end the setup.
         await SetOutputPathAsync(cut, @"D:\elsewhere\out.csv");
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
@@ -267,13 +297,13 @@ public class HomeWiringTests : BunitContext
         // the user re-applies (ruled UX delta — supersedes the old "files
         // selected after an Apply are filtered immediately" contract).
         UploadFixture(cut, FixtureB);
-        Assert.False(Holder.IsApplied);
+        Assert.Null(AppliedForSelection(2));
         Assert.Contains("set filters and click Apply Filter", cut.Markup);
         Assert.True(DownloadButton(cut).HasAttribute("disabled"));
 
         // Apply is re-armed by the same rule — no edit needed.
         await ApplyFiltersAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForSelection(2));
         Assert.Contains("rows match current filters", cut.Markup);
         Assert.False(DownloadButton(cut).HasAttribute("disabled"));
     }
@@ -288,17 +318,21 @@ public class HomeWiringTests : BunitContext
         await SetOutputPathAsync(cut, @"D:\xg\out.csv");
 
         // No source yet: the apply is deliberately unrecorded — there is
-        // nothing to stamp it against, and Run stays gated.
+        // nothing to key it to, and Run stays gated.
         await ApplyFiltersAsync(cut);
-        Assert.False(Holder.IsApplied);
+        Assert.False(cut.FindComponent<LocalModePanel>().Instance.FilterApplied);
         Assert.True(RunButton(cut).HasAttribute("disabled"));
 
         // The first folder commit is a source change (null → token): the
-        // end-setup runs, re-arming Apply — so this second click of an
-        // unchanged selection commits, and is recorded against the folder.
+        // end-setup runs, re-arming Apply. The unrecorded click above does not
+        // attach to the new folder retroactively —
         await CommitFolderAsync(cut, @"D:\xg\matches");
+        Assert.Null(AppliedForFolder(@"D:\xg\matches"));
+
+        // — so this second click of an unchanged selection is the one that
+        // commits, and it is recorded against the folder.
         await ApplyFiltersAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
@@ -310,14 +344,14 @@ public class HomeWiringTests : BunitContext
 
         // No selection yet: no source, so the apply is unrecorded.
         await ApplyFiltersAsync(cut);
-        Assert.False(Holder.IsApplied);
+        Assert.False(cut.FindComponent<WebModePanel>().Instance.FilterApplied);
 
         // The first selection mints generation 1 (null → token): end-setup,
         // Apply re-armed, and the re-apply is recorded — the preview follows.
         UploadFixture(cut, FixtureA);
-        Assert.False(Holder.IsApplied);
+        Assert.Null(AppliedForSelection(1));
         await ApplyFiltersAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForSelection(1));
         Assert.Contains("rows match current filters", cut.Markup);
     }
 

@@ -47,9 +47,18 @@ public class HomeMountGateTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddSingleton<XgProcessingService>();
         Services.AddScoped<AppliedFilter>();
+        Services.AddScoped<FilterRestoreNotice>();
     }
 
     private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();
+
+    /// <summary>
+    /// What the holder reports as applied for <paramref name="folderPath"/> —
+    /// the same source-relative question Home's <c>FilterInEffect</c> asks, and
+    /// the only one the holder answers.
+    /// </summary>
+    private FilterConfig? AppliedForFolder(string folderPath) =>
+        Holder.ConfigFor(HomeSourceTokens.ForFolder(folderPath));
 
     private StubAppModeHandler RegisterHttpClient(string appMode)
     {
@@ -81,12 +90,11 @@ public class HomeMountGateTests : BunitContext
 
     /// <summary>
     /// The holder as a previous visit left it: <paramref name="config"/> applied
-    /// against <paramref name="folderPath"/>, stamped exactly as Home mints the
+    /// against <paramref name="folderPath"/>, keyed exactly as Home mints the
     /// token (normalized for Windows' case-insensitive path identity).
     /// </summary>
     private void SeedAppliedHolder(FilterConfig config, string folderPath) =>
-        Holder.Set(config, FilterSourceToken.FromPath(
-            Path.TrimEndingDirectorySeparator(folderPath).ToUpperInvariant()));
+        Holder.Set(config, HomeSourceTokens.ForFolder(folderPath));
 
     private IRenderedComponent<Home> RenderHome()
     {
@@ -160,8 +168,7 @@ public class HomeMountGateTests : BunitContext
         // change and #78's end-setup never fires.
         cut.WaitForAssertion(() =>
         {
-            Assert.True(Holder.IsApplied);
-            Assert.Equal(applied, Holder.Config);
+            Assert.Equal(applied, AppliedForFolder(RestoredFolder));
 
             var localPanel = cut.FindComponent<LocalModePanel>();
             Assert.True(localPanel.Instance.FilterApplied);
@@ -199,7 +206,7 @@ public class HomeMountGateTests : BunitContext
         var cut = RenderHome();
 
         // #82's first-mount reconcile, reaching this host for the first time:
-        // the holder's stamp matches the mounted token, so the panel's
+        // the holder's key matches the mounted token, so the panel's
         // committed config is seeded from it and Apply is offered only when
         // there is something to do — which here there is not.
         cut.WaitForAssertion(() =>
@@ -211,23 +218,32 @@ public class HomeMountGateTests : BunitContext
     }
 
     [Fact]
-    public void ReturnToHome_HolderStampedForAnotherFolder_IsNotAdopted()
+    public void ReturnToHome_HolderAppliedForAnotherFolder_IsNotAdoptedAndIsDropped()
     {
         RegisterHttpClient("Local");
         var applied = new FilterConfig { ErrorMin = 0.75 };
         SeedRestoredState(RestoredFolder, applied);
-        // Applied against a different folder than the one restored: the
-        // reconcile is guarded on the stamp, so this config must not be
-        // adopted as the restored folder's.
+        // Applied against a different folder than the one restored. The
+        // reconcile asks the holder only "what is applied for the restored
+        // folder?", so this config reads as nothing there and cannot be
+        // adopted as that folder's.
         SeedAppliedHolder(applied, @"D:\xg\elsewhere");
 
         var cut = RenderHome();
 
         cut.WaitForAssertion(() =>
         {
-            Assert.False(Holder.IsApplied);
+            Assert.Null(AppliedForFolder(RestoredFolder));
             var apply = cut.FindAll("button").First(b => b.TextContent.Trim() == "Apply Filter");
             Assert.False(apply.HasAttribute("disabled"));
+
+            // And it is *dropped*, not merely unmatched. Local tokens are
+            // minted from the path, so committing "elsewhere" later in this
+            // app lifetime would mint an equal token again and re-adopt a
+            // surviving config behind the user's back — nothing here expires
+            // by construction the way a generation counter does. The
+            // reconcile's Clear is what retires it.
+            Assert.Null(AppliedForFolder(@"D:\xg\elsewhere"));
         });
     }
 
@@ -248,7 +264,7 @@ public class HomeMountGateTests : BunitContext
 
         cut.WaitForAssertion(() =>
         {
-            Assert.False(Holder.IsApplied);
+            Assert.Null(AppliedForFolder(RestoredFolder));
             Assert.False(cut.FindComponent<WebModePanel>().Instance.FilterApplied);
         });
     }
@@ -271,13 +287,16 @@ public class HomeMountGateTests : BunitContext
         // path, since before the gate every visit started from a spurious one.
         await CommitFolderAsync(cut, @"D:\xg\other");
 
-        Assert.False(Holder.IsApplied);
+        Assert.Null(AppliedForFolder(@"D:\xg\other"));
+        // Dropped for the folder it belonged to, too — the path-keyed token
+        // would match again on a re-entry, so only the clear retires it.
+        Assert.Null(AppliedForFolder(RestoredFolder));
         Assert.True(RunButton(cut).HasAttribute("disabled"));
 
         // And Apply is re-armed: this commits the unchanged selection, which
         // the panel would refuse had the composite not forget-committed it.
         await ApplyFiltersAsync(cut);
-        Assert.True(Holder.IsApplied);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\other"));
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
@@ -299,7 +318,10 @@ public class HomeMountGateTests : BunitContext
         await CommitFolderAsync(cut, string.Empty);
 
         Assert.Single(cut.FindComponents<FilterSurface>());
-        Assert.False(Holder.IsApplied);
+        // Blank path = no source at all, so there is nothing to ask the holder
+        // source-relatively; what the in-place rule must have done is drop the
+        // restored folder's config, or retyping that path would resurrect it.
+        Assert.Null(AppliedForFolder(RestoredFolder));
         Assert.True(RunButton(cut).HasAttribute("disabled"));
         // A blank path renders no saved-filters section — and no load failure.
         Assert.Empty(cut.FindAll("#saveFilterName"));

@@ -3,8 +3,38 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using ExtractFromXgToCsv.Client.Shared;
+using XgFilter_Razor;
 
 namespace ExtractFromXgToCsv.Tests;
+
+/// <summary>
+/// Mints <see cref="FilterSourceToken"/>s the way <c>Home</c> mints them, so a
+/// test can ask the shared <see cref="AppliedFilter"/> holder the one question
+/// it answers — <see cref="AppliedFilter.ConfigFor"/>, "what is applied for
+/// this source?" — with the same key the page uses. Stated here once rather
+/// than per test class: the normalization below mirrors Home's private rule
+/// for what counts as the same folder, and two copies of that rule could drift
+/// apart without anything failing.
+/// </summary>
+internal static class HomeSourceTokens
+{
+    /// <summary>
+    /// Local mode's token for <paramref name="folderPath"/>: the latched path,
+    /// trailing separator trimmed and upper-cased for Windows' case-insensitive
+    /// identity, exactly as Home normalizes before minting.
+    /// </summary>
+    public static FilterSourceToken ForFolder(string folderPath) =>
+        FilterSourceToken.FromPath(
+            Path.TrimEndingDirectorySeparator(folderPath).ToUpperInvariant());
+
+    /// <summary>
+    /// Web mode's token for the <paramref name="generation"/>th selection
+    /// gesture of a page instance — Home bumps the counter once per selection,
+    /// so the first upload is generation 1 and 0 means no source at all.
+    /// </summary>
+    public static FilterSourceToken ForSelection(int generation) =>
+        FilterSourceToken.FromGeneration(generation);
+}
 
 /// <summary>
 /// Shared helpers for bUnit-based component tests. Kept narrow on purpose:

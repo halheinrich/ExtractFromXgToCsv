@@ -32,8 +32,9 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 - **XgFilter_Razor** — `FilterSurface` (the one consumer-facing filter
   composite: filter panel + saved-filters panel + all wiring, the
   applied-holder mediation, and the source-change rule) plus the non-visual
-  interaction model it drives: `AppliedFilter`, `FilterSourceToken`,
-  `IFilterDocumentStorage` / `FilterStorageException`, `SavedFiltersDocument`.
+  interaction model it drives: `AppliedFilter`, `FilterRestoreNotice`,
+  `FilterSourceToken`, `IFilterDocumentStorage` / `FilterStorageException`,
+  `SavedFiltersDocument`.
   Referenced by the WASM Client csproj only — the server has no filter UI to
   host, and its saved-filters file relay must stay ignorant of the document
   names (see Pitfalls).
@@ -248,15 +249,29 @@ export. In Local mode the count is the final
   dirty), renders the output-format radio and the producer composite, and
   delegates to `LocalModePanel` or `WebModePanel`. As the host it binds
   facts and side effects only:
-  - **The applied holder.** XgFilter_Razor's `AppliedFilter` (DI-scoped,
-    injected) is the applied-state SSOT: the composite mediates it — a
-    commit `Set`s it stamped with the source token, an uncommitted-edit
-    report `Clear`s it, a source change expires it. The mode panels'
-    `FilterApplied` parameter is fed straight from `AppliedFilter.IsApplied`;
-    `_filterDirty` is assigned from each `OnAppliedStateChanged` payload's
-    null-ness, statelessly per the producer contract. `_filterConfig` (the
-    last-committed config the panels POST / refilter with and the XGP
-    preview reads) is a distinct fact and stays a Home field.
+  - **The applied holder, read source-relatively.** XgFilter_Razor's
+    `AppliedFilter` (DI-scoped, injected) is the applied-state SSOT: the
+    composite mediates it — a commit `Set`s it keyed to the source token, an
+    uncommitted-edit report `Clear`s it, a source change clears it. It holds
+    one nullable (config, source) pair and answers only `ConfigFor(token)`;
+    there is no bare "is anything applied" to read. Home asks it once, in
+    `FilterInEffect` (`Source is { } s ? AppliedFilter.ConfigFor(s) : null`)
+    — the single derived filter fact both mode panels' `FilterApplied` and
+    the restore reconcile read, so the gate and the recovery cannot disagree.
+    A null `Source` is no filter in effect, correctly: an apply made against
+    nothing was never recorded. `_filterDirty` is assigned from each
+    `OnAppliedStateChanged` payload's null-ness, statelessly per the producer
+    contract — a second parameter encoding the same fact, which the filtering
+    spec's §6.1 rules should collapse onto `FilterApplied` (own change).
+    `_filterConfig` (the last-committed config the panels POST / refilter
+    with and the XGP preview reads) is a distinct fact and stays a Home field.
+  - **The restore notice.** XgFilter_Razor's `FilterRestoreNotice`, registered
+    Scoped beside the holder and bound to `FilterSurface` — nothing more. A
+    reload constructs a fresh instance, and that construction is what tells a
+    boot's localStorage restore (say so — the filtering spec's §4 legibility
+    rule) from a navigate-back remount (say nothing). Every member that moves
+    it is producer-internal, so this host cannot make the notice behave
+    differently from any other host's.
   - **Source identity (the #78 re-gate).** Local mode's source is the input
     folder path, hoisted into Home: `_folderPathText` follows every
     keystroke (and persists under `xg_folderPath`), while the separate
@@ -292,14 +307,16 @@ export. In Local mode the count is the final
     user clears the folder.
   - **Holder recovery at restore.** `AppliedFilter` is DI-scoped and
     outlives the page, so the same restore reconciles it against the
-    restored source: stamp matches ⇒ `_filterConfig` is recovered from
-    `AppliedFilter.Config`; anything else (stamped for another source, or
-    no source restored) ⇒ `AppliedFilter.Clear()`. This is the host's half
+    restored source: `FilterInEffect is { } cfg` ⇒ `_filterConfig` is
+    recovered from it; anything else (applied against another source, or no
+    source restored) ⇒ `AppliedFilter.Clear()`. This is the host's half
     of the composite's first-mount reconcile, which is silent by contract —
     it seeds the *panel's* committed config and raises no event, so
     `OnFilterConfigChanged` (otherwise the only writer of `_filterConfig`)
     never fires. Without it the mount gate would reopen the run gate over a
-    *default* config, silently ignoring the applied filter.
+    *default* config, silently ignoring the applied filter. **The
+    `else Clear()` is not redundant with the keyed read** — see the
+    path-token-equality pitfall.
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar (determinate, plus the two
   indeterminate states in "Busy affordance"). Parameters: `OutputFormat`,
@@ -582,13 +599,22 @@ project via relative path — not duplicated here.
   the composite is absent until the restore completes (proven with the
   app-mode probe held open on a `TaskCompletionSource`, so the pre-restore
   render is observed rather than raced); a return to Home over a restored
-  folder the holder is still stamped for keeps the applied config, the
-  panels' gate, and the run gate — with Apply disabled by #82's reconcile,
-  which before this gate could never fire in this host; a holder stamped for
-  *another* folder is not adopted, and neither is one left standing when Web
-  mode restores no selection at all; and neither half of #78 is disturbed —
-  committing a different folder still ends the setup, and blanking the
-  folder re-gates in place with the composite still mounted.
+  folder the holder still has a config applied for keeps the applied config,
+  the panels' gate, and the run gate — with Apply disabled by #82's reconcile,
+  which before this gate could never fire in this host; a config applied for
+  *another* folder is not adopted **and is dropped**, and neither is one left
+  standing when Web mode restores no selection at all; and neither half of
+  #78 is disturbed — committing a different folder still ends the setup, and
+  blanking the folder re-gates in place with the composite still mounted.
+  Every drop is pinned twice — nothing applied for the *new* source and
+  nothing left for the *old* one — because under path-keyed tokens only the
+  second half proves a clear actually happened (see the pitfall).
+- `HomeRestoreNoticeTests` — the §4 notice's host wiring: `FilterRestoreNotice`
+  registered at app scope and bound to the hosted `FilterSurface`, so the
+  producer's decision reaches the page and an edit takes it away again. The
+  notice's own mechanics are the producer's to pin and are pinned there; a
+  missing registration throws at render and an unbound parameter would leave
+  the composite arming an instance nobody shows.
 - `FilterDocumentStoreTests` — the server relay's unit contracts: the
   filename-shape rule's accept/reject matrix, absent file *and* absent
   folder → null, the write round-trip + overwrite, the never-create-folder
@@ -918,12 +944,30 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   client adapter. Adding an XgFilter_Razor reference to the server csproj
   "for the constants" would re-couple what the split exists to decouple.
 - **Run/Download gating is holder-plus-dirty — don't re-derive it.** The
-  mode panels' `FilterApplied` comes straight from `AppliedFilter.IsApplied`
-  (the composite-mediated SSOT) and `FilterDirty` from the per-gesture
-  report's null-ness. If a test or UI change ever makes Run or Download
-  appear enabled with a dirty filter — or with a commit recorded against a
-  *different* source — that's a regression: the holder is the gate, not a
-  cosmetic hint.
+  mode panels' `FilterApplied` comes from `Home.FilterInEffect` (the
+  composite-mediated holder, asked source-relatively — the SSOT) and
+  `FilterDirty` from the per-gesture report's null-ness. Ask the holder
+  through `FilterInEffect`, never with a fresh `ConfigFor` call at a use
+  site: a second mint is a second chance to key it differently. If a test or
+  UI change ever makes Run or Download appear enabled with a dirty filter —
+  or with a commit recorded against a *different* source — that's a
+  regression: the holder is the gate, not a cosmetic hint.
+- **Path-keyed tokens don't expire by construction — the eager clears are
+  the mechanism.** `AppliedFilter` keys the applied config to its source, so
+  it looks as though a stale config retires itself. It does in BgQuiz, whose
+  tokens come from a generation counter that every pick bumps. **Not here.**
+  This host mints Local tokens with `FromPath`, so re-entering the same
+  folder yields an *equal* token — deliberately, because that equality is
+  the ownership semantics, and it is exactly what lets the #85 restore adopt
+  a config across a navigate-back. The consequence is that a config left
+  merely unmatched would be silently re-adopted the moment its path came
+  back. What retires one in this host is two eager clears: the composite's
+  in-place source-change rule (#78) and the restore's `else Clear()` (#85).
+  Both are load-bearing here in a way they are not in BgQuiz. Don't weaken
+  either on the reasoning that the keying covers it, and don't add a
+  host-side expiry mechanism to compensate — the clears *are* it. The
+  `Home*Tests` drop assertions check the old source as well as the new one
+  precisely because only that half can tell a clear from a non-match.
 - **A source change ends the setup (#78) — the token is minted from the
   latch, never the live text.** Local mode latches the folder path at the
   input's `@onchange` boundary (plus the restore); Web mode bumps a
@@ -938,7 +982,7 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   are filtered immediately" contract, and with it the old "configure
   filters → select files → run" ordering copy: the arming commit is
   per-source); an apply made before any source exists is unrecorded (the
-  holder has nothing to stamp it against — the first real source re-arms
+  holder has no key to record it under — the first real source re-arms
   Apply instead); and the output path never re-gates — it is not a source
   (umbrella-ratified). Don't "fix" any of them, and don't wire the token to
   `@oninput` — per-keystroke re-gating was ruled out.
