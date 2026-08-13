@@ -125,6 +125,7 @@ ExtractFromXgToCsv.Tests/
   FilteredRowCacheTests.cs              — projection + identity-cache invariants (direct)
   FixtureHelper.cs
   HomeMountGateTests.cs                 — restore-gated FilterSurface mount + holder recovery (bUnit)
+  HomeStorageUnavailableTests.cs        — localStorage-refused degradation + its notice (bUnit)
   HomeWiringTests.cs                    — FilterSurface → Home wiring + per-mode re-gate (bUnit)
   HttpFilterDocumentStorageTests.cs     — client relay adapter contracts (direct)
   HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
@@ -317,6 +318,25 @@ export. In Local mode the count is the final
     *default* config, silently ignoring the applied filter. **The
     `else Clear()` is not redundant with the keyed read** — see the
     path-token-equality pitfall.
+  - **The `localStorage` seam (#91).** Every `localStorage` call Home makes
+    goes through `TryGetItemAsync` / `TrySetItemAsync` /
+    `TryRemoveItemAsync`, and none of them throws: a refused store
+    (disabled storage, hostile privacy setting) raises a `SecurityError`
+    that arrives as a `JSException`, caught there and latched in
+    `_storageUnavailable`. A refused read returns null — "nothing is
+    stored", which every read site already answers with its own documented
+    default, so no default is restated in the seam and none can drift from
+    the field initializers. The invariant: **every read lands on its stored
+    value or on its documented default, and the page's shape is never at
+    stake**; a first failure partway through leaves a truthful mix of the
+    two (the realistic case throws on read one and yields defaults
+    throughout). `JSException` only — a parse or migration bug is not a
+    storage failure and must still surface. The latch renders a
+    non-dismissible `#storageUnavailableNotice`, host-owned because
+    `FilterRestoreNotice` states something else and is producer-armed.
+    Home's siblings are **not** covered — `WebModePanel`,
+    `LocalModePanel` and the producer's `FilterPanel` still read raw; that
+    is halheinrich/backgammon#102.
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar (determinate, plus the two
   indeterminate states in "Busy affordance"). Parameters: `OutputFormat`,
@@ -609,6 +629,16 @@ project via relative path — not duplicated here.
   Every drop is pinned twice — nothing applied for the *new* source and
   nothing left for the *old* one — because under path-keyed tokens only the
   second half proves a clear actually happened (see the pitfall).
+- `HomeStorageUnavailableTests` — what a refused `localStorage` costs (#91):
+  the surface still mounts (unguarded, the restore faulted before
+  `_restoreComplete` and the page had no filtering at all — silently, since
+  this app registers no `#blazor-error-ui`), the notice appears and its
+  absence with storage working is the control, every option lands on its
+  documented default, no source is restored so a surviving holder is
+  dropped, and a store lost *after* boot flips the notice on the first
+  persisted gesture. **Fails Home's own keys only** — a real refusal throws
+  for every caller, and bUnit rethrows the siblings' lifecycle exceptions,
+  so a whole-browser model must wait for #102.
 - `HomeRestoreNoticeTests` — the §4 notice's host wiring: `FilterRestoreNotice`
   registered at app scope and bound to the hosted `FilterSurface`, so the
   producer's decision reaches the page and an edit takes it away again. The
@@ -1002,6 +1032,19 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   six samples), i.e. under one frame, so it needs no spinner and no
   reserved-space placeholder. Re-measure before adding anything to the
   restore that could stretch it.
+- **`_restoreComplete` is set over facts, never in a `finally` (#91).** The
+  restore reaching its end while storage is refused is legitimate — the
+  seam answered each key with its documented default, so `Source` is minted
+  from something known (usually null, a steady state the composite owns).
+  Setting the flag in a `finally` is a different thing and stays rejected:
+  it publishes a token derived from reads that never landed, which is the
+  truthful-`Source` violation the gate exists to prevent. So don't "tidy"
+  the per-call seam into one method-wide `try` either — a method-wide catch
+  would have to restate every default in its handler (a second copy to
+  drift from the field initializers) and would swallow the app-mode probe's
+  own guarded failure along with it. The probe stays outside the seam
+  deliberately: its fallback (`"Web"`) is *not* truthful on a Local
+  install, so it must be attempted even when storage is dead.
 - **The filterdocument Local guard is an explicit action guard —
   deliberately unlike `OpeningBookController`.** The processing services
   stay DI-guarded (registered only inside the Local branch), but

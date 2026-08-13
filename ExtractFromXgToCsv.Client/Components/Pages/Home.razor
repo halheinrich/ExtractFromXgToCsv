@@ -14,6 +14,22 @@
 
 <h1>Extract XG Decisions to CSV</h1>
 
+@* Storage is dead for the session once it has failed once, so this is not
+   dismissible: dismissing it would hide a fact that is still true, and the
+   defaults it explains are visible on every control below. Host-owned on
+   purpose — XgFilter_Razor's FilterRestoreNotice states something else
+   entirely (a restored filter selection is not yet applied) and is armed
+   and spent by members internal to that library. *@
+@if (_storageUnavailable)
+{
+    <div class="alert alert-warning" role="alert" id="storageUnavailableNotice"
+         style="max-width:800px">
+        Browser storage is unavailable, so this page cannot remember your
+        settings. The output format, folder path and XGP numbering options
+        start from their defaults and changes to them will not be saved.
+    </div>
+}
+
 <div class="mb-3" style="max-width:800px">
     <label class="form-label d-block">Output format</label>
     <div class="form-check form-check-inline">
@@ -310,7 +326,7 @@ else
     {
         if (!firstRender) return;
 
-        var savedFormat = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputFormat");
+        var savedFormat = await TryGetItemAsync("xg_outputFormat");
         if (Enum.TryParse<OutputFormat>(savedFormat, out var fmt))
             _outputFormat = fmt;
 
@@ -318,11 +334,10 @@ else
         // hoist) and latch it: a restored path is a committed value — the
         // saved-filters context loads for it, and the first Apply records
         // against it — not a keystroke in flight.
-        _folderPathText = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_folderPath")
-            ?? string.Empty;
+        _folderPathText = await TryGetItemAsync("xg_folderPath") ?? string.Empty;
         LatchSourceFolder(_folderPathText);
 
-        _xgpPersistedPattern = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpPattern");
+        _xgpPersistedPattern = await TryGetItemAsync("xg_xgpPattern");
         if (_xgpPersistedPattern is null)
         {
             // One-time migration from the pre-pattern persistence shape: the
@@ -333,7 +348,7 @@ else
             // contain braces) falls back to the default. xg_xgpPrefix is
             // read-once legacy: never written again, and removed on the next
             // successful export.
-            var legacyPrefix = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpPrefix");
+            var legacyPrefix = await TryGetItemAsync("xg_xgpPrefix");
             if (legacyPrefix is not null)
             {
                 var migrated = legacyPrefix + "{n}";
@@ -342,8 +357,8 @@ else
                     : XgpExportOptions.DefaultNamePattern;
             }
         }
-        var savedLast = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpLastNumber");
-        var savedLength = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpSuffixLength");
+        var savedLast = await TryGetItemAsync("xg_xgpLastNumber");
+        var savedLength = await TryGetItemAsync("xg_xgpSuffixLength");
 
         _xgpPattern = _xgpPersistedPattern ?? XgpExportOptions.DefaultNamePattern;
         if (int.TryParse(savedLast, out var last) && last >= 0)
@@ -351,7 +366,7 @@ else
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         if (int.TryParse(savedLength, out var len) && len is >= 1 and <= 9)
             _xgpSuffixLength = len;
-        var savedAnonymize = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_xgpAnonymize");
+        var savedAnonymize = await TryGetItemAsync("xg_xgpAnonymize");
         _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
 
@@ -411,9 +426,89 @@ else
         // Last, after every fact Source is derived from: the composite may now
         // mount, and its first parameters-set will see the real token rather
         // than a placeholder it would later have to be corrected out of.
+        //
+        // Reached even when storage is unavailable, and legitimately so: the
+        // seam above answers a dead localStorage with each key's documented
+        // default, so what Source is minted from here is known, not merely
+        // not-yet-arrived. No folder restored means Source is null, which the
+        // composite handles in place as a steady state. This is not the
+        // try/finally that was rejected for #85 — that one set the flag over
+        // reads that never landed and published a token derived from them;
+        // this sets it over facts.
         _restoreComplete = true;
 
         StateHasChanged();
+    }
+
+    // ── The localStorage seam (halheinrich/backgammon#91) ─────────────────
+    //
+    // Every localStorage call this page makes goes through the three members
+    // below, and none of them throws. localStorage is not guaranteed to exist:
+    // a disabled-storage or hostile-privacy setting makes getItem/setItem raise
+    // a SecurityError, which reaches Blazor as a JSException. Unguarded that
+    // faulted the first-render restore, and since the mount gate went in (#85)
+    // the cost was structural rather than cosmetic — _restoreComplete was never
+    // reached, so FilterSurface never mounted and the page had no filtering at
+    // all, silently: this app registers no #blazor-error-ui, so nothing on
+    // screen said why.
+    //
+    // The guard is per call and translates the failure into "nothing is
+    // stored", which is a state every read site already handles — each one
+    // carries its own documented default in its ?? or TryParse. Nothing
+    // restates those defaults here, so there is no second copy to drift from
+    // the field initializers.
+    //
+    // The invariant this buys: every read lands either on its stored value or
+    // on its documented default, and the page's *shape* is never at stake. A
+    // first failure partway through the restore therefore leaves a mix of the
+    // two — coherent and truthful, each key answered for itself, and the
+    // realistic case (storage refused outright) throws on the first read and
+    // yields defaults throughout.
+    //
+    // JSException only. A parse or migration bug in the restore is not a
+    // storage failure and must still surface.
+    private bool _storageUnavailable;
+
+    private async Task<string?> TryGetItemAsync(string key)
+    {
+        // Latched, not retried: storage does not come back mid-session, and a
+        // failed call per key would be seven identical console errors a boot.
+        if (_storageUnavailable) return null;
+
+        try
+        {
+            return await JS.InvokeAsync<string?>("localStorage.getItem", key);
+        }
+        catch (JSException)
+        {
+            _storageUnavailable = true;
+            return null;
+        }
+    }
+
+    private Task TrySetItemAsync(string key, string value) =>
+        TryStorageWriteAsync("localStorage.setItem", key, value);
+
+    private Task TryRemoveItemAsync(string key) =>
+        TryStorageWriteAsync("localStorage.removeItem", key);
+
+    // Writes fail the same way reads do, and the notice's claim — that nothing
+    // on this page is remembered — has to keep holding for a session that
+    // started with storage working and lost it. Every caller is either an event
+    // handler Blazor re-renders after or calls StateHasChanged itself, so a
+    // latch flipped here reaches the notice without one of its own.
+    private async Task TryStorageWriteAsync(string identifier, params object?[] args)
+    {
+        if (_storageUnavailable) return;
+
+        try
+        {
+            await JS.InvokeVoidAsync(identifier, args);
+        }
+        catch (JSException)
+        {
+            _storageUnavailable = true;
+        }
     }
 
     // The composite's re-raise of the panel's Apply / Clear-filters commit. By
@@ -450,7 +545,7 @@ else
     private async Task OnFolderPathEdited(string path)
     {
         _folderPathText = path;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_folderPath", path);
+        await TrySetItemAsync("xg_folderPath", path);
     }
 
     // Change-boundary half: latch the committed path. If the latched value
@@ -475,7 +570,7 @@ else
     private async Task SetOutputFormat(OutputFormat fmt)
     {
         _outputFormat = fmt;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputFormat", fmt.ToString());
+        await TrySetItemAsync("xg_outputFormat", fmt.ToString());
         StateHasChanged();
     }
 
@@ -539,8 +634,7 @@ else
     private async Task OnXgpAnonymizeChanged(ChangeEventArgs e)
     {
         _xgpAnonymize = e.Value is bool b && b;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpAnonymize",
-            _xgpAnonymize.ToString());
+        await TrySetItemAsync("xg_xgpAnonymize", _xgpAnonymize.ToString());
     }
 
     /// <summary>
@@ -557,14 +651,12 @@ else
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         RebuildXgpOptions();
 
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpPattern", _xgpPersistedPattern);
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpLastNumber",
-            _xgpPersistedLastNumber.ToString());
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_xgpSuffixLength",
-            _xgpOptions.SuffixLength.ToString());
+        await TrySetItemAsync("xg_xgpPattern", _xgpPersistedPattern);
+        await TrySetItemAsync("xg_xgpLastNumber", _xgpPersistedLastNumber.ToString());
+        await TrySetItemAsync("xg_xgpSuffixLength", _xgpOptions.SuffixLength.ToString());
         // The legacy prefix key is read-once (migration input only) — clear
         // it so it can never shadow the persisted pattern again.
-        await JS.InvokeVoidAsync("localStorage.removeItem", "xg_xgpPrefix");
+        await TryRemoveItemAsync("xg_xgpPrefix");
         StateHasChanged();
     }
 }
