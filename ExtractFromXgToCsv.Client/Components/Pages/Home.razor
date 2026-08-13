@@ -9,7 +9,6 @@
 @inject HttpClient Http
 @inject AppliedFilter AppliedFilter
 @inject FilterRestoreNotice FilterRestoreNotice
-@implements IDisposable
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
 
@@ -416,8 +415,6 @@ else
 
         StateHasChanged();
     }
-
-    public void Dispose() { }
 
     // The composite's re-raise of the panel's Apply / Clear-filters commit. By
     // the time this fires, FilterSurface has already recorded the applied
