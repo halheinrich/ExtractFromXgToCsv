@@ -55,10 +55,13 @@ public class HomeMountGateTests : BunitContext
     /// <summary>
     /// What the holder reports as applied for <paramref name="folderPath"/> —
     /// the same source-relative question Home's <c>FilterInEffect</c> asks, and
-    /// the only one the holder answers.
+    /// the only one the holder answers. The key is minted the way Home mints
+    /// it, which since halheinrich/backgammon#94 is the bare factory call:
+    /// <see cref="FilterSourceToken.FromPath"/> owns what counts as the same
+    /// folder, so there is no host rule left for a test to mirror.
     /// </summary>
     private FilterConfig? AppliedForFolder(string folderPath) =>
-        Holder.ConfigFor(HomeSourceTokens.ForFolder(folderPath));
+        Holder.ConfigFor(FilterSourceToken.FromPath(folderPath));
 
     private StubAppModeHandler RegisterHttpClient(string appMode)
     {
@@ -91,10 +94,10 @@ public class HomeMountGateTests : BunitContext
     /// <summary>
     /// The holder as a previous visit left it: <paramref name="config"/> applied
     /// against <paramref name="folderPath"/>, keyed exactly as Home mints the
-    /// token (normalized for Windows' case-insensitive path identity).
+    /// token.
     /// </summary>
     private void SeedAppliedHolder(FilterConfig config, string folderPath) =>
-        Holder.Set(config, HomeSourceTokens.ForFolder(folderPath));
+        Holder.Set(config, FilterSourceToken.FromPath(folderPath));
 
     private IRenderedComponent<Home> RenderHome()
     {

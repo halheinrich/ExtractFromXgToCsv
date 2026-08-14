@@ -68,17 +68,21 @@ public class HomeWiringTests : BunitContext
     /// the same source-relative question Home's <c>FilterInEffect</c> asks, and
     /// the only one the holder answers. Null covers both "nothing is applied"
     /// and "what is applied belongs elsewhere", which is precisely the
-    /// distinction no gate is allowed to care about.
+    /// distinction no gate is allowed to care about. The key is minted the way
+    /// Home mints it — since halheinrich/backgammon#94 the bare factory call,
+    /// because <see cref="FilterSourceToken.FromPath"/> owns path identity.
     /// </summary>
     private FilterConfig? AppliedForFolder(string folderPath) =>
-        Holder.ConfigFor(HomeSourceTokens.ForFolder(folderPath));
+        Holder.ConfigFor(FilterSourceToken.FromPath(folderPath));
 
     /// <summary>
     /// The Web-mode counterpart: what is applied for the
-    /// <paramref name="generation"/>th selection gesture.
+    /// <paramref name="generation"/>th selection gesture of a page instance —
+    /// Home bumps the counter once per selection, so the first upload is
+    /// generation 1 and 0 means no source at all.
     /// </summary>
     private FilterConfig? AppliedForSelection(int generation) =>
-        Holder.ConfigFor(HomeSourceTokens.ForSelection(generation));
+        Holder.ConfigFor(FilterSourceToken.FromGeneration(generation));
 
     // Waits for the composite as well as the mode panel: Home holds
     // FilterSurface back until its first-render restore completes (#85), and in
@@ -265,6 +269,59 @@ public class HomeWiringTests : BunitContext
         await CommitFolderAsync(cut, @"D:\xg\matches");
         Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
         Assert.False(RunButton(cut).HasAttribute("disabled"));
+    }
+
+    /// <summary>
+    /// The same folder respelled with a trailing separator is the same source
+    /// (halheinrich/backgammon#94). Home no longer folds paths itself; it hands
+    /// the spelling it holds to <c>FilterSourceToken.FromPath</c>, whose rule
+    /// makes trailing separators insignificant.
+    /// <para>
+    /// Pinned at the wire layer, not left to the producer's unit test, because
+    /// the two answer different questions: that one says <c>FromPath</c> folds
+    /// the spelling, this one says nothing between the folder input and the
+    /// holder re-introduces a distinction the token dissolved.
+    /// </para>
+    /// <para>
+    /// <b>What it does not do is reproduce the bug that motivated the move</b>,
+    /// and it must not be read as if it did. Home's old rule trimmed with
+    /// <c>Path.TrimEndingDirectorySeparator</c>, which is platform-sensitive:
+    /// under WebAssembly's Unix path semantics it recognizes only <c>/</c> and
+    /// left the trailing <c>\</c> in place, so in the browser
+    /// <c>…\matches\</c> minted a token that failed to match <c>…\matches</c>
+    /// and ended the setup behind the user's back. bUnit runs on Windows .NET,
+    /// where that same call trims <c>\</c> correctly — so this test passed
+    /// against the old code too, and no test that runs on this host could have
+    /// caught it. That is the argument for the rule living in the token rather
+    /// than in a host: the failure was invisible at the mint site *and*
+    /// unreachable from the host's own suite. What this pins is the contract
+    /// going forward — a host-side fold reintroduced here, or a token that
+    /// stops folding, fails it on any platform.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task FolderRecommitWithTrailingSeparator_IsNotASourceChange()
+    {
+        RegisterHttpClient("Local");
+        var cut = RenderHome("Local");
+        await CommitFolderAsync(cut, @"D:\xg\matches");
+        await SetOutputPathAsync(cut, @"D:\xg\out.csv");
+        await ApplyFiltersAsync(cut);
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
+
+        await CommitFolderAsync(cut, @"D:\xg\matches\");
+
+        // Same source, so nothing ends: the applied config is still there and
+        // Run is still live. Asked under *both* spellings — one token answers
+        // to each, which is the property under test.
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
+        Assert.NotNull(AppliedForFolder(@"D:\xg\matches\"));
+        Assert.False(RunButton(cut).HasAttribute("disabled"));
+
+        // And the panel was never re-armed — the composite's forget-commit is
+        // what a spurious source change would show up as here.
+        var apply = cut.FindAll("button").First(b => b.TextContent.Trim() == "Apply Filter");
+        Assert.True(apply.HasAttribute("disabled"));
     }
 
     [Fact]

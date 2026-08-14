@@ -173,11 +173,11 @@ public class HomeStorageUnavailableTests : BunitContext
         // and the restore's reconcile must retire it rather than leave it to be
         // re-adopted the moment that path is typed again.
         Holder.Set(
-            new FilterConfig { ErrorMin = 0.75 }, HomeSourceTokens.ForFolder(RestoredFolder));
+            new FilterConfig { ErrorMin = 0.75 }, FilterSourceToken.FromPath(RestoredFolder));
 
         var cut = RenderHome();
 
-        Assert.Null(Holder.ConfigFor(HomeSourceTokens.ForFolder(RestoredFolder)));
+        Assert.Null(Holder.ConfigFor(FilterSourceToken.FromPath(RestoredFolder)));
         // And the gate the composite mounted with is the truthful one: nothing
         // applied, so Apply is armed rather than reporting a filter in effect.
         var apply = cut.FindAll("button").First(b => b.TextContent.Trim() == "Apply Filter");

@@ -247,16 +247,27 @@ else
 
     /// <summary>
     /// The current source's token, minted per the umbrella-ratified semantics:
-    /// Local = the latched folder path (normalized for Windows'
-    /// case-insensitive identity — IO keeps the user's spelling), Web = the
-    /// selection generation. Null while no source exists (blank path, nothing
-    /// selected), so applies made against nothing are deliberately not
-    /// recorded — the first real source then runs the composite's end-setup,
-    /// re-arming Apply. The output path is not a source and never appears here.
+    /// Local = the latched folder path, Web = the selection generation. Null
+    /// while no source exists (blank path, nothing selected), so applies made
+    /// against nothing are deliberately not recorded — the first real source
+    /// then runs the composite's end-setup, re-arming Apply. The output path is
+    /// not a source and never appears here.
+    ///
+    /// <para>
+    /// The path goes to <see cref="FilterSourceToken.FromPath"/> in the
+    /// spelling this page holds: what counts as the same folder is a property
+    /// of paths, so the factory owns it (halheinrich/backgammon#94). This host
+    /// pre-folded a copy of that rule until the factory took it over, and the
+    /// copy was subtly weaker — it trimmed with
+    /// <c>Path.TrimEndingDirectorySeparator</c>, which under WebAssembly's Unix
+    /// path semantics recognizes only <c>/</c> and so left the trailing
+    /// <c>\</c> these Windows-shaped paths actually carry. The latched path
+    /// itself keeps the user's spelling, for IO and display.
+    /// </para>
     /// </summary>
     private FilterSourceToken? Source => _appMode == "Local"
         ? _localSourcePath is { } path
-            ? FilterSourceToken.FromPath(NormalizeSourceIdentity(path))
+            ? FilterSourceToken.FromPath(path)
             : null
         : _webSelectionGeneration > 0
             ? FilterSourceToken.FromGeneration(_webSelectionGeneration)
@@ -299,13 +310,6 @@ else
 
     protected override void OnInitialized() =>
         _filterStorage = new HttpFilterDocumentStorage(Http, () => _localSourcePath);
-
-    // Case-fold + trailing-separator-trim for token identity only: the same
-    // folder spelled differently must not read as a source change on a
-    // case-insensitive filesystem. The latched path itself keeps the user's
-    // spelling for IO and display.
-    private static string NormalizeSourceIdentity(string path) =>
-        Path.TrimEndingDirectorySeparator(path).ToUpperInvariant();
 
     // XGP export options. Home owns the option state (and its persistence);
     // the panels receive an immutable XgpExportOptions snapshot and report

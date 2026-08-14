@@ -278,10 +278,16 @@ export. In Local mode the count is the final
     keystroke (and persists under `xg_folderPath`), while the separate
     `_localSourcePath` latches only at the input's `@onchange` boundary —
     and once at the localStorage restore, which is a committed value. The
-    token is minted from the latch only (`FromPath`, normalized: trailing
-    separator trimmed + upper-cased for Windows' case-insensitive identity;
-    IO keeps the user's spelling), never from the live text — per-keystroke
-    re-gating was ruled out. Web mode's source is the file selection:
+    token is minted from the latch only (`FromPath`, handed the path in the
+    spelling Home holds), never from the live text — per-keystroke re-gating
+    was ruled out. **Path identity is the token's, not this host's**
+    (halheinrich/backgammon#94): `FromPath` folds case and makes trailing
+    separators insignificant, so Home pre-folds nothing and the latched path
+    keeps the user's spelling for IO and display. The host copy that used to
+    sit here was a partial no-op — it trimmed with
+    `Path.TrimEndingDirectorySeparator`, which under WebAssembly's Unix path
+    semantics recognizes only `/` and so left the trailing `\` these
+    Windows-shaped paths carry. Web mode's source is the file selection:
     Home bumps `_webSelectionGeneration` on the panel's selection event and
     mints `FromGeneration`. Blank path / no selection yet = null token = no
     source: applies made then are deliberately unrecorded, and the first
@@ -602,7 +608,15 @@ project via relative path — not duplicated here.
   included): the holder derivation feeding both mode panels' gates, the
   per-mode #78 re-gate (folder commit and file re-selection end the setup —
   holder cleared, Run/Download re-gated, Apply re-armed without an edit),
-  the not-a-source pins (output path; a same-value folder recommit), the
+  the not-a-source pins (output path; a same-value folder recommit; the same
+  folder respelled with a trailing separator — the wire-layer half of
+  halheinrich/backgammon#94, which the producer's `FromPath` unit test cannot
+  give: it says the factory folds the spelling, this says nothing between the
+  folder input and the holder re-introduces the distinction. It pins the
+  contract forward, and deliberately claims no more: the WASM-only failure it
+  descends from is **not** reproducible here, since bUnit runs on Windows .NET
+  where the old `Path.TrimEndingDirectorySeparator` call trimmed `\` correctly
+  — see the test's own remarks), the
   first-latch transitions (an apply before any source is unrecorded; the
   first folder commit / file selection re-arms), and the saved-filters
   round-trip over the file relay (document rows render, save-as writes into
