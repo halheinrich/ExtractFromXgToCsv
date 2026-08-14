@@ -253,10 +253,10 @@ export. In Local mode the count is the final
 ### Components
 
 - **`Home.razor`** — shell, and the `FilterSurface` host. Detects app mode,
-  owns shared state (output format, last-committed filter config, filter
-  dirty), renders the output-format radio and the producer composite, and
-  delegates to `LocalModePanel` or `WebModePanel`. As the host it binds
-  facts and side effects only:
+  owns shared state (output format, last-committed filter config), renders
+  the output-format radio and the producer composite, and delegates to
+  `LocalModePanel` or `WebModePanel`. As the host it binds facts and side
+  effects only:
   - **The applied holder, read source-relatively.** XgFilter_Razor's
     `AppliedFilter` (DI-scoped, injected) is the applied-state SSOT: the
     composite mediates it — a commit `Set`s it keyed to the source token, an
@@ -267,12 +267,22 @@ export. In Local mode the count is the final
     — the single derived filter fact both mode panels' `FilterApplied` and
     the restore reconcile read, so the gate and the recovery cannot disagree.
     A null `Source` is no filter in effect, correctly: an apply made against
-    nothing was never recorded. `_filterDirty` is assigned from each
-    `OnAppliedStateChanged` payload's null-ness, statelessly per the producer
-    contract — a second parameter encoding the same fact, which the filtering
-    spec's §6.1 rules should collapse onto `FilterApplied` (own change).
+    nothing was never recorded. It is also the **settled** fact, not merely
+    the applied one — the composite `Clear`s the holder on any report that
+    the panel's buffers no longer equal a commit, so "in effect" already
+    means "and the buffers still equal it". A second `_filterDirty` field
+    encoded that same half until the filtering spec's §6.1 collapse
+    (halheinrich/backgammon#101); nothing reads a conjunction now.
     `_filterConfig` (the last-committed config the panels POST / refilter
-    with and the XGP preview reads) is a distinct fact and stays a Home field.
+    with and the XGP preview reads) is a distinct fact and stays a Home
+    field — it survives an edit, which `FilterInEffect` deliberately does
+    not.
+    `OnAppliedStateChanged` is still bound but has an **empty body**, and
+    that is not a dead binding: the composite has already mediated the
+    payload onto the holder before raising, so there is nothing to assign,
+    while Blazor's post-callback re-render of Home is what re-reads the
+    holder and moves both panels' gate. Drop the binding and the gate sits
+    stale until some unrelated event happens to render.
   - **The restore notice.** XgFilter_Razor's `FilterRestoreNotice`, registered
     Scoped beside the holder and bound to `FilterSurface` — nothing more. A
     reload constructs a fresh instance, and that construction is what tells a
@@ -353,15 +363,20 @@ export. In Local mode the count is the final
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, polling loop, progress bar (determinate, plus the two
   indeterminate states in "Busy affordance"). Parameters: `OutputFormat`,
-  `FilterConfig`, `FilterApplied`, `FilterDirty`, the folder input's
+  `FilterConfig`, `FilterApplied`, the folder input's
   controlled-component trio (`FolderPath`, `FolderPathChanged` per
   keystroke, `OnFolderPathCommitted` at the change boundary — Home owns the
   value; all three `[EditorRequired]`, they are the re-gate's wiring), and
   the XGP members. The output path stays panel-owned. Takes `FilterConfig`
   (serializable) so it can POST it to the server.
+  It also drops the post-run status block on the **falling edge** of
+  `FilterApplied` (guarded by `!_busy`), so "Done — N rows" never outlives
+  the filter set it describes. The edge, not a level check: an edit made
+  *during* a run spends the edge while busy, so the result that run then
+  produces survives (`LocalModePanelGateTests` pins exactly this).
 - **`WebModePanel.razor`** — file picker, preview table, download; every slow
   gesture runs through `RunBusyAsync` (see "Busy affordance"). Parameters:
-  `OutputFormat`, `FilterConfig`, `FilterApplied`, `FilterDirty`,
+  `OutputFormat`, `FilterConfig`, `FilterApplied`,
   `OnSelectionChanged` (`[EditorRequired]`; raised once per file-selection
   gesture — every `HandleFileSelectionAsync` invocation, since each one
   replaces or clears the retained selection — so Home can bump the
@@ -370,7 +385,7 @@ export. In Local mode the count is the final
   `DecisionFilterSet`, and the filtered projections — lives in
   `FilteredRowCache` (Client `Services/`); the panel's own filtering logic
   is one gate: `OnParametersSet` calls `Refilter(FilterConfig)` only when
-  `FilterApplied && !FilterDirty` (Apply remains the materialization
+  `FilterApplied` (Apply remains the materialization
   point — no HTTP boundary to serialize across). The cache builds via
   `FilterConfig.Build()` once per config instance (reference-identity
   cached); `ReplaceRows` re-projects fresh rows through the set already in
@@ -385,9 +400,14 @@ export. In Local mode the count is the final
   re-inspection: an empty (inactive) set passes every row, so zero
   survivors from a non-empty load can only mean the set is non-empty.
 
-The Run/Download gate is `FilterApplied && !FilterDirty` — the holder half
-says a commit is recorded against the *current* source, the dirty half says
-the buffers still equal it. A source change (new folder commit, new file
+The Run/Download gate is `FilterApplied`, and nothing else filter-shaped —
+one fact, one owner (the filtering spec's §6.1, halheinrich/backgammon#101).
+It says a commit is recorded against the *current* source **and** the panel's
+buffers still equal it, because the composite `Clear`s the holder the moment
+they stop: "is a commit recorded" and "do the buffers still match it" were
+never two facts, only two readings of one. There was a `FilterDirty`
+parameter carrying the second reading and every gate read the conjunction; do
+not reintroduce it. A source change (new folder commit, new file
 selection) closes the gate through the composite's end-setup: the setup ends,
 Apply re-arms, and the user re-applies against the new source. The old
 "configure filters → select files → run" ordering is superseded by that rule
@@ -681,11 +701,15 @@ project via relative path — not duplicated here.
   non-success and network failures wrap in `FilterStorageException`, and a
   call with no current folder propagates unwrapped as the adapter-contract
   bug it is.
-- `LocalModePanelGateTests` — bUnit tests pinning two `LocalModePanel`
-  invariants: the Run-button dirty-gating contract (`FilterApplied` &&
-  !`FilterDirty` plus non-empty paths to enable) and the `ErrorMessage`
-  render branch (a `Complete + ErrorMessage != null` `ProcessingProgress`
-  renders in a `.text-danger` span, not the in-progress slot).
+- `LocalModePanelGateTests` — bUnit tests pinning three `LocalModePanel`
+  invariants: the Run-button filter gate (`FilterApplied` plus non-empty
+  paths to enable); the `ErrorMessage` render branch (a
+  `Complete + ErrorMessage != null` `ProcessingProgress` renders in a
+  `.text-danger` span, not the in-progress slot); and the post-run status
+  block's lifetime — dropped when the filter leaves effect, kept when it
+  doesn't, and **kept when the filter left effect during the run that
+  produced it**. That last case is the one that distinguishes the falling
+  edge from a level check; the first two deliberately do not, and say so.
 - `LocalModePanelFilterWireTests` — bUnit wire tests pinning the filter half of
   the `/api/process/start` POST (the sibling `LocalModePanelXgpAnonymizeTests`
   covers its format/anonymize half): the applied `FilterConfig` reaches the
@@ -702,9 +726,10 @@ project via relative path — not duplicated here.
   rows and projections but keeps the materialized filter.
 - `WebModePanelFilteringTests` — bUnit wire tests pinning that
   `WebModePanel` routes live filtering through `FilteredRowCache` under
-  the `FilterApplied && !FilterDirty` gate (no materialization before
-  Apply, materialization on Apply, identity cache across re-renders,
-  dirty leaves the cache untouched), observed through the panel's
+  the `FilterApplied` gate (no materialization before
+  Apply, materialization on Apply, identity cache across re-renders, a
+  filter no longer in effect leaves the cache untouched — the shape an
+  edit now arrives in), observed through the panel's
   internal `RowCache` seam. Guards the migration failure mode of a panel
   that compiles but filters beside the cache instead of through it.
 - `WebModePanelBusyAffordanceTests` — the busy contract, pinned as two
@@ -994,15 +1019,23 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `SavedFiltersDocument`'s (producer-owned), supplied per request by the
   client adapter. Adding an XgFilter_Razor reference to the server csproj
   "for the constants" would re-couple what the split exists to decouple.
-- **Run/Download gating is holder-plus-dirty — don't re-derive it.** The
-  mode panels' `FilterApplied` comes from `Home.FilterInEffect` (the
-  composite-mediated holder, asked source-relatively — the SSOT) and
-  `FilterDirty` from the per-gesture report's null-ness. Ask the holder
+- **Run/Download gating is the holder, and only the holder — don't
+  re-derive it, and don't re-split it.** The mode panels' `FilterApplied`
+  comes from `Home.FilterInEffect` (the composite-mediated holder, asked
+  source-relatively — the SSOT) and from nothing else. Ask the holder
   through `FilterInEffect`, never with a fresh `ConfigFor` call at a use
   site: a second mint is a second chance to key it differently. If a test or
   UI change ever makes Run or Download appear enabled with a dirty filter —
   or with a commit recorded against a *different* source — that's a
   regression: the holder is the gate, not a cosmetic hint.
+  A `FilterDirty` parameter used to ride beside it, threaded into both mode
+  panels and ANDed at every gate. It was never a second fact: the composite
+  `Clear`s the holder on the same report that would have set it, so the two
+  moved together by construction and the conjunction could not distinguish
+  any state. Deleted by the filtering spec's §6.1
+  (halheinrich/backgammon#101). Re-adding a dirtiness input — as a
+  parameter, a field, or a latched flag inside a panel — reintroduces a fact
+  that can go stale against the holder, which is the whole failure mode.
 - **Path-keyed tokens don't expire by construction — the eager clears are
   the mechanism.** `AppliedFilter` keys the applied config to its source, so
   it looks as though a stale config retires itself. It does in BgQuiz, whose

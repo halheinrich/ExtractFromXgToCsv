@@ -11,7 +11,7 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Pins the <em>panel-layer</em> projection rule: rows handed to the cache
-/// while <c>FilterApplied &amp;&amp; !FilterDirty</c> is (still) true are
+/// while <c>FilterApplied</c> is (still) true are
 /// projected through the set in effect by <see cref="FilteredRowCache"/>'s
 /// <c>ReplaceRows</c> — no rebuild, no second Apply at this layer.
 /// <para>
@@ -41,8 +41,7 @@ public class WebModePanelRefilterOnLoadTests : BunitContext
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, false));
 
     private static void Upload(IRenderedComponent<WebModePanel> cut, string fixture) =>
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.

@@ -129,7 +129,6 @@ public class LocalModePanelFilterWireTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, config)
             .Add(c => c.FilterApplied, true)
-            .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false)
             .Add(c => c.FolderPath, "D:\\xg"));

@@ -33,8 +33,7 @@ public class WebModePanelOpeningBookTests : BunitContext
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, false));
 
     private static IReadOnlyList<DecisionRow> Rows(IRenderedComponent<WebModePanel> cut) =>
         cut.Instance.RowCache.Rows;

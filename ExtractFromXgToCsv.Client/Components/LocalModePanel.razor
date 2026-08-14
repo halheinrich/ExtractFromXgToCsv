@@ -63,7 +63,7 @@
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || FilterDirty || XgpRunBlocked)">
+                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || XgpRunBlocked)">
             Run
         </button>
         @if (_busy)
@@ -75,7 +75,7 @@
         <button class="btn btn-outline-secondary" @onclick="ExitAsync">
             Exit
         </button>
-        @if (!FilterApplied || FilterDirty)
+        @if (!FilterApplied)
         {
             <small class="text-muted">Apply filters first</small>
         }
@@ -186,8 +186,22 @@
 @code {
     [Parameter] public OutputFormat OutputFormat { get; set; }
     [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
+
+    /// <summary>
+    /// Whether a filter is in effect for the current source — the host's one
+    /// filter fact (<c>Home.FilterInEffect is not null</c>), and the whole
+    /// filter half of this panel's gate.
+    /// </summary>
+    /// <remarks>
+    /// It means <i>applied and settled</i>, not merely applied: the composite
+    /// clears the shared holder the moment the filter panel's buffers stop
+    /// equalling a commit, so an edit closes this on its own. A second
+    /// <c>FilterDirty</c> parameter used to ride beside it and every gate here
+    /// read the conjunction — one fact with two owners, deleted by the
+    /// filtering spec's §6.1 (halheinrich/backgammon#101). Do not reintroduce a
+    /// dirtiness input: there is no state this cannot express.
+    /// </remarks>
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
-    [Parameter, EditorRequired] public bool FilterDirty { get; set; }
 
     // The folder input's controlled-component surface. Home owns the value
     // (it is Local mode's filter-source identity, latched host-side at the
@@ -220,7 +234,13 @@
     private bool _busy = false;
     private bool _hasError = false;
     private string _statusMessage = string.Empty;
-    private bool _lastFilterDirty = false;
+    // Previous render's FilterApplied, for the falling edge the post-run status
+    // block is dropped on (see OnParametersSet). Starts false — nothing is in
+    // effect before the host's first parameters-set — so that first set can
+    // never read as a fall, whichever value it carries. Nothing would be
+    // dropped either way (there is no run to describe yet); starting false is
+    // simply the truthful value.
+    private bool _lastFilterApplied = false;
 
     // Server-side opening-book load state, fetched once on first render so the
     // status line can tell the user which analysis-depth stamps to expect. Null
@@ -267,7 +287,7 @@
         // Rebuild the cached filter set when the applied FilterConfig changes,
         // by reference identity. Only used to gate the zero-match notice via
         // DecisionFilterSet.IsEmpty; the run itself POSTs the unbuilt config.
-        if (FilterApplied && !FilterDirty
+        if (FilterApplied
             && !ReferenceEquals(_lastBuiltConfig, FilterConfig))
         {
             _builtSet = FilterConfig.Build();
@@ -293,17 +313,24 @@
             }
         }
 
-        // Drop the post-run status block as soon as the user starts editing a
-        // filter input — otherwise "Done — N rows" keeps describing a filter
-        // set that's no longer active. Gated on !_busy so an in-flight job's
+        // Drop the post-run status block the moment the filter stops being in
+        // effect — otherwise "Done — N rows" keeps describing a filter set
+        // that's no longer active. Gated on !_busy so an in-flight job's
         // progress isn't dropped if the user pre-edits for the next run.
-        if (FilterDirty && !_lastFilterDirty && !_busy)
+        //
+        // The falling edge of FilterApplied, which is precisely the rising edge
+        // of the deleted FilterDirty this used to watch (§6.1's collapse —
+        // one fact, so one edge). It still fires on both the gestures it always
+        // covered: an edit that moves the buffers off the commit, and a source
+        // change, which reaches here as the composite's forget-commit clearing
+        // the holder.
+        if (!FilterApplied && _lastFilterApplied && !_busy)
         {
             _progress = null;
             _hasError = false;
             _statusMessage = string.Empty;
         }
-        _lastFilterDirty = FilterDirty;
+        _lastFilterApplied = FilterApplied;
     }
 
     private async Task StopLocalAsync()

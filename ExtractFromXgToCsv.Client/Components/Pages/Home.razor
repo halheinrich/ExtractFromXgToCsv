@@ -174,7 +174,6 @@
     <LocalModePanel OutputFormat="_outputFormat"
                     FilterConfig="_filterConfig"
                     FilterApplied="FilterInEffect is not null"
-                    FilterDirty="_filterDirty"
                     FolderPath="@_folderPathText"
                     FolderPathChanged="OnFolderPathEdited"
                     OnFolderPathCommitted="OnFolderPathCommitted"
@@ -187,7 +186,6 @@ else
     <WebModePanel OutputFormat="_outputFormat"
                   FilterConfig="_filterConfig"
                   FilterApplied="FilterInEffect is not null"
-                  FilterDirty="_filterDirty"
                   OnSelectionChanged="OnWebSelectionChanged"
                   XgpOptions="_xgpOptions"
                   XgpAnonymize="_xgpAnonymize"
@@ -197,7 +195,6 @@ else
 @code {
     private string _appMode = "Web";
     private OutputFormat _outputFormat = OutputFormat.Csv;
-    private bool _filterDirty = false;
     private FilterConfig _filterConfig = new();
 
     // ── The composite's mount gate (#85) ──────────────────────────────────
@@ -275,10 +272,10 @@ else
 
     /// <summary>
     /// The filter in effect for the source on screen right now, or
-    /// <see langword="null"/> when none is — the one derived filter fact this
-    /// page publishes. Both mode panels' <c>FilterApplied</c> read it, and so
-    /// does the restore reconcile below, so the gate and the recovery cannot
-    /// disagree about what "applied" means here.
+    /// <see langword="null"/> when none is — <b>the</b> filter fact this page
+    /// publishes, and the only one. Both mode panels' <c>FilterApplied</c> read
+    /// it, and so does the restore reconcile below, so the gate and the
+    /// recovery cannot disagree about what "applied" means here.
     ///
     /// <para>
     /// Source-relative by construction: the holder is asked only
@@ -291,9 +288,13 @@ else
     /// </para>
     ///
     /// <para>
-    /// Not the whole gate yet: <c>_filterDirty</c> still rides beside this as
-    /// a second parameter encoding the same fact, which the spec's §6.1 rules
-    /// should collapse onto this one. That collapse is its own change.
+    /// It is also the <em>settled</em> half, not just the applied half — the
+    /// distinction a separate <c>FilterDirty</c> parameter used to draw
+    /// (halheinrich/backgammon#101, the filtering spec's §6.1). The composite
+    /// clears the holder on any report that the panel's buffers no longer
+    /// equal a commit, so "a filter is in effect" already means "and the
+    /// buffers still equal it". Nothing reads a conjunction any more, and
+    /// there is no second fact that can go stale against this one.
     /// </para>
     /// </summary>
     private FilterConfig? FilterInEffect =>
@@ -521,25 +522,29 @@ else
     // holder untouched while no source exists) — so this handler keeps only
     // what the composite can't know: the last-committed config the mode
     // panels POST / refilter with and the XGP preview reads.
-    private void OnFilterConfigChanged(FilterConfig fc)
-    {
-        _filterConfig = fc;
-        _filterDirty = false;
-    }
+    private void OnFilterConfigChanged(FilterConfig fc) => _filterConfig = fc;
 
+    // ── The applied-state report: subscribed, and deliberately empty ────────
+    //
     // The composite re-raises the panel's applied-state report after every
     // buffer-affecting gesture, carrying the committed config its buffers now
-    // equal — or null when they equal none. "Dirty" is exactly that null-ness,
-    // so the flag is assigned outright on every report rather than latched: an
-    // edit undone back to the applied values reports clean again and un-gates
-    // the run without a re-Apply (which the panel no longer offers for an
-    // unchanged selection). The source-change path arrives here too — the
-    // composite's forget-commit re-reports null — which is how a folder or
-    // selection change re-gates the panels. The applied half of the gate isn't
-    // tracked here at all: the panels read FilterInEffect, which asks the
-    // holder the composite has already mediated before this re-raise.
-    private void OnAppliedStateChanged(FilterConfig? applied) =>
-        _filterDirty = applied is null;
+    // equal — or null when they equal none. There is nothing to assign: it has
+    // already mediated that payload onto the shared holder before raising, and
+    // FilterInEffect reads the holder live, so the one filter fact this page
+    // publishes is up to date by the time this runs. Recording the payload
+    // beside it is exactly the duplicate the §6.1 collapse deleted.
+    //
+    // The subscription is still load-bearing, so do not mistake the empty body
+    // for a dead binding and remove it. Blazor re-renders this component after
+    // invoking a callback it owns, and that re-render is what re-reads the
+    // holder and moves both panels' gate. Without it the gate would sit stale
+    // until some unrelated event happened to render the page — an edit would
+    // leave Run live over a filter no longer in effect.
+    //
+    // Nor can it be dropped from the markup: the producer marks it
+    // [EditorRequired] precisely because it is the only channel telling a host
+    // its gate went stale.
+    private void OnAppliedStateChanged(FilterConfig? applied) { }
 
     // ── Source-identity plumbing (see the Source member) ──────────────────
 

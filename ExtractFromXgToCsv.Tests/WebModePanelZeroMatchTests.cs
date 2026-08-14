@@ -37,8 +37,7 @@ public class WebModePanelZeroMatchTests : BunitContext
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, false));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
         cut.FindComponents<InputFile>()[0].UploadFiles(
@@ -64,8 +63,7 @@ public class WebModePanelZeroMatchTests : BunitContext
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, false));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
         cut.FindComponents<InputFile>()[0].UploadFiles(

@@ -38,8 +38,7 @@ public class LocalModePanelZeroMatchTests : BunitContext
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig { Players = new List<string> { "Alice" } })
-            .Add(c => c.FilterApplied, true)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, true));
 
         SetProgress(cut.Instance, new ProcessingProgress
         {
@@ -69,8 +68,7 @@ public class LocalModePanelZeroMatchTests : BunitContext
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, true));
 
         SetProgress(cut.Instance, new ProcessingProgress
         {

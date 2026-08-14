@@ -10,11 +10,14 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Wire tests pinning that <see cref="WebModePanel"/> routes its live
-/// filtering through <see cref="FilteredRowCache"/> under the
-/// applied-and-settled gate (<c>FilterApplied &amp;&amp; !FilterDirty</c>):
-/// no materialization before Apply; materialization on Apply; a same-reference
-/// re-render is a cache hit; a new reference rebuilds; a dirty filter leaves
-/// the cache untouched. The projection rules themselves are pinned by
+/// filtering through <see cref="FilteredRowCache"/> under its one gate,
+/// <c>FilterApplied</c>: no materialization before Apply; materialization on
+/// Apply; a same-reference re-render is a cache hit; a new reference rebuilds;
+/// a filter no longer in effect leaves the cache untouched. That last case is
+/// how an edit reaches this panel since the §6.1 collapse
+/// (halheinrich/backgammon#101) — the composite clears the holder when the
+/// buffers stop equalling a commit, so <c>FilterApplied</c> goes false rather
+/// than a separate dirty flag going true. The projection rules themselves are pinned by
 /// <c>FilteredRowCacheTests</c> — here only the panel→cache routing is under
 /// test, observed through the panel's internal <c>RowCache</c> seam (no
 /// reflection). The migration failure mode this guards: a panel that compiles
@@ -34,8 +37,7 @@ public class WebModePanelFilteringTests : BunitContext
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, false));
 
         Assert.Null(cut.Instance.RowCache.BuiltSet);
     }
@@ -50,8 +52,7 @@ public class WebModePanelFilteringTests : BunitContext
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, aliceCfg)
-            .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, false));
 
         Assert.Null(cut.Instance.RowCache.BuiltSet);
 
@@ -71,24 +72,25 @@ public class WebModePanelFilteringTests : BunitContext
     }
 
     [Fact]
-    public void Dirty_DoesNotRebuild()
+    public void NoLongerInEffect_DoesNotRebuild()
     {
         var cfg = new FilterConfig();
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterConfig, cfg)
-            .Add(c => c.FilterApplied, true)
-            .Add(c => c.FilterDirty, false));
+            .Add(c => c.FilterApplied, true));
 
         var built1 = cut.Instance.RowCache.BuiltSet;
         Assert.NotNull(built1);
 
-        // Mark dirty and hand in a NEW config instance in the same render —
-        // the panel's applied-and-settled gate must keep the cache on the
-        // set built from the last applied config, not build the pending one.
+        // The shape an edit arrives in: the holder is cleared, so FilterApplied
+        // goes false, and Home hands down a NEW config instance in the same
+        // render. The gate must keep the cache on the set built from the last
+        // applied config rather than build the pending one — a rebuild here
+        // would filter the preview by a filter the user has not applied.
         cut.Render(p => p
             .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterDirty, true));
+            .Add(c => c.FilterApplied, false));
         Assert.Same(built1, cut.Instance.RowCache.BuiltSet);
     }
 }

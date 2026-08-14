@@ -40,7 +40,6 @@ public class WebModePanelBusyAffordanceTests : BunitContext
             .Add(c => c.OutputFormat, format)
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, filterApplied)
-            .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 

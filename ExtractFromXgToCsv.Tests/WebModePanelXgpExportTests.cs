@@ -47,7 +47,6 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, options)
             .Add(c => c.OnXgpExported, (int n) => exportedCount = n));
 
@@ -93,7 +92,6 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, options)
             .Add(c => c.XgpAnonymize, true));
 
@@ -126,7 +124,6 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, false)
-            .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, new XgpExportOptions { NamePattern = "a/b" }));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.

@@ -28,7 +28,6 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Pptx)
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, true)
-            .Add(c => c.FilterDirty, false)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 

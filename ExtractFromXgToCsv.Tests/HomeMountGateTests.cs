@@ -174,7 +174,6 @@ public class HomeMountGateTests : BunitContext
 
             var localPanel = cut.FindComponent<LocalModePanel>();
             Assert.True(localPanel.Instance.FilterApplied);
-            Assert.False(localPanel.Instance.FilterDirty);
             // And the gate is open over the *applied* config, not a default
             // one: the config the panel would POST is the holder's.
             Assert.Equal(applied, localPanel.Instance.FilterConfig);

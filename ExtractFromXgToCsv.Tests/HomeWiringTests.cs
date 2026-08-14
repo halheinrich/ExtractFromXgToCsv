@@ -165,7 +165,6 @@ public class HomeWiringTests : BunitContext
         var recorded = AppliedForFolder(@"D:\xg\matches");
         Assert.NotNull(recorded);
         Assert.True(localPanel.Instance.FilterApplied);
-        Assert.False(localPanel.Instance.FilterDirty);
         // One config, one truth: the config applied for this folder is the
         // same instance the panel would POST.
         Assert.Same(recorded, localPanel.Instance.FilterConfig);
@@ -189,7 +188,6 @@ public class HomeWiringTests : BunitContext
         var recorded = AppliedForSelection(1);
         Assert.NotNull(recorded);
         Assert.True(webPanel.Instance.FilterApplied);
-        Assert.False(webPanel.Instance.FilterDirty);
         Assert.Same(recorded, webPanel.Instance.FilterConfig);
     }
 
@@ -203,13 +201,16 @@ public class HomeWiringTests : BunitContext
         await ApplyFiltersAsync(cut);
         Assert.False(RunButton(cut).HasAttribute("disabled"));
 
-        // A keystroke moves the buffers off the committed config: the
-        // composite clears the holder and the null report flips the dirty
-        // flag — both halves of the gate close.
+        // A keystroke moves the buffers off the committed config: the composite
+        // clears the holder, and that *is* the gate closing. Since the §6.1
+        // collapse (halheinrich/backgammon#101) there is no second flag to
+        // check — the panel's FilterApplied reads the holder through
+        // Home.FilterInEffect, so an edit and a source change close it by the
+        // same mechanism.
         await EditFilterControlAsync(cut);
         var localPanel = cut.FindComponent<LocalModePanel>();
         Assert.Null(AppliedForFolder(@"D:\xg\matches"));
-        Assert.True(localPanel.Instance.FilterDirty);
+        Assert.False(localPanel.Instance.FilterApplied);
         Assert.True(RunButton(cut).HasAttribute("disabled"));
 
         // Undo back to the applied values: the panel reports clean, the
@@ -217,7 +218,7 @@ public class HomeWiringTests : BunitContext
         // re-Apply (which the panel refuses for an unchanged selection).
         await UndoFilterEditAsync(cut);
         Assert.NotNull(AppliedForFolder(@"D:\xg\matches"));
-        Assert.False(localPanel.Instance.FilterDirty);
+        Assert.True(localPanel.Instance.FilterApplied);
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 

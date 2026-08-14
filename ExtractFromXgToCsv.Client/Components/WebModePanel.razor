@@ -84,7 +84,7 @@
     @if (_rowCache.Rows.Count > 0)
     {
         <div class="mb-4" style="max-width:800px">
-            @if (FilterApplied && !FilterDirty)
+            @if (FilterApplied)
             {
                 @if (_rowCache.FilteredRows.Count == 0)
                 {
@@ -120,10 +120,10 @@
 
             <button class="btn btn-primary"
                     @onclick="DownloadAsync"
-                    disabled="@(_busy || !FilterApplied || FilterDirty || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
+                    disabled="@(_busy || !FilterApplied || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
                 @(_busy ? "Building…" : DownloadButtonLabel)
             </button>
-            @if (!FilterApplied || FilterDirty)
+            @if (!FilterApplied)
             {
                 <small class="text-muted ms-2">Apply filters first</small>
             }
@@ -138,7 +138,7 @@
         </div>
     }
 
-    @if (FilterApplied && !FilterDirty && _rowCache.FilteredRows.Count > 0)
+    @if (FilterApplied && _rowCache.FilteredRows.Count > 0)
     {
         <h5>Preview (first @(Math.Min(20, _rowCache.FilteredRows.Count)) of @_rowCache.FilteredRows.Count filtered rows, @_rowCache.Rows.Count total)</h5>
         <div style="overflow-x:auto">
@@ -187,8 +187,24 @@
 
     [Parameter] public OutputFormat OutputFormat { get; set; }
     [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
+
+    /// <summary>
+    /// Whether a filter is in effect for the current source — the host's one
+    /// filter fact (<c>Home.FilterInEffect is not null</c>). It gates the
+    /// Download button, the preview, the match-count line, and this panel's
+    /// single filtering decision in <c>OnParametersSet</c>.
+    /// </summary>
+    /// <remarks>
+    /// It means <i>applied and settled</i>, not merely applied: the composite
+    /// clears the shared holder the moment the filter panel's buffers stop
+    /// equalling a commit, so an edit closes this on its own. A second
+    /// <c>FilterDirty</c> parameter used to ride beside it and every gate here
+    /// read the conjunction — one fact with two owners, deleted by the
+    /// filtering spec's §6.1 (halheinrich/backgammon#101). Do not reintroduce a
+    /// dirtiness input: there is no state this cannot express.
+    /// </remarks>
     [Parameter, EditorRequired] public bool FilterApplied { get; set; }
-    [Parameter, EditorRequired] public bool FilterDirty { get; set; }
+
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
     [Parameter] public EventCallback<int> OnXgpExported { get; set; }
@@ -227,9 +243,9 @@
 
     // Live-preview row state — the loaded rows, the materialized filter, and
     // the filtered projections all live in the cache; the panel only decides
-    // *when* the filter is in effect (the FilterApplied && !FilterDirty gate)
-    // and renders from the cache's properties. Exposed internally so wire
-    // tests can pin the panel→cache routing without reflection.
+    // *when* the filter is in effect (the FilterApplied gate) and renders from
+    // the cache's properties. Exposed internally so wire tests can pin the
+    // panel→cache routing without reflection.
     private readonly FilteredRowCache _rowCache = new();
     internal FilteredRowCache RowCache => _rowCache;
 
@@ -265,10 +281,10 @@
 
     protected override void OnParametersSet()
     {
-        // Re-filter when the filter config or applied state changes. The
-        // applied-and-settled gate is the panel's one filtering decision;
+        // Re-filter when the filter config or applied state changes. Whether a
+        // filter is in effect is the panel's one filtering decision;
         // materialization and projection live in the cache.
-        if (FilterApplied && !FilterDirty)
+        if (FilterApplied)
             _rowCache.Refilter(FilterConfig);
 
         // Update filename extension when output format changes
