@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
 using XgFilter_Razor;
 using XgFilter_Razor.Components;
+using XgFilter_Razor.Testing;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -78,17 +79,15 @@ public class HomeMountGateTests : BunitContext
 
     /// <summary>
     /// Stand in for the localStorage the previous visit left behind: the
-    /// committed folder path, and the filter selection the panel re-hydrates
-    /// its buffers from.
+    /// committed folder path (this host's own key), and the filter selection
+    /// the panel re-hydrates its buffers from (the producer's, seeded through
+    /// its seam).
     /// </summary>
     private void SeedRestoredState(string folderPath, FilterConfig persistedSelection)
     {
         JSInterop.Setup<string?>("localStorage.getItem", "xg_folderPath")
                  .SetResult(folderPath);
-        // The panel's own persisted selection — literal key because
-        // FilterPanel.ConfigKey is producer-internal.
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_filter_config")
-                 .SetResult(persistedSelection.ToJson());
+        FilterPanelTestState.SeedStoredSelection(JSInterop, persistedSelection);
     }
 
     /// <summary>
@@ -255,8 +254,7 @@ public class HomeMountGateTests : BunitContext
     {
         RegisterHttpClient("Web");
         var applied = new FilterConfig { ErrorMin = 0.75 };
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_filter_config")
-                 .SetResult(applied.ToJson());
+        FilterPanelTestState.SeedStoredSelection(JSInterop, applied);
         SeedAppliedHolder(applied, RestoredFolder);
 
         // Web mode's selection lives in the panel's own row cache and dies

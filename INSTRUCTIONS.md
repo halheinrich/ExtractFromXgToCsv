@@ -38,6 +38,13 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   Referenced by the WASM Client csproj only — the server has no filter UI to
   host, and its saved-filters file relay must stay ignorant of the document
   names (see Pitfalls).
+- **XgFilter_Razor.Testing** — the producer's test-support assembly:
+  `FilterPanelTestState.SeedStoredSelection(JSInterop, config)` arranges the
+  browser state its filter panel restores from, so a host test can stage "a
+  previous visit left a stored selection" without naming the producer's
+  storage key (halheinrich/backgammon#93). **Referenced by the test csproj
+  only** — it is `IsPackable=false`, ships beside nothing, and no app-graph
+  project may reference it.
 - **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData` and the
   diagram model/options types. Native-free (SVG-only) core.
 - **BackgammonDiagram_Lib.ExportRaster** — `DiagramRasterRenderer.RenderPptx`

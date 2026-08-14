@@ -29,6 +29,18 @@
   <ItemGroup>
     <ProjectReference Include="..\ExtractFromXgToCsv\ExtractFromXgToCsv.csproj" />
     <ProjectReference Include="..\ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
+    <!-- XgFilter_Razor's test-support assembly (halheinrich/backgammon#93):
+         producer-owned seeding of the browser state its filter panel restores
+         from, so a host test can arrange "a previous visit left a stored
+         selection" without repeating the producer's storage key as a literal.
+         The key stays internal to that repo; a rename there now breaks this
+         build instead of silently leaving a stale literal that arranges
+         nothing and passes for the wrong reason.
+
+         Test projects only. The assembly is IsPackable=false and never ships
+         beside the component library — no app-graph project (server or
+         Client) may reference it. -->
+    <ProjectReference Include="..\..\XgFilter_Razor\XgFilter_Razor.Testing\XgFilter_Razor.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
