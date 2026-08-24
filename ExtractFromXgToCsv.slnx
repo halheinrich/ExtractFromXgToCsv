@@ -1,7 +1,12 @@
 <Solution>
+  <Project Path="../BackgammonDiagram_Lib/BackgammonDiagram_Lib.ExportRaster/BackgammonDiagram_Lib.ExportRaster.csproj" />
+  <Project Path="../BackgammonDiagram_Lib/BackgammonDiagram_Lib/BackgammonDiagram_Lib.csproj" />
   <Project Path="../BgDataTypes_Lib/BgDataTypes_Lib/BgDataTypes_Lib.csproj" />
+  <Project Path="../BgMoveGen/BgMoveGen/BgMoveGen.csproj" />
   <Project Path="../ConvertXgToJson_Lib/ConvertXgToJson_Lib/ConvertXgToJson_Lib.csproj" />
   <Project Path="../XgFilter_Lib/XgFilter_Lib/XgFilter_Lib.csproj" />
+  <Project Path="../XgFilter_Razor/XgFilter_Razor.Testing/XgFilter_Razor.Testing.csproj" />
+  <Project Path="../XgFilter_Razor/XgFilter_Razor/XgFilter_Razor.csproj" />
   <Project Path="ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
   <Project Path="ExtractFromXgToCsv.Tests/ExtractFromXgToCsv.Tests.csproj" Id="138f37c4-7b07-4e0e-bd4a-d23ea567d0c9" />
   <Project Path="ExtractFromXgToCsv\ExtractFromXgToCsv.csproj" />
