@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <c>Pptx</c> and <c>Pdf</c> are Local-mode only (they need server-side
 /// rasterization); <c>Xgp</c> works in both modes (see the XGP export section).
 /// </summary>
+[JsonConverter(typeof(StrictJsonStringEnumConverter<OutputFormat>))]
 public enum OutputFormat
 {
     /// <summary>Decision rows as a single CSV file.</summary>

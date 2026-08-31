@@ -1,5 +1,4 @@
 ﻿@using BgDataTypes_Lib
-@using System.Text.Json
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Shared
 @inject IJSRuntime JS
@@ -256,11 +255,6 @@
     private DecisionFilterSet? _builtSet;
     private FilterConfig? _lastBuiltConfig;
 
-    private static readonly JsonSerializerOptions _wireOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -366,11 +360,11 @@
                 Anonymize = XgpAnonymize
             };
 
-            var startResponse = await Http.PostAsJsonAsync("/api/process/start", request, _wireOptions);
+            var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
             startResponse.EnsureSuccessStatusCode();
 
             var startResult = await startResponse.Content
-                .ReadFromJsonAsync<StartResult>(_wireOptions);
+                .ReadFromJsonAsync<StartResult>();
             _currentJobId = startResult?.JobId;
 
             if (_currentJobId is null)
@@ -388,7 +382,7 @@
                 if (!statusResponse.IsSuccessStatusCode) break;
 
                 var p = await statusResponse.Content
-                    .ReadFromJsonAsync<ProcessingProgress>(_wireOptions);
+                    .ReadFromJsonAsync<ProcessingProgress>();
 
                 if (p is not null)
                 {

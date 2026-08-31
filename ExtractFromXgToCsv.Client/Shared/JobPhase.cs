@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
@@ -12,6 +14,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <see cref="ProcessingProgress.ErrorMessage"/> already are the terminal-state
 /// SSOT, and a second one would let the two disagree.
 /// </remarks>
+[JsonConverter(typeof(StrictJsonStringEnumConverter<JobPhase>))]
 public enum JobPhase
 {
     /// <summary>

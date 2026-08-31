@@ -331,9 +331,20 @@ else
     {
         if (!firstRender) return;
 
+        // The inverse of what persists it below (fmt.ToString()): resolve the
+        // stored token by searching the declared formats, never by parsing.
+        // Enum.TryParse would also accept a numeric ordinal, tying a durable
+        // localStorage entry to member numbering (halheinrich/backgammon#164);
+        // an unrecognized token leaves the default standing, as before.
         var savedFormat = await TryGetItemAsync("xg_outputFormat");
-        if (Enum.TryParse<OutputFormat>(savedFormat, out var fmt))
-            _outputFormat = fmt;
+        foreach (var candidate in Enum.GetValues<OutputFormat>())
+        {
+            if (string.Equals(savedFormat, candidate.ToString(), StringComparison.Ordinal))
+            {
+                _outputFormat = candidate;
+                break;
+            }
+        }
 
         // Restore the Local-mode folder path (owned here since the source
         // hoist) and latch it: a restored path is a committed value — the

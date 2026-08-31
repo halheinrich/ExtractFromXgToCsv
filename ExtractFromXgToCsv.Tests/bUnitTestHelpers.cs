@@ -118,20 +118,28 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 /// loudly rather than hanging.
 /// </summary>
 /// <remarks>
-/// Deserializes with the same case-insensitive options the panel serializes
-/// with, standing in for ASP.NET Core's model binding on the real server —
-/// so what <see cref="Captured"/> holds is what
-/// <c>ProcessController.Start</c> would have bound.
+/// Binds with <see cref="JsonSerializerDefaults.Web"/> — what a bare
+/// <c>AddControllers()</c> actually gives <c>ProcessController.Start</c> on the
+/// real server — so what <see cref="Captured"/> holds is what the server would
+/// have bound, and a payload the server would reject fails here too. (It
+/// previously used a hand-rolled case-insensitive options object that mirrored
+/// the panel's own; the panel no longer has one, and mirroring the *server* is
+/// the point of a stand-in.)
 /// </remarks>
 internal sealed class CapturingProcessHandler : HttpMessageHandler
 {
-    private static readonly JsonSerializerOptions _opts = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
+    private static readonly JsonSerializerOptions _opts = new(JsonSerializerDefaults.Web);
 
     /// <summary>The last request POSTed to <c>/api/process/start</c>; null until one is.</summary>
     public ProcessRequest? Captured { get; private set; }
+
+    /// <summary>
+    /// The raw body of that POST, so a test can assert on the bytes actually on
+    /// the wire rather than only on what they bound to
+    /// (halheinrich/backgammon#164 / halheinrich/backgammon#37: the question is
+    /// whether enums cross as names or as ordinals, which binding hides).
+    /// </summary>
+    public string? CapturedJson { get; private set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
@@ -141,6 +149,7 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
         if (request.Method == HttpMethod.Post && path == "/api/process/start")
         {
             var json = await request.Content!.ReadAsStringAsync(cancellationToken);
+            CapturedJson = json;
             Captured = JsonSerializer.Deserialize<ProcessRequest>(json, _opts);
             return Json("{\"jobId\":\"j1\"}");
         }

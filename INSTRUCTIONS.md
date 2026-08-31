@@ -893,6 +893,16 @@ project reference.
   references it too, which is why it lives under `Client/Shared` rather than
   being duplicated. `Pptx` and `Pdf` are Local-mode only; `Xgp` works in
   both modes (see the XGP export section).
+- `StrictJsonStringEnumConverter<T>` — bundled by type-level attribute onto
+  `OutputFormat` and `JobPhase`, so every enum on the Local-mode wire crosses as
+  its declaration name and a numeric ordinal is rejected. Neither end of that
+  wire configures a serializer: the panel posts with `HttpClient`'s stock
+  options and the server binds with a bare `AddControllers()`. Putting the rule
+  on the type is what makes that work — and is why `LocalModePanel` no longer
+  owns a `_wireOptions`. `XgFilter_Lib`'s filter enums and `BgDataTypes_Lib`'s
+  `AnalysisLevel` carry their own equivalents, so one payload has one spelling
+  convention throughout (halheinrich/backgammon#164,
+  halheinrich/backgammon#37).
 - `XgpExportOptions` — naming options for a batch of per-decision `.xgp`
   exports (`NamePattern`, `StartNumber`, `SuffixLength`;
   `DefaultNamePattern` = `"pos{n}"`). Rendering lives in the naming engine —
