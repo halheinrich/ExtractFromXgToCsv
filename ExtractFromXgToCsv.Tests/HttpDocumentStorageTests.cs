@@ -6,14 +6,14 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="HttpFilterDocumentStorage"/> — the client half of
+/// Unit tests for <see cref="HttpDocumentStorage"/> — the client half of
 /// the saved-filters relay. The producer contract under test: absent is the
 /// 204 → null mapping (a value, never an exception); everything that means
-/// "the I/O failed" is wrapped in <see cref="FilterStorageException"/> so the
+/// "the I/O failed" is wrapped in <see cref="DocumentStorageException"/> so the
 /// composite's store degrades instead of faulting; a call with no current
 /// folder is an adapter-contract bug and propagates unwrapped.
 /// </summary>
-public class HttpFilterDocumentStorageTests
+public class HttpDocumentStorageTests
 {
     private sealed class CannedHandler(
         Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
@@ -28,7 +28,7 @@ public class HttpFilterDocumentStorageTests
         }
     }
 
-    private static HttpFilterDocumentStorage Create(
+    private static HttpDocumentStorage Create(
         CannedHandler handler, string? folder = @"D:\xg\matches") =>
         new(
             new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") },
@@ -64,18 +64,18 @@ public class HttpFilterDocumentStorageTests
     }
 
     [Fact]
-    public async Task ReadAsync_NonSuccess_WrapsInFilterStorageException()
+    public async Task ReadAsync_NonSuccess_WrapsInDocumentStorageException()
     {
         var storage = Create(new CannedHandler(_ => Response(HttpStatusCode.InternalServerError)));
-        await Assert.ThrowsAsync<FilterStorageException>(
+        await Assert.ThrowsAsync<DocumentStorageException>(
             () => storage.ReadAsync("xg-filters.json"));
     }
 
     [Fact]
-    public async Task ReadAsync_NetworkFailure_WrapsInFilterStorageException()
+    public async Task ReadAsync_NetworkFailure_WrapsInDocumentStorageException()
     {
         var storage = Create(new CannedHandler(_ => throw new HttpRequestException("down")));
-        var ex = await Assert.ThrowsAsync<FilterStorageException>(
+        var ex = await Assert.ThrowsAsync<DocumentStorageException>(
             () => storage.ReadAsync("xg-filters.json"));
         Assert.IsType<HttpRequestException>(ex.InnerException);
     }
@@ -98,10 +98,10 @@ public class HttpFilterDocumentStorageTests
     }
 
     [Fact]
-    public async Task WriteAsync_NonSuccess_WrapsInFilterStorageException()
+    public async Task WriteAsync_NonSuccess_WrapsInDocumentStorageException()
     {
         var storage = Create(new CannedHandler(_ => Response(HttpStatusCode.InternalServerError)));
-        await Assert.ThrowsAsync<FilterStorageException>(
+        await Assert.ThrowsAsync<DocumentStorageException>(
             () => storage.WriteAsync("xg-filters.json", "{}"));
     }
 

@@ -240,7 +240,7 @@ else
     // *reference* changes, so the live-folder fact must ride the delegate, not
     // a fresh instance. Page-lifetime is exactly enough — the composite dies
     // with this page.
-    private HttpFilterDocumentStorage? _filterStorage;
+    private HttpDocumentStorage? _filterStorage;
 
     /// <summary>
     /// The current source's token, minted per the umbrella-ratified semantics:
@@ -306,11 +306,11 @@ else
     /// saved-filters section, never a load failure. Web mode is always null
     /// (ruled: no second store; localStorage fallback is forbidden drift).
     /// </summary>
-    private IFilterDocumentStorage? Storage =>
+    private IDocumentStorage? Storage =>
         _appMode == "Local" && _localSourcePath is not null ? _filterStorage : null;
 
     protected override void OnInitialized() =>
-        _filterStorage = new HttpFilterDocumentStorage(Http, () => _localSourcePath);
+        _filterStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
 
     // XGP export options. Home owns the option state (and its persistence);
     // the panels receive an immutable XgpExportOptions snapshot and report

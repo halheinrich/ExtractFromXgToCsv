@@ -33,7 +33,7 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   composite: filter panel + saved-filters panel + all wiring, the
   applied-holder mediation, and the source-change rule) plus the non-visual
   interaction model it drives: `AppliedFilter`, `FilterRestoreNotice`,
-  `FilterSourceToken`, `IFilterDocumentStorage` / `FilterStorageException`,
+  `FilterSourceToken`, `IDocumentStorage` / `DocumentStorageException`,
   `SavedFiltersDocument`.
   Referenced by the WASM Client csproj only — the server has no filter UI to
   host, and its saved-filters file relay must stay ignorant of the document
@@ -107,7 +107,7 @@ ExtractFromXgToCsv.Client/              — WASM
     launchSettings.json
   Services/
     FilteredRowCache.cs                 — Web-mode rows + filtered projections + identity-cached Build
-    HttpFilterDocumentStorage.cs        — IFilterDocumentStorage over the server's file relay
+    HttpDocumentStorage.cs              — IDocumentStorage over the server's file relay
     XgProcessingService.cs              — WASM-side decision/diagram extraction
   Shared/
     AppModeResponse.cs                  — { Mode } body for GET /api/appmode
@@ -134,7 +134,7 @@ ExtractFromXgToCsv.Tests/
   HomeMountGateTests.cs                 — restore-gated FilterSurface mount + holder recovery (bUnit)
   HomeStorageUnavailableTests.cs        — localStorage-refused degradation + its notice (bUnit)
   HomeWiringTests.cs                    — FilterSurface → Home wiring + per-mode re-gate (bUnit)
-  HttpFilterDocumentStorageTests.cs     — client relay adapter contracts (direct)
+  HttpDocumentStorageTests.cs           — client relay adapter contracts (direct)
   HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
   LocalFolderProcessorIllegalPlayTests.cs
   LocalFolderProcessorPdfTests.cs
@@ -310,7 +310,7 @@ export. In Local mode the count is the final
     source: applies made then are deliberately unrecorded, and the first
     real source runs the composite's end-setup, re-arming Apply. The output
     path is **not** a source and never re-gates (umbrella-ratified).
-  - **The saved-filters seam.** One `HttpFilterDocumentStorage` instance,
+  - **The saved-filters seam.** One `HttpDocumentStorage` instance,
     constructed over a delegate reading the latched path (the composite
     rebuilds its store when the bound `Storage` *reference* changes, so the
     live folder rides the delegate). Bound in Local mode while a folder is
@@ -695,10 +695,10 @@ project via relative path — not duplicated here.
   hosting observes: the Local-config round-trip landing on disk at the real
   route, 204 for absent, 400 for non-simple names, and the Web-config 404
   from the explicit action guard.
-- `HttpFilterDocumentStorageTests` — the client adapter's producer
-  contracts: 204 → null (absence is a value), body round-trips, folder and
-  name travel escaped with the folder read from the delegate at call time,
-  non-success and network failures wrap in `FilterStorageException`, and a
+- `HttpDocumentStorageTests` — the client adapter's producer contracts:
+  204 → null (absence is a value), body round-trips, folder and name
+  travel escaped with the folder read from the delegate at call time,
+  non-success and network failures wrap in `DocumentStorageException`, and a
   call with no current folder propagates unwrapped as the adapter-contract
   bug it is.
 - `LocalModePanelGateTests` — bUnit tests pinning three `LocalModePanel`
@@ -857,7 +857,7 @@ PUT  /api/filterdocument?folder=…&name=…                 (Local mode only)
 ```
 
 The `filterdocument` pair is the saved-filters file relay: the client-side
-`HttpFilterDocumentStorage` adapter is its only caller, supplying file names
+`HttpDocumentStorage` adapter is its only caller, supplying file names
 from `SavedFiltersDocument` (producer-owned) and the folder from Home's
 latched source path — the server validates the name's *shape* but never
 knows the names themselves.
@@ -1119,7 +1119,7 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   unresolvable constructor dependency is only a 500. Don't "tidy" the store
   registration into the Local guard — that converts the 404 back into a
   container failure.
-- **`HttpFilterDocumentStorage` is one stable instance over a delegate —
+- **`HttpDocumentStorage` is one stable instance over a delegate —
   and must never be called without a folder.** The composite rebuilds its
   saved-filters store when the bound `Storage` reference changes, so Home
   constructs the adapter once and the live folder rides the
@@ -1127,7 +1127,7 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   mode) Home binds `Storage = null` — no section renders and nothing calls
   the relay; a call with no folder is therefore an adapter-contract bug
   and throws `InvalidOperationException` unwrapped, while everything that
-  means "the I/O failed" wraps in `FilterStorageException` so the store
+  means "the I/O failed" wraps in `DocumentStorageException` so the store
   degrades instead of faulting the page.
 - **`WebApplicationFactory` marker: never `Program`.** The Client's
   top-level entry point generates its own `Program`, visible to the test
