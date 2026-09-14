@@ -214,7 +214,7 @@
     /// <see cref="HandleFileSelectionAsync"/> invocation, because every one
     /// replaces (or clears) the retained selection before anything else runs.
     /// The host bumps its selection generation off this, changing the filter
-    /// source token so the hosted FilterSurface ends the setup (#78): the
+    /// source token so the hosted FilterSurface ends the setup (halheinrich/backgammon#78): the
     /// selection is Web mode's filter <em>source</em>, and a new selection
     /// must re-gate exactly as a new Local folder does. EditorRequired for the
     /// same reason as the panel's other gate wiring — a silently splatted
@@ -235,7 +235,7 @@
     // already keeps, unchanged — so every window RunBusyAsync opens gets the
     // cursor, including any gesture routed through the wrapper later. The
     // class carries no cursor of its own; app.css holds the single rule, the
-    // same one LocalModePanel's root uses (issue #77).
+    // same one LocalModePanel's root uses (issue halheinrich/backgammon#77).
     private string? BusyCssClass => _busy ? "is-busy" : null;
 
     private bool _hasError = false;
@@ -412,7 +412,7 @@
     /// screen: the flag flips and reverts inside a single task and the
     /// affordance does nothing while looking correct in review. The yield hands
     /// the thread back so the queued render can paint before
-    /// <paramref name="body"/> takes it again. Measured on issue #53 — without
+    /// <paramref name="body"/> takes it again. Measured on issue halheinrich/backgammon#53 — without
     /// it, the "Building…" label entered the DOM 14 ms *after* a 6.6 s zip
     /// build had already finished.
     /// <para>

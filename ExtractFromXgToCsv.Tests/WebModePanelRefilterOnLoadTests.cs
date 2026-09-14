@@ -15,7 +15,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// projected through the set in effect by <see cref="FilteredRowCache"/>'s
 /// <c>ReplaceRows</c> — no rebuild, no second Apply at this layer.
 /// <para>
-/// <b>The end-to-end user contract this once pinned is superseded</b> (#78):
+/// <b>The end-to-end user contract this once pinned is superseded</b> (halheinrich/backgammon#78):
 /// in the real app a file selection bumps Home's selection generation, the
 /// hosted <c>FilterSurface</c> ends the setup, and the panel receives
 /// <c>FilterApplied = false</c> — so a post-Apply selection now blanks the

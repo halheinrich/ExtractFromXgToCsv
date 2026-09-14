@@ -78,7 +78,7 @@ public class HomeRestoreNoticeTests : BunitContext
     {
         var cut = Render<Home>();
         // Home holds the composite back until its own first-render restore
-        // completes (#85), so the notice cannot exist before this.
+        // completes (halheinrich/backgammon#85), so the notice cannot exist before this.
         cut.WaitForState(
             () => cut.FindComponents<FilterSurface>().Any(), TimeSpan.FromSeconds(5));
         return cut;

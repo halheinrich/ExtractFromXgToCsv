@@ -23,7 +23,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// class — is deliberately unpinned: it is one rule in one file, and asserting
 /// on stylesheet text would buy a brittle string match rather than a contract.
 /// Both panels are exercised in one place because the contract is one
-/// contract; a third panel's pin belongs here too (issue #77).
+/// contract; a third panel's pin belongs here too (issue halheinrich/backgammon#77).
 /// </remarks>
 public class BusyCursorTests : BunitContext
 {

@@ -13,7 +13,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// pathways never do. The client picks its bar from this discriminator, so a
 /// processor that stopped stamping it would silently revert the render window
 /// to a solid 100% bar beside frozen figures — no error, just a job that looks
-/// finished for minutes (issue #53).
+/// finished for minutes (issue halheinrich/backgammon#53).
 /// </summary>
 public class LocalFolderProcessorPhaseTests
 {

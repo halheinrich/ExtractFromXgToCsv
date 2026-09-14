@@ -19,7 +19,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// <see cref="JSException"/>.
 /// <para>
 /// What makes this worth a test class rather than a comment: since the mount
-/// gate went in (#85) the failure was <em>structural</em>, not cosmetic. A
+/// gate went in (halheinrich/backgammon#85) the failure was <em>structural</em>, not cosmetic. A
 /// throwing read faulted <c>OnAfterRenderAsync</c> before
 /// <c>_restoreComplete</c> was reached, so <c>FilterSurface</c> never mounted
 /// and the page had no filtering at all — and silently, because this app
@@ -27,7 +27,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// "nothing is stored", a state every read site already answers with its own
 /// documented default, so the flag is set over facts rather than over reads
 /// that never landed. (Setting it in a <c>finally</c> instead was rejected for
-/// #85 and stays rejected: that publishes a <c>Source</c> minted from
+/// halheinrich/backgammon#85 and stays rejected: that publishes a <c>Source</c> minted from
 /// half-arrived facts.)
 /// </para>
 /// <para>
@@ -39,7 +39,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// locally. bUnit rethrows those lifecycle exceptions, so a whole-browser
 /// model cannot pass until they are dealt with; that is booked as
 /// halheinrich/backgammon#102. These tests therefore fail only the keys Home
-/// itself owns, which is exactly the subject of #91.
+/// itself owns, which is exactly the subject of halheinrich/backgammon#91.
 /// </para>
 /// </summary>
 public class HomeStorageUnavailableTests : BunitContext

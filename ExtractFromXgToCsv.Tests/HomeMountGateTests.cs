@@ -15,7 +15,7 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the <c>FilterSurface</c> mount gate (#85): <see cref="Home"/> holds the
+/// Pins the <c>FilterSurface</c> mount gate (halheinrich/backgammon#85): <see cref="Home"/> holds the
 /// composite back until its first-render restore has run, so the composite's
 /// first parameters-set sees the real <c>Source</c> token instead of a
 /// placeholder null that would later be corrected.
@@ -23,10 +23,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// The regression this class exists for: mode and folder-path restore happen in
 /// Home's own <c>OnAfterRenderAsync(firstRender)</c>, which Blazor runs
 /// <em>after</em> the child's, so an ungated composite mounted against a null
-/// <c>Source</c> and then saw the correction as a genuine source change — #78's
+/// <c>Source</c> and then saw the correction as a genuine source change — halheinrich/backgammon#78's
 /// end-setup fired on every return to the page, clearing the applied holder and
 /// re-arming Apply behind the user's back. With the gate, the restored source is
-/// the token the composite mounts with, and #82's first-mount reconcile — which
+/// the token the composite mounts with, and halheinrich/backgammon#82's first-mount reconcile — which
 /// could never fire in this host — seeds the panel's committed config back from
 /// the holder.
 /// </para>
@@ -167,7 +167,7 @@ public class HomeMountGateTests : BunitContext
 
         // The applied filter survives the remount: the restored folder is the
         // token the composite mounted with, so nothing reads as a source
-        // change and #78's end-setup never fires.
+        // change and halheinrich/backgammon#78's end-setup never fires.
         cut.WaitForAssertion(() =>
         {
             Assert.Equal(applied, AppliedForFolder(RestoredFolder));
@@ -206,7 +206,7 @@ public class HomeMountGateTests : BunitContext
 
         var cut = RenderHome();
 
-        // #82's first-mount reconcile, reaching this host for the first time:
+        // halheinrich/backgammon#82's first-mount reconcile, reaching this host for the first time:
         // the holder's key matches the mounted token, so the panel's
         // committed config is seeded from it and Apply is offered only when
         // there is something to do — which here there is not.
@@ -269,7 +269,7 @@ public class HomeMountGateTests : BunitContext
         });
     }
 
-    // ── The gate must not disturb #78's source-change rule ──────────────────
+    // ── The gate must not disturb halheinrich/backgammon#78's source-change rule ──────────────────
 
     [Fact]
     public async Task AfterRestore_CommittingADifferentFolder_StillEndsTheSetup()

@@ -24,7 +24,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// Dropping either line leaves code that reads correctly and, without (2)'s
 /// pin, would still pass a naive markup assertion — bUnit renders eagerly
 /// enough to hide it. A component test can only pin the wiring; the pixel was
-/// pinned against a real browser when the affordance was measured (issue #53).
+/// pinned against a real browser when the affordance was measured (issue halheinrich/backgammon#53).
 /// </summary>
 public class WebModePanelBusyAffordanceTests : BunitContext
 {

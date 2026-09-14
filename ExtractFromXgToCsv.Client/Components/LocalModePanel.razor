@@ -205,7 +205,7 @@
     // The folder input's controlled-component surface. Home owns the value
     // (it is Local mode's filter-source identity, latched host-side at the
     // change boundary); this panel renders it and forwards both event
-    // boundaries verbatim. All three are load-bearing for the #78 re-gate, so
+    // boundaries verbatim. All three are load-bearing for the halheinrich/backgammon#78 re-gate, so
     // all three are EditorRequired — a silently splatted binding here would be
     // a gate that never re-opens.
     [Parameter, EditorRequired] public string FolderPath { get; set; } = string.Empty;
@@ -224,7 +224,7 @@
     // cursor: the pre-first-poll "Starting…" gap, the deck pathway's
     // multi-minute atomic render, the determinate stretch between them, and
     // any busy window added later. The class carries no cursor of its own;
-    // app.css holds the single rule (issue #77).
+    // app.css holds the single rule (issue halheinrich/backgammon#77).
     private string? BusyCssClass => _busy ? "is-busy" : null;
 
     private string _outputPath = string.Empty;

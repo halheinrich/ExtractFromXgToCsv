@@ -146,7 +146,7 @@
 @* The whole filter surface — the filter panel, and in Local mode the
    saved-filters section with its degrade notices — is one producer composite:
    FilterSurface owns the panels and every interaction between them, including
-   the source-change rule (#78). This host binds facts and side effects only:
+   the source-change rule (halheinrich/backgammon#78). This host binds facts and side effects only:
    the holder, the restore-notice state, the current source's token, the
    storage seam, and the two re-raised panel events. Source and Storage are
    per-mode — see the @code members.
@@ -156,7 +156,7 @@
    member that moves it is internal to it, so this host cannot make the notice
    behave differently from any other host's.
 
-   Held back until the restore has run (#85): mounting it earlier would bind a
+   Held back until the restore has run (halheinrich/backgammon#85): mounting it earlier would bind a
    Source this page cannot yet know, and the composite's source-change rule
    would read the correction as a real change. See _restoreComplete. *@
 @if (_restoreComplete)
@@ -197,14 +197,14 @@ else
     private OutputFormat _outputFormat = OutputFormat.Csv;
     private FilterConfig _filterConfig = new();
 
-    // ── The composite's mount gate (#85) ──────────────────────────────────
+    // ── The composite's mount gate (halheinrich/backgammon#85) ──────────────────────────────────
     //
     // False until the first-render restore below has run. Everything the
     // Source token is minted from — the app mode and the latched folder —
     // arrives in that restore, so before it this page's answer to "what is the
     // current source?" is not "none", it is "not yet known". Binding that
     // non-answer would publish null and then correct it, and the composite's
-    // source-change rule (#78) reads a corrected null→token as a genuine
+    // source-change rule (halheinrich/backgammon#78) reads a corrected null→token as a genuine
     // source change: holder cleared, Apply re-armed, run gate closed. On every
     // return to this page. Blazor renders children before parents on the
     // after-render pass, so no ordering trick inside this component avoids it;
@@ -215,11 +215,11 @@ else
     // state in this host (a blank folder path, no Web selection yet), handled
     // in place by the source-change rule; unmounting on it would destroy the
     // composite's store and panel state every time the user clears the folder
-    // and would defeat #78. Post-restore a null Source is truthful, and the
+    // and would defeat halheinrich/backgammon#78. Post-restore a null Source is truthful, and the
     // composite handles it exactly as designed.
     private bool _restoreComplete;
 
-    // ── Source identity (the #78 re-gate's input) ─────────────────────────
+    // ── Source identity (the halheinrich/backgammon#78 re-gate's input) ─────────────────────────
     // Local mode's source is the input folder path, hoisted here so one owner
     // holds the live text, its persistence, and the change-boundary latch the
     // token is minted from. Two fields on purpose: _folderPathText follows
@@ -402,7 +402,7 @@ else
         // AppliedFilter is DI-scoped, so it outlives this page: a fresh mount
         // can open onto an apply the previous visit made — against this
         // visit's source, or against one it no longer has. The composite's
-        // first-mount reconcile (#82) recovers the *panel's* committed config
+        // first-mount reconcile (halheinrich/backgammon#82) recovers the *panel's* committed config
         // from the holder; this is the host's half of the same recovery, and
         // Home must do it itself because that reconcile is silent by contract
         // — it raises no event, and OnFilterConfigChanged is otherwise the
@@ -424,7 +424,7 @@ else
         // navigate-back — but it means nothing expires by construction here
         // the way a generation counter expires it in BgQuiz. The eager clears
         // are the whole expiry mechanism in this host: this one, and the
-        // composite's in-place source-change rule (#78). Do not weaken either
+        // composite's in-place source-change rule (halheinrich/backgammon#78). Do not weaken either
         // in the belief that the keying covers it.
         //
         // Nothing survives the Clear: the applied config and its key are one
@@ -448,7 +448,7 @@ else
         // default, so what Source is minted from here is known, not merely
         // not-yet-arrived. No folder restored means Source is null, which the
         // composite handles in place as a steady state. This is not the
-        // try/finally that was rejected for #85 — that one set the flag over
+        // try/finally that was rejected for halheinrich/backgammon#85 — that one set the flag over
         // reads that never landed and published a token derived from them;
         // this sets it over facts.
         _restoreComplete = true;
@@ -462,7 +462,7 @@ else
     // below, and none of them throws. localStorage is not guaranteed to exist:
     // a disabled-storage or hostile-privacy setting makes getItem/setItem raise
     // a SecurityError, which reaches Blazor as a JSException. Unguarded that
-    // faulted the first-render restore, and since the mount gate went in (#85)
+    // faulted the first-render restore, and since the mount gate went in (halheinrich/backgammon#85)
     // the cost was structural rather than cosmetic — _restoreComplete was never
     // reached, so FilterSurface never mounted and the page had no filtering at
     // all, silently: this app registers no #blazor-error-ui, so nothing on

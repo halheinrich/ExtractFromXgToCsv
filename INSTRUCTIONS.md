@@ -290,26 +290,27 @@ export. In Local mode the count is the final
     rule) from a navigate-back remount (say nothing). Every member that moves
     it is producer-internal, so this host cannot make the notice behave
     differently from any other host's.
-  - **Source identity (the #78 re-gate).** Local mode's source is the input
-    folder path, hoisted into Home: `_folderPathText` follows every
-    keystroke (and persists under `xg_folderPath`), while the separate
-    `_localSourcePath` latches only at the input's `@onchange` boundary —
-    and once at the localStorage restore, which is a committed value. The
-    token is minted from the latch only (`FromPath`, handed the path in the
-    spelling Home holds), never from the live text — per-keystroke re-gating
-    was ruled out. **Path identity is the token's, not this host's**
-    (halheinrich/backgammon#94): `FromPath` folds case and makes trailing
-    separators insignificant, so Home pre-folds nothing and the latched path
-    keeps the user's spelling for IO and display. The host copy that used to
-    sit here was a partial no-op — it trimmed with
-    `Path.TrimEndingDirectorySeparator`, which under WebAssembly's Unix path
-    semantics recognizes only `/` and so left the trailing `\` these
-    Windows-shaped paths carry. Web mode's source is the file selection:
-    Home bumps `_webSelectionGeneration` on the panel's selection event and
-    mints `FromGeneration`. Blank path / no selection yet = null token = no
-    source: applies made then are deliberately unrecorded, and the first
-    real source runs the composite's end-setup, re-arming Apply. The output
-    path is **not** a source and never re-gates (umbrella-ratified).
+  - **Source identity (the halheinrich/backgammon#78 re-gate).** Local
+    mode's source is the input folder path, hoisted into Home:
+    `_folderPathText` follows every keystroke (and persists under
+    `xg_folderPath`), while the separate `_localSourcePath` latches only at
+    the input's `@onchange` boundary — and once at the localStorage restore,
+    which is a committed value. The token is minted from the latch only
+    (`FromPath`, handed the path in the spelling Home holds), never from the
+    live text — per-keystroke re-gating was ruled out. **Path identity is
+    the token's, not this host's** (halheinrich/backgammon#94): `FromPath`
+    folds case and makes trailing separators insignificant, so Home
+    pre-folds nothing and the latched path keeps the user's spelling for IO
+    and display. The host copy that used to sit here was a partial no-op —
+    it trimmed with `Path.TrimEndingDirectorySeparator`, which under
+    WebAssembly's Unix path semantics recognizes only `/` and so left the
+    trailing `\` these Windows-shaped paths carry. Web mode's source is the
+    file selection: Home bumps `_webSelectionGeneration` on the panel's
+    selection event and mints `FromGeneration`. Blank path / no selection
+    yet = null token = no source: applies made then are deliberately
+    unrecorded, and the first real source runs the composite's end-setup,
+    re-arming Apply. The output path is **not** a source and never re-gates
+    (umbrella-ratified).
   - **The saved-filters seam.** One `HttpDocumentStorage` instance,
     constructed over a delegate reading the latched path (the composite
     rebuilds its store when the bound `Storage` *reference* changes, so the
@@ -317,18 +318,19 @@ export. In Local mode the count is the final
     latched; null otherwise — a blank path renders no saved-filters
     section, never a load failure — and always null in Web mode (ruled: a
     second store is forbidden drift; no localStorage fallback).
-  - **The mount gate (#85).** The `FilterSurface` element is wrapped in
-    `@if (_restoreComplete)`, a flag set at the very end of Home's
-    first-render restore. Everything `Source` is minted from — the app mode
-    and the latched folder — arrives in that restore, and Blazor runs the
-    child's `OnAfterRenderAsync` *before* the parent's, so an ungated
-    composite would mount against a null `Source`, then see the correction
-    as a genuine source change and run #78's end-setup on every return to
-    the page. Gate on the restore, **not** on `Source` being non-null: a
-    null `Source` is a legitimate steady state here (blank path, no Web
-    selection) that the in-place source-change rule owns — unmounting on it
-    would destroy the composite's store and panel buffers every time the
-    user clears the folder.
+  - **The mount gate (halheinrich/backgammon#85).** The `FilterSurface`
+    element is wrapped in `@if (_restoreComplete)`, a flag set at the very
+    end of Home's first-render restore. Everything `Source` is minted from
+    — the app mode and the latched folder — arrives in that restore, and
+    Blazor runs the child's `OnAfterRenderAsync` *before* the parent's, so
+    an ungated composite would mount against a null `Source`, then see the
+    correction as a genuine source change and run
+    halheinrich/backgammon#78's end-setup on every return to the page. Gate
+    on the restore, **not** on `Source` being non-null: a null `Source` is
+    a legitimate steady state here (blank path, no Web selection) that the
+    in-place source-change rule owns — unmounting on it would destroy the
+    composite's store and panel buffers every time the user clears the
+    folder.
   - **Holder recovery at restore.** `AppliedFilter` is DI-scoped and
     outlives the page, so the same restore reconciles it against the
     restored source: `FilterInEffect is { } cfg` ⇒ `_filterConfig` is
@@ -341,18 +343,18 @@ export. In Local mode the count is the final
     *default* config, silently ignoring the applied filter. **The
     `else Clear()` is not redundant with the keyed read** — see the
     path-token-equality pitfall.
-  - **The `localStorage` seam (#91).** Every `localStorage` call Home makes
-    goes through `TryGetItemAsync` / `TrySetItemAsync` /
-    `TryRemoveItemAsync`, and none of them throws: a refused store
-    (disabled storage, hostile privacy setting) raises a `SecurityError`
-    that arrives as a `JSException`, caught there and latched in
-    `_storageUnavailable`. A refused read returns null — "nothing is
-    stored", which every read site already answers with its own documented
-    default, so no default is restated in the seam and none can drift from
-    the field initializers. The invariant: **every read lands on its stored
-    value or on its documented default, and the page's shape is never at
-    stake**; a first failure partway through leaves a truthful mix of the
-    two (the realistic case throws on read one and yields defaults
+  - **The `localStorage` seam (halheinrich/backgammon#91).** Every
+    `localStorage` call Home makes goes through `TryGetItemAsync` /
+    `TrySetItemAsync` / `TryRemoveItemAsync`, and none of them throws: a
+    refused store (disabled storage, hostile privacy setting) raises a
+    `SecurityError` that arrives as a `JSException`, caught there and
+    latched in `_storageUnavailable`. A refused read returns null —
+    "nothing is stored", which every read site already answers with its own
+    documented default, so no default is restated in the seam and none can
+    drift from the field initializers. The invariant: **every read lands on
+    its stored value or on its documented default, and the page's shape is
+    never at stake**; a first failure partway through leaves a truthful mix
+    of the two (the realistic case throws on read one and yields defaults
     throughout). `JSException` only — a parse or migration bug is not a
     storage failure and must still surface. The latch renders a
     non-dismissible `#storageUnavailableNotice`, host-owned because
@@ -416,13 +418,13 @@ per-source.
 
 ### Busy affordance
 
-Measured on a 266-file / 14.4 MB corpus (issue #53). Web mode is the severe
-half: the WASM interpreter runs this pipeline ~30–80× slower than native, so
-selecting five files freezes the tab for **3.8 s cold** (~760 ms/file cold,
-~240 ms/file once the jiterpreter warms), the full corpus for **57 s**, a
-`.xgp` zip of 386 decisions for **6.6 s**, and a 6,515-row Diagram JSON for
-**15.6 s**. Apply Filter, by contrast, is 30–71 ms and deliberately gets
-nothing.
+Measured on a 266-file / 14.4 MB corpus (issue halheinrich/backgammon#53).
+Web mode is the severe half: the WASM interpreter runs this pipeline ~30–80×
+slower than native, so selecting five files freezes the tab for **3.8 s
+cold** (~760 ms/file cold, ~240 ms/file once the jiterpreter warms), the
+full corpus for **57 s**, a `.xgp` zip of 386 decisions for **6.6 s**, and a
+6,515-row Diagram JSON for **15.6 s**. Apply Filter, by contrast, is 30–71
+ms and deliberately gets nothing.
 
 `WebModePanel` routes every slow gesture — file selection, opening-book pick,
 and all three download formats — through one private `RunBusyAsync(message,
@@ -444,12 +446,13 @@ fraction and get an indeterminate striped bar instead:
   branch also suppresses those stale elapsed/throughput numbers.
 
 **The cursor** is the half of the affordance the words can't cover, and the one
-the user found missing (issue #77): through that multi-minute deck render the
-bar and the phase message were right and the pointer stayed a plain arrow. Both
-panels put an `is-busy` class on their **root** element for exactly as long as
-their own busy flag is up — `_busy` in each, unchanged — and `wwwroot/app.css`
-turns that one class into `cursor: progress` for the root and everything under
-it. Two details are load-bearing:
+the user found missing (issue halheinrich/backgammon#77): through that
+multi-minute deck render the bar and the phase message were right and the
+pointer stayed a plain arrow. Both panels put an `is-busy` class on their
+**root** element for exactly as long as their own busy flag is up — `_busy` in
+each, unchanged — and `wwwroot/app.css` turns that one class into
+`cursor: progress` for the root and everything under it. Two details are
+load-bearing:
 
 - **It rides the flag, not a window.** Local mode's pre-first-poll gap, its
   determinate stretch and the atomic render are all inside one `_busy`, as is
@@ -633,17 +636,17 @@ project via relative path — not duplicated here.
   integration through the composite's rendered DOM (the panels are
   producer-internal; `FindComponent` over them is banned, host tests
   included): the holder derivation feeding both mode panels' gates, the
-  per-mode #78 re-gate (folder commit and file re-selection end the setup —
-  holder cleared, Run/Download re-gated, Apply re-armed without an edit),
-  the not-a-source pins (output path; a same-value folder recommit; the same
-  folder respelled with a trailing separator — the wire-layer half of
-  halheinrich/backgammon#94, which the producer's `FromPath` unit test cannot
-  give: it says the factory folds the spelling, this says nothing between the
-  folder input and the holder re-introduces the distinction. It pins the
-  contract forward, and deliberately claims no more: the WASM-only failure it
-  descends from is **not** reproducible here, since bUnit runs on Windows .NET
-  where the old `Path.TrimEndingDirectorySeparator` call trimmed `\` correctly
-  — see the test's own remarks), the
+  per-mode halheinrich/backgammon#78 re-gate (folder commit and file
+  re-selection end the setup — holder cleared, Run/Download re-gated, Apply
+  re-armed without an edit), the not-a-source pins (output path; a same-value
+  folder recommit; the same folder respelled with a trailing separator — the
+  wire-layer half of halheinrich/backgammon#94, which the producer's
+  `FromPath` unit test cannot give: it says the factory folds the spelling,
+  this says nothing between the folder input and the holder re-introduces the
+  distinction. It pins the contract forward, and deliberately claims no more:
+  the WASM-only failure it descends from is **not** reproducible here, since
+  bUnit runs on Windows .NET where the old `Path.TrimEndingDirectorySeparator`
+  call trimmed `\` correctly — see the test's own remarks), the
   first-latch transitions (an apply before any source is unrecorded; the
   first folder commit / file selection re-arms), and the saved-filters
   round-trip over the file relay (document rows render, save-as writes into
@@ -656,30 +659,32 @@ project via relative path — not duplicated here.
   `bUnitTestHelpers` — which also serves an in-memory edition of the
   filterdocument relay — to drive the mode branch and the saved-filters
   context deterministically.
-- `HomeMountGateTests` — bUnit tests for the composite's mount gate (#85):
-  the composite is absent until the restore completes (proven with the
-  app-mode probe held open on a `TaskCompletionSource`, so the pre-restore
-  render is observed rather than raced); a return to Home over a restored
-  folder the holder still has a config applied for keeps the applied config,
-  the panels' gate, and the run gate — with Apply disabled by #82's reconcile,
-  which before this gate could never fire in this host; a config applied for
+- `HomeMountGateTests` — bUnit tests for the composite's mount gate
+  (halheinrich/backgammon#85): the composite is absent until the restore
+  completes (proven with the app-mode probe held open on a
+  `TaskCompletionSource`, so the pre-restore render is observed rather than
+  raced); a return to Home over a restored folder the holder still has a
+  config applied for keeps the applied config, the panels' gate, and the run
+  gate — with Apply disabled by halheinrich/backgammon#82's reconcile, which
+  before this gate could never fire in this host; a config applied for
   *another* folder is not adopted **and is dropped**, and neither is one left
   standing when Web mode restores no selection at all; and neither half of
-  #78 is disturbed — committing a different folder still ends the setup, and
-  blanking the folder re-gates in place with the composite still mounted.
-  Every drop is pinned twice — nothing applied for the *new* source and
-  nothing left for the *old* one — because under path-keyed tokens only the
-  second half proves a clear actually happened (see the pitfall).
-- `HomeStorageUnavailableTests` — what a refused `localStorage` costs (#91):
-  the surface still mounts (unguarded, the restore faulted before
-  `_restoreComplete` and the page had no filtering at all — silently, since
-  this app registers no `#blazor-error-ui`), the notice appears and its
-  absence with storage working is the control, every option lands on its
-  documented default, no source is restored so a surviving holder is
-  dropped, and a store lost *after* boot flips the notice on the first
-  persisted gesture. **Fails Home's own keys only** — a real refusal throws
-  for every caller, and bUnit rethrows the siblings' lifecycle exceptions,
-  so a whole-browser model must wait for #102.
+  halheinrich/backgammon#78 is disturbed — committing a different folder still
+  ends the setup, and blanking the folder re-gates in place with the composite
+  still mounted. Every drop is pinned twice — nothing applied for the *new*
+  source and nothing left for the *old* one — because under path-keyed tokens
+  only the second half proves a clear actually happened (see the pitfall).
+- `HomeStorageUnavailableTests` — what a refused `localStorage` costs
+  (halheinrich/backgammon#91): the surface still mounts (unguarded, the
+  restore faulted before `_restoreComplete` and the page had no filtering at
+  all — silently, since this app registers no `#blazor-error-ui`), the
+  notice appears and its absence with storage working is the control, every
+  option lands on its documented default, no source is restored so a
+  surviving holder is dropped, and a store lost *after* boot flips the
+  notice on the first persisted gesture. **Fails Home's own keys only** — a
+  real refusal throws for every caller, and bUnit rethrows the siblings'
+  lifecycle exceptions, so a whole-browser model must wait for
+  halheinrich/backgammon#102.
 - `HomeRestoreNoticeTests` — the §4 notice's host wiring: `FilterRestoreNotice`
   registered at app scope and bound to the hosted `FilterSurface`, so the
   producer's decision reaches the page and an edit takes it away again. The
@@ -742,7 +747,8 @@ project via relative path — not duplicated here.
   the state in which a queued render can't paint. Plus one pin per gesture
   (file pick, book pick, each download format) that it routes through the
   wrapper at all. A component test can only pin the wiring; the paint itself
-  was pinned against a real browser during the issue #53 measurement pass.
+  was pinned against a real browser during the issue halheinrich/backgammon#53
+  measurement pass.
 - `LocalModePanelBusyAffordanceTests` — the two no-fraction progress states:
   busy-before-first-poll and `JobPhase.Rendering` both render an indeterminate
   striped bar, the rendering branch suppresses the frozen elapsed/throughput
@@ -804,10 +810,10 @@ project via relative path — not duplicated here.
   projection rule: rows handed to the cache while the applied parameters are
   held true are projected through the set in effect (`ReplaceRows`, no
   rebuild). The end-to-end contract these once pinned — "files selected
-  after an Apply are filtered immediately" — is superseded by the #78
-  source-change rule (a selection re-gates first; `HomeWiringTests` pins
-  that); these isolate what the cache routing still guarantees to any host
-  that keeps the applied state across a selection.
+  after an Apply are filtered immediately" — is superseded by the
+  halheinrich/backgammon#78 source-change rule (a selection re-gates first;
+  `HomeWiringTests` pins that); these isolate what the cache routing still
+  guarantees to any host that keeps the applied state across a selection.
 
 ## Public API
 
@@ -944,12 +950,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   while looking correct in review. `RunBusyAsync`'s `await Task.Yield()` is
   the load-bearing line; don't "simplify" it away, and route new slow gestures
   through the wrapper rather than raising `_busy` by hand. Measured before the
-  fix (issue #53): on a 6.6 s zip build the "Building…" label entered the DOM
-  **14 ms after the build finished** and reverted 22 ms later; on CSV and JSON
-  it never entered the DOM at all. `WebModePanelBusyAffordanceTests` pins both
-  halves separately — that the busy state is rendered before the body runs,
-  and that the wrapper yields before it — because a bUnit assertion on the
-  markup alone passes with or without the yield.
+  fix (issue halheinrich/backgammon#53): on a 6.6 s zip build the "Building…"
+  label entered the DOM **14 ms after the build finished** and reverted 22 ms
+  later; on CSV and JSON it never entered the DOM at all.
+  `WebModePanelBusyAffordanceTests` pins both halves separately — that the
+  busy state is rendered before the body runs, and that the wrapper yields
+  before it — because a bUnit assertion on the markup alone passes with or
+  without the yield.
 - **The busy cursor is one class and one rule — don't add per-spot cursor CSS.**
   The affordance is `is-busy` on each panel's root element plus the single
   `wwwroot/app.css` rule. A new slow gesture inherits it by raising the busy
@@ -1052,63 +1059,66 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   tokens come from a generation counter that every pick bumps. **Not here.**
   This host mints Local tokens with `FromPath`, so re-entering the same
   folder yields an *equal* token — deliberately, because that equality is
-  the ownership semantics, and it is exactly what lets the #85 restore adopt
-  a config across a navigate-back. The consequence is that a config left
-  merely unmatched would be silently re-adopted the moment its path came
-  back. What retires one in this host is two eager clears: the composite's
-  in-place source-change rule (#78) and the restore's `else Clear()` (#85).
-  Both are load-bearing here in a way they are not in BgQuiz. Don't weaken
-  either on the reasoning that the keying covers it, and don't add a
-  host-side expiry mechanism to compensate — the clears *are* it. The
-  `Home*Tests` drop assertions check the old source as well as the new one
-  precisely because only that half can tell a clear from a non-match.
-- **A source change ends the setup (#78) — the token is minted from the
-  latch, never the live text.** Local mode latches the folder path at the
-  input's `@onchange` boundary (plus the restore); Web mode bumps a
-  selection generation once per `HandleFileSelectionAsync`. When the token
-  changes, the hosted `FilterSurface` clears the holder, re-arms Apply
-  (forget-commit; the null report closes the gate through the normal event
-  path), and reloads the saved-filters context — one gesture drives the
-  re-gate and the store reload because the source folder *is* the filter
-  store's folder. Three consequences that look like bugs but are the
-  contract: a re-selection in Web mode blanks the preview until re-Apply
-  (ruled UX delta — it supersedes the old "files selected after an Apply
-  are filtered immediately" contract, and with it the old "configure
+  the ownership semantics, and it is exactly what lets the
+  halheinrich/backgammon#85 restore adopt a config across a navigate-back.
+  The consequence is that a config left merely unmatched would be silently
+  re-adopted the moment its path came back. What retires one in this host is
+  two eager clears: the composite's in-place source-change rule
+  (halheinrich/backgammon#78) and the restore's `else Clear()`
+  (halheinrich/backgammon#85). Both are load-bearing here in a way they are
+  not in BgQuiz. Don't weaken either on the reasoning that the keying covers
+  it, and don't add a host-side expiry mechanism to compensate — the clears
+  *are* it. The `Home*Tests` drop assertions check the old source as well as
+  the new one precisely because only that half can tell a clear from a
+  non-match.
+- **A source change ends the setup (halheinrich/backgammon#78) — the token
+  is minted from the latch, never the live text.** Local mode latches the
+  folder path at the input's `@onchange` boundary (plus the restore); Web
+  mode bumps a selection generation once per `HandleFileSelectionAsync`.
+  When the token changes, the hosted `FilterSurface` clears the holder,
+  re-arms Apply (forget-commit; the null report closes the gate through the
+  normal event path), and reloads the saved-filters context — one gesture
+  drives the re-gate and the store reload because the source folder *is*
+  the filter store's folder. Three consequences that look like bugs but are
+  the contract: a re-selection in Web mode blanks the preview until
+  re-Apply (ruled UX delta — it supersedes the old "files selected after an
+  Apply are filtered immediately" contract, and with it the old "configure
   filters → select files → run" ordering copy: the arming commit is
   per-source); an apply made before any source exists is unrecorded (the
   holder has no key to record it under — the first real source re-arms
   Apply instead); and the output path never re-gates — it is not a source
   (umbrella-ratified). Don't "fix" any of them, and don't wire the token to
   `@oninput` — per-keystroke re-gating was ruled out.
-- **Never publish `Source` before the restore has run (#85).** Home's mode
-  and folder latch arrive in its own `OnAfterRenderAsync(firstRender)`,
-  which Blazor runs *after* the child's, so anything bound before then is a
-  guess. The composite compares tokens and cannot distinguish "not yet
-  known" from "no source": a placeholder null followed by the real token
-  reads as a source change and ends the setup. Hence `@if
-  (_restoreComplete)` around `FilterSurface` — and hence the temptation to
-  gate on `Source is not null` instead, which is the wrong condition here
-  (BgQuiz gates its composite on `HasFiles`; copying that shape would
-  unmount on every folder clear and defeat #78). Same rule for anything
-  else Home ever binds into the composite: bind facts, not placeholders.
-  The gate costs a filter-surface-free window on every Home visit —
-  measured at **7–10 ms** (shell paint → surface paint, Debug WASM build,
-  six samples), i.e. under one frame, so it needs no spinner and no
-  reserved-space placeholder. Re-measure before adding anything to the
-  restore that could stretch it.
-- **`_restoreComplete` is set over facts, never in a `finally` (#91).** The
-  restore reaching its end while storage is refused is legitimate — the
-  seam answered each key with its documented default, so `Source` is minted
-  from something known (usually null, a steady state the composite owns).
-  Setting the flag in a `finally` is a different thing and stays rejected:
-  it publishes a token derived from reads that never landed, which is the
-  truthful-`Source` violation the gate exists to prevent. So don't "tidy"
-  the per-call seam into one method-wide `try` either — a method-wide catch
-  would have to restate every default in its handler (a second copy to
-  drift from the field initializers) and would swallow the app-mode probe's
-  own guarded failure along with it. The probe stays outside the seam
-  deliberately: its fallback (`"Web"`) is *not* truthful on a Local
-  install, so it must be attempted even when storage is dead.
+- **Never publish `Source` before the restore has run
+  (halheinrich/backgammon#85).** Home's mode and folder latch arrive in its
+  own `OnAfterRenderAsync(firstRender)`, which Blazor runs *after* the
+  child's, so anything bound before then is a guess. The composite compares
+  tokens and cannot distinguish "not yet known" from "no source": a
+  placeholder null followed by the real token reads as a source change and
+  ends the setup. Hence `@if (_restoreComplete)` around `FilterSurface` —
+  and hence the temptation to gate on `Source is not null` instead, which
+  is the wrong condition here (BgQuiz gates its composite on `HasFiles`;
+  copying that shape would unmount on every folder clear and defeat
+  halheinrich/backgammon#78). Same rule for anything else Home ever binds
+  into the composite: bind facts, not placeholders. The gate costs a
+  filter-surface-free window on every Home visit — measured at **7–10 ms**
+  (shell paint → surface paint, Debug WASM build, six samples), i.e. under
+  one frame, so it needs no spinner and no reserved-space placeholder.
+  Re-measure before adding anything to the restore that could stretch it.
+- **`_restoreComplete` is set over facts, never in a `finally`
+  (halheinrich/backgammon#91).** The restore reaching its end while storage
+  is refused is legitimate — the seam answered each key with its documented
+  default, so `Source` is minted from something known (usually null, a
+  steady state the composite owns). Setting the flag in a `finally` is a
+  different thing and stays rejected: it publishes a token derived from
+  reads that never landed, which is the truthful-`Source` violation the
+  gate exists to prevent. So don't "tidy" the per-call seam into one
+  method-wide `try` either — a method-wide catch would have to restate
+  every default in its handler (a second copy to drift from the field
+  initializers) and would swallow the app-mode probe's own guarded failure
+  along with it. The probe stays outside the seam deliberately: its
+  fallback (`"Web"`) is *not* truthful on a Local install, so it must be
+  attempted even when storage is dead.
 - **The filterdocument Local guard is an explicit action guard —
   deliberately unlike `OpeningBookController`.** The processing services
   stay DI-guarded (registered only inside the Local branch), but
@@ -1230,10 +1240,10 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **Streaming JSON write for large datasets.** Current Diagram JSON output is
   a single in-memory array. Very large corpora may need a streaming writer
   (NDJSON or JSON-array streaming) rather than building the full document
-  before serializing. Measured (issue #53, Web mode/WASM): 6,515 filtered rows
-  build a **50.9 MB** document in **15.6 s** of blocked main thread — the
-  in-memory build is the cost, and it is now behind a busy affordance rather
-  than fixed.
+  before serializing. Measured (issue halheinrich/backgammon#53, Web
+  mode/WASM): 6,515 filtered rows build a **50.9 MB** document in **15.6 s**
+  of blocked main thread — the in-memory build is the cost, and it is now
+  behind a busy affordance rather than fixed.
 - **Abandoned-job expiry in `JobStore`.** Completed jobs are now removed when
   their terminal snapshot is read (see Job lifecycle), so normal runs
   self-clear. What remains is the abandoned case — a client that never polls to

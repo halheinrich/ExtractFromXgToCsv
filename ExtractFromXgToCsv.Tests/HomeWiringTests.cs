@@ -16,7 +16,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// Pins the wire integration between the lib-owned <c>FilterSurface</c>
 /// composite and the consumer-side <see cref="Home"/> — the applied-holder
 /// derivation feeding both mode panels' gates, and the per-mode source-change
-/// rule (the #78 re-gate: a folder commit or file re-selection ends the
+/// rule (the halheinrich/backgammon#78 re-gate: a folder commit or file re-selection ends the
 /// setup — holder cleared, Apply re-armed, saved-filters context reloaded).
 /// The original regression class shipped because a renamed panel event left a
 /// consumer binding silently splatted; these tests fail closed if any of that
@@ -85,7 +85,7 @@ public class HomeWiringTests : BunitContext
         Holder.ConfigFor(FilterSourceToken.FromGeneration(generation));
 
     // Waits for the composite as well as the mode panel: Home holds
-    // FilterSurface back until its first-render restore completes (#85), and in
+    // FilterSurface back until its first-render restore completes (halheinrich/backgammon#85), and in
     // Web mode the panel alone is up from the very first render — so the panel
     // is not a restore-completed signal there. Every gesture below drives the
     // composite's DOM, so this is the render the tests actually need.
@@ -222,7 +222,7 @@ public class HomeWiringTests : BunitContext
         Assert.False(RunButton(cut).HasAttribute("disabled"));
     }
 
-    // ── The #78 re-gate: source changes end the setup ───────────────────────
+    // ── The halheinrich/backgammon#78 re-gate: source changes end the setup ───────────────────────
 
     [Fact]
     public async Task FolderChange_EndsSetup_RunRegatedAndApplyRearmed()
@@ -244,7 +244,7 @@ public class HomeWiringTests : BunitContext
         // is the load-bearing half. Local tokens are minted from the path, so
         // re-entering "matches" mints an equal token again — a config merely
         // left unmatched would be silently re-adopted the moment the user
-        // typed the old path back. #78's clear is what retires it; the keying
+        // typed the old path back. halheinrich/backgammon#78's clear is what retires it; the keying
         // alone expires nothing here.
         Assert.Null(AppliedForFolder(@"D:\xg\matches"));
 
