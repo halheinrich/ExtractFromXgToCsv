@@ -287,7 +287,7 @@ public class XgpExportServiceTests
     {
         var rows = new List<DecisionRow>
         {
-            new() { Id = new XgDecisionId("absent.xg", 1, 1, false) },
+            new() { Id = new XgDecisionId("absent.xg", 1, 1, false), Roll = 31 },
         };
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -301,7 +301,7 @@ public class XgpExportServiceTests
     {
         var rows = new List<DecisionRow>
         {
-            new() { Id = new XgpDecisionId(XgpFixture) },
+            new() { Id = new XgpDecisionId(XgpFixture), Roll = 31 },
         };
 
         Assert.Throws<ArgumentException>(() => _service.BuildXgpZip(

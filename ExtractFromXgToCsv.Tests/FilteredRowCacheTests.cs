@@ -18,7 +18,7 @@ namespace ExtractFromXgToCsv.Tests;
 public class FilteredRowCacheTests
 {
     private static DecisionRow Row(string player, string file = "a.xgp") =>
-        new() { Id = new XgpDecisionId(file), Player = player };
+        new() { Id = new XgpDecisionId(file), Player = player, Roll = 31 };
 
     private static BgDecisionData DiagramRow(string player, string file = "a.xgp") =>
         new()
