@@ -1,4 +1,4 @@
-﻿using Bunit;
+using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
