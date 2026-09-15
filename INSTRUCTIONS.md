@@ -56,108 +56,56 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   builder. A license must be configured at server startup before `RenderPdf`
   is invoked; see Pitfalls.
 
-## Directory tree
+## Layout
 
-```
-ExtractFromXgToCsv.slnx
-Directory.Packages.props
-README.md
-ExtractFromXgToCsv/                     — server host (thin)
-  ExtractFromXgToCsv.csproj
-  Program.cs
-  appsettings.json
-  appsettings.Development.json
-  Components/
-    App.razor                           — root document
-    Routes.razor                        — router host
-    _Imports.razor
-    Layout/
-      MainLayout.razor
-    Pages/
-      Error.razor                       — server-rendered error page
-  Controllers/
-    AppModeController.cs
-    FilterDocumentController.cs         — saved-filters file relay (Local-only via action guard)
-    OpeningBookController.cs            — GET book status (Local mode only)
-    ProcessController.cs                — primary-constructor DI
-    ShutdownController.cs
-  Properties/
-    launchSettings.json
-  Services/
-    AppModeService.cs                   — singleton, exposes configured mode
-    FilterDocumentStore.cs              — singleton, named-text-file IO + filename-shape rule
-    JobStore.cs                         — singleton, job registry
-    LocalFolderProcessor.cs             — scoped, runs the pipeline for Local mode
-    OpeningBookProvider.cs              — singleton, resolves + loads the opening book
-  wwwroot/
-    app.css                             — the app's only bespoke CSS: the
-                                          busy-cursor rule (see Busy affordance)
-    app.js
-    bootstrap/
-ExtractFromXgToCsv.Client/              — WASM
-  ExtractFromXgToCsv.Client.csproj
-  Program.cs
-  _Imports.razor
-  Components/
-    LocalModePanel.razor                — folder/output inputs, polling loop
-    WebModePanel.razor                  — file picker, in-memory preview, download
-    Pages/
-      Home.razor                        — mode-detecting shell
-  Properties/
-    launchSettings.json
-  Services/
-    FilteredRowCache.cs                 — Web-mode rows + filtered projections + identity-cached Build
-    HttpDocumentStorage.cs              — IDocumentStorage over the server's file relay
-    XgProcessingService.cs              — WASM-side decision/diagram extraction
-  Shared/
-    AppModeResponse.cs                  — { Mode } body for GET /api/appmode
-    JobPhase.cs                         — Processing | Rendering (progress-snapshot stage)
-    OpeningBookStatus.cs                — { Loaded, EntryCount } for GET /api/openingbook/status
-    OutputFormat.cs                     — Csv | DiagramJson | Pptx | Pdf | Xgp
-    ProcessRequest.cs                   — POST body for /api/process/start
-    ProcessingProgress.cs
-    XgpExportOptions.cs                 — .xgp batch naming (pattern/number/length)
-    XgpNameAllocator.cs                 — per-run name source: render + " (2)" uniquifier
-    XgpNameContext.cs                   — token render inputs (primitives + lib types)
-    XgpNameTemplate.cs                  — parsed name pattern (TryParse/Render/Sanitize)
-    XgpNameToken.cs                     — one {token} definition
-    XgpNameTokens.cs                    — token registry (SSOT) + preview SampleRow
-    XgpTokenSource.cs                   — Batch | PerItem token classification
-ExtractFromXgToCsv.Tests/
-  ExtractFromXgToCsv.Tests.csproj
-  bUnitTestHelpers.cs                   — reflection accessor + stub HTTP handlers
-  BusyCursorTests.cs                    — busy marker ↔ busy state, both panels (bUnit)
-  FilterDocumentEndpointTests.cs        — hosted wire pins for the file relay (WebApplicationFactory)
-  FilterDocumentStoreTests.cs           — filename-shape rule + IO contracts (direct)
-  FilteredRowCacheTests.cs              — projection + identity-cache invariants (direct)
-  FixtureHelper.cs
-  HomeMountGateTests.cs                 — restore-gated FilterSurface mount + holder recovery (bUnit)
-  HomeStorageUnavailableTests.cs        — localStorage-refused degradation + its notice (bUnit)
-  HomeWiringTests.cs                    — FilterSurface → Home wiring + per-mode re-gate (bUnit)
-  HttpDocumentStorageTests.cs           — client relay adapter contracts (direct)
-  HomeXgpPatternTests.cs                — pattern UI, migration, persistence (bUnit)
-  LocalFolderProcessorIllegalPlayTests.cs
-  LocalFolderProcessorPdfTests.cs
-  LocalFolderProcessorPhaseTests.cs     — JobPhase reporting per pathway
-  LocalFolderProcessorPptxTests.cs
-  LocalFolderProcessorOpeningBookTests.cs — book reaches every processor pathway
-  LocalFolderProcessorXgpTests.cs       — Local-mode .xgp folder output wiring
-  LocalModePanelBusyAffordanceTests.cs  — no-fraction progress states (bUnit)
-  LocalModePanelGateTests.cs            — Run-button dirty-gating + error render (bUnit)
-  OpeningBookProviderTests.cs           — path resolution + load/degrade
-  Make20PtSmokeTests.cs
-  OutputConsistencyTests.cs
-  WebModePanelBusyAffordanceTests.cs    — busy render/yield ordering (bUnit)
-  WebModePanelFilteringTests.cs         — panel → FilteredRowCache routing (bUnit)
-  WebModePanelOpeningBookTests.cs       — .ob input status + late-book re-extract (bUnit)
-  WebModePanelRefilterOnLoadTests.cs    — post-Apply file selection filters immediately (bUnit)
-  WebModePanelXgpExportTests.cs         — select→export→download wire (bUnit)
-  XgpExportServiceTests.cs              — BuildXgpZip round-trip oracle
-  XgpNameAllocatorTests.cs              — uniquifier + Peek/Commit rules
-  XgpNameTemplateTests.cs               — pattern grammar + token rendering
-  XgProcessingServiceOpeningBookTests.cs — book bridge + extract enrichment (WASM path)
-  XgProcessingServiceTests.cs
-```
+Three projects under `ExtractFromXgToCsv.slnx`, governed by repo-root
+`Directory.Build.props` (TFM, nullable, `TreatWarningsAsErrors`, XML doc
+generation) and `Directory.Packages.props` (Central Package Management).
+
+**`ExtractFromXgToCsv/`** — the server host, thin by design (see
+Architecture). Four areas:
+
+- **Hosting** — `Program.cs`: the `AppMode` guard that registers the
+  Local-mode services only in Local mode, and the QuestPDF license. With it
+  `Components/` (the root document, router, layout and server error page that
+  host the WASM app, `prerender:false`) and `appsettings*.json` (`AppMode`,
+  and the optional `OpeningBookPath`).
+- **HTTP surface** — `Controllers/`: process start/status/cancel, app mode,
+  opening-book status, the saved-filters file relay, shutdown. Thin
+  pass-throughs to the services (see Public API).
+- **Local-mode services** — `Services/`: `LocalFolderProcessor` (the four
+  output pathways over a folder, and the run's skip record), `JobStore` (the
+  job registry and its self-cleaning status read), `OpeningBookProvider`
+  (resolves and loads the book), `FilterDocumentStore` (the named-file IO
+  behind the relay) and `AppModeService` (the configured mode).
+- **Static assets** — `wwwroot/`: `app.css` (the busy-cursor rule, the app's
+  only bespoke CSS), `app.js`, and vendored Bootstrap.
+
+**`ExtractFromXgToCsv.Client/`** — the Blazor WebAssembly app: all UI in both
+modes, and all processing in Web mode. `Program.cs` registers the filter
+holder and restore notice XgFilter_Razor's composite needs. Three areas:
+
+- **Components** — `Pages/Home.razor` (the shell and `FilterSurface` host)
+  and the two mode panels, `LocalModePanel` and `WebModePanel` (see
+  Components).
+- **Services** — the Web-mode pipeline and its client-side state:
+  `XgProcessingService` (WASM extraction and the `.xgp` zip),
+  `FilteredRowCache` (loaded rows and their filtered projections) and
+  `HttpDocumentStorage` (the storage seam over the server's file relay).
+- **Shared** — the wire types the server references too (`ProcessRequest`,
+  `ProcessingProgress` and `SkippedItem`, `JobPhase`, `OutputFormat`,
+  `AppModeResponse`, `OpeningBookStatus`, the strict enum converter), and the
+  `.xgp` naming engine (`XgpExportOptions`, `XgpNameAllocator` and its
+  internal parts). See Client-shared types.
+
+**`ExtractFromXgToCsv.Tests/`** — xUnit, one class per contract: direct tests
+of the services and the naming engine, bUnit tests of `Home` and both panels,
+hosted `WebApplicationFactory` pins for the file relay, and processor runs
+over real files. Shared support: `bUnitTestHelpers` (private-field access and
+stub HTTP handlers), `CapturingLogger<T>`, `FixtureHelper`,
+`XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
+linked into the build output rather than kept in this repo (see Test project,
+and the fixture pitfall).
 
 ## Architecture
 
