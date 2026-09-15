@@ -51,6 +51,10 @@ public class LocalFolderProcessorPptxTests
             Assert.True(lastProgress!.Complete);
             Assert.True(lastProgress.TotalRows > 0);
 
+            // Rows > 0 alone would pass with files dropped; nothing in the
+            // fixture folder may be skipped (halheinrich/backgammon#223).
+            Assert.Empty(lastProgress.Skipped);
+
             // Each decision becomes a Problem + Solution pair, so the deck
             // should have exactly twice as many slides as decisions.
             var slideCount = archive.Entries.Count(e =>

@@ -15,6 +15,13 @@ namespace ExtractFromXgToCsv.Services;
 /// Streams through .xg/.xgp files in a folder one at a time,
 /// applies a DecisionFilterSet, and writes CSV rows as it goes.
 /// Never holds more than one file's rows in memory at a time.
+/// <para>
+/// A file that fails (and, on the Xgp pathway, a decision whose write fails)
+/// is skipped, not fatal, and every skip is recorded through one seam,
+/// <see cref="RecordSkip"/>, onto the run's
+/// <see cref="ProcessingProgress.Skipped"/>. Cancellation is never a skip:
+/// every skip catch excludes <see cref="OperationCanceledException"/>.
+/// </para>
 /// </summary>
 public class LocalFolderProcessor
 {
@@ -70,6 +77,32 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
+    /// The one skip seam: every per-file and per-decision catch in this
+    /// processor calls it, and none logs on its own. Logs the skip and appends
+    /// it to <paramref name="skipped"/>, the run-scoped record every snapshot
+    /// the run reports carries a copy of (<see cref="ProcessingProgress.Skipped"/>
+    /// — a copy, because a snapshot must not change after it is reported). The
+    /// exception's message is the recorded reason.
+    /// </summary>
+    /// <param name="skipped">The current run's record.</param>
+    /// <param name="ex">What skipped the input; never an <see cref="OperationCanceledException"/> — the catches exclude it.</param>
+    /// <param name="fileName">The source file's bare name.</param>
+    /// <param name="decisionId">The skipped decision, or <see langword="null"/> when the whole file was skipped.</param>
+    private void RecordSkip(
+        List<SkippedItem> skipped,
+        Exception ex,
+        string fileName,
+        DecisionId? decisionId = null)
+    {
+        if (decisionId is null)
+            _logger.LogWarning(ex, "Skipping {File}", fileName);
+        else
+            _logger.LogWarning(ex, "Skipping decision {DecisionId} in {File}", decisionId, fileName);
+
+        skipped.Add(new SkippedItem(fileName, decisionId, ex.Message));
+    }
+
+    /// <summary>
     /// CSV pathway: streams the folder's <c>.xg</c>/<c>.xgp</c> files one at a
     /// time, applies <paramref name="filterSet"/>, and writes matching
     /// <see cref="DecisionRow"/>s to <paramref name="outputPath"/> as CSV,
@@ -92,6 +125,7 @@ public class LocalFolderProcessor
         await writer.WriteLineAsync(DecisionRow.CsvHeader);
 
         int totalRows = 0;
+        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
         const int reportEvery = 10; // client polls every second; no need to update on every file
 
@@ -114,7 +148,8 @@ public class LocalFolderProcessor
                     FileName = fileName,
                     TotalRows = totalRows,
                     ElapsedSec = elapsed,
-                    FilesPerSec = filesPerSec
+                    FilesPerSec = filesPerSec,
+                    Skipped = [.. skipped]
                 });
             }
 
@@ -131,9 +166,9 @@ public class LocalFolderProcessor
                     totalRows++;
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Skipping {File}", fileName);
+                RecordSkip(skipped, ex, fileName);
             }
         }
 
@@ -148,7 +183,8 @@ public class LocalFolderProcessor
             TotalRows = totalRows,
             Complete = true,
             ElapsedSec = totalElapsed,
-            FilesPerSec = finalFilesPerSec
+            FilesPerSec = finalFilesPerSec,
+            Skipped = [.. skipped]
         });
     }
     /// <summary>
@@ -171,6 +207,7 @@ public class LocalFolderProcessor
 
         var allItems = new List<BgDecisionData>();
         int totalRows = 0;
+        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
         const int reportEvery = 10;
 
@@ -193,7 +230,8 @@ public class LocalFolderProcessor
                     FileName = fileName,
                     TotalRows = totalRows,
                     ElapsedSec = elapsed,
-                    FilesPerSec = filesPerSec
+                    FilesPerSec = filesPerSec,
+                    Skipped = [.. skipped]
                 });
             }
 
@@ -211,9 +249,9 @@ public class LocalFolderProcessor
                     totalRows++;
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Skipping {File}", fileName);
+                RecordSkip(skipped, ex, fileName);
             }
         }
 
@@ -233,7 +271,8 @@ public class LocalFolderProcessor
             TotalRows = totalRows,
             Complete = true,
             ElapsedSec = totalElapsed,
-            FilesPerSec = finalFilesPerSec
+            FilesPerSec = finalFilesPerSec,
+            Skipped = [.. skipped]
         });
     }
 
@@ -293,6 +332,7 @@ public class LocalFolderProcessor
         var nameOverrides = anonymize ? XgpSliceOptions.Anonymized : null;
 
         int totalRows = 0;
+        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
 
         for (int i = 0; i < files.Count; i++)
@@ -309,7 +349,8 @@ public class LocalFolderProcessor
                 FileName = Path.GetFileName(files[i]),
                 TotalRows = totalRows,
                 ElapsedSec = elapsed,
-                FilesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0
+                FilesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0,
+                Skipped = [.. skipped]
             });
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -370,18 +411,13 @@ public class LocalFolderProcessor
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        _logger.LogWarning(ex,
-                            "Skipping decision {DecisionId} in {File}", row.Id, fileName);
+                        RecordSkip(skipped, ex, fileName, row.Id);
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Skipping {File}", fileName);
+                RecordSkip(skipped, ex, fileName);
             }
         }
 
@@ -395,7 +431,8 @@ public class LocalFolderProcessor
             TotalRows = totalRows,
             Complete = true,
             ElapsedSec = totalElapsed,
-            FilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0
+            FilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0,
+            Skipped = [.. skipped]
         });
     }
 
@@ -450,6 +487,7 @@ public class LocalFolderProcessor
 
         var requests = new List<DiagramRequest>();
         int totalRows = 0;
+        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
         const int reportEvery = 10;
 
@@ -472,7 +510,8 @@ public class LocalFolderProcessor
                     FileName = fileName,
                     TotalRows = totalRows,
                     ElapsedSec = elapsed,
-                    FilesPerSec = filesPerSec
+                    FilesPerSec = filesPerSec,
+                    Skipped = [.. skipped]
                 });
             }
 
@@ -497,9 +536,9 @@ public class LocalFolderProcessor
                     totalRows++;
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Skipping {File}", fileName);
+                RecordSkip(skipped, ex, fileName);
             }
         }
 
@@ -521,7 +560,8 @@ public class LocalFolderProcessor
             TotalRows = totalRows,
             ElapsedSec = stopwatch.Elapsed.TotalSeconds,
             FilesPerSec = stopwatch.Elapsed.TotalSeconds > 0
-                ? (int)(files.Count / stopwatch.Elapsed.TotalSeconds) : 0
+                ? (int)(files.Count / stopwatch.Elapsed.TotalSeconds) : 0,
+            Skipped = [.. skipped]
         });
 
         if (requests.Count == 0)
@@ -542,7 +582,8 @@ public class LocalFolderProcessor
             TotalRows = totalRows,
             Complete = true,
             ElapsedSec = totalElapsed,
-            FilesPerSec = finalFilesPerSec
+            FilesPerSec = finalFilesPerSec,
+            Skipped = [.. skipped]
         });
     }
 }

@@ -45,6 +45,27 @@ public class ProcessingProgress
     /// <summary>Failure message; non-null only on the terminal error state.</summary>
     public string? ErrorMessage { get; set; }
 
+    /// <summary>
+    /// Every input the run has skipped so far, in the order skipped — a file it
+    /// could not process, or a decision it could not write; on a terminal
+    /// snapshot, the run's whole record. Empty when nothing was skipped.
+    /// </summary>
+    /// <remarks>
+    /// A skip never ends a run — one bad file must not kill a batch — so this is
+    /// the only place a dropped input shows. The two counts below are derived
+    /// from it rather than carried beside it, so they cannot disagree with it.
+    /// </remarks>
+    public IReadOnlyList<SkippedItem> Skipped { get; set; } = [];
+
+    /// <summary>Whole files skipped, derived from <see cref="Skipped"/>.</summary>
+    public int SkippedFileCount => Skipped.Count(s => s.DecisionId is null);
+
+    /// <summary>
+    /// Single decisions skipped inside files that were otherwise processed,
+    /// derived from <see cref="Skipped"/>.
+    /// </summary>
+    public int SkippedDecisionCount => Skipped.Count(s => s.DecisionId is not null);
+
     /// <summary>Percent complete, derived from <see cref="Current"/> over <see cref="Total"/>.</summary>
     public int PercentComplete => Total == 0 ? 0 : (int)((Current / (double)Total) * 100);
 }

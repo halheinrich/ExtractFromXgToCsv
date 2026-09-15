@@ -52,6 +52,10 @@ public class LocalFolderProcessorPdfTests
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.True(lastProgress.TotalRows > 0);
+
+            // Rows > 0 alone would pass with files dropped; nothing in the
+            // fixture folder may be skipped (halheinrich/backgammon#223).
+            Assert.Empty(lastProgress.Skipped);
         }
         finally
         {

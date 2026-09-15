@@ -15,8 +15,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// drives the actual user-facing <see cref="LocalFolderProcessor.ProcessPdfAsync"/>
 /// over a real tournament file and asserts that:
 /// <list type="bullet">
-///   <item>the file is not dropped wholesale (decisions still emit, no
-///   <c>"Skipping"</c> warning from the per-file catch), and</item>
+///   <item>the file is not dropped wholesale (decisions still emit, nothing
+///   on the run's skip record, no <c>"Skipping"</c> warning from the per-file
+///   catch), and</item>
 ///   <item>the illegal play surfaces as a contextual <c>Warning</c> — which
 ///   only happens because <c>ProcessDeckAsync</c> passes its <c>_logger</c>
 ///   into <c>IterateDiagramRequests</c>. Drop that argument and this fails.</item>
@@ -53,7 +54,7 @@ public class LocalFolderProcessorIllegalPlayTests
 
         try
         {
-            var logger = new CapturingLogger();
+            var logger = new CapturingLogger<LocalFolderProcessor>();
             var processor = new LocalFolderProcessor(logger);
 
             ProcessingProgress? lastProgress = null;
@@ -69,6 +70,7 @@ public class LocalFolderProcessorIllegalPlayTests
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.True(lastProgress.TotalRows > 0);
+            Assert.Empty(lastProgress.Skipped);
 
             // The per-file catch never fired — the file survived end to end.
             Assert.DoesNotContain(logger.Entries,
@@ -87,30 +89,6 @@ public class LocalFolderProcessorIllegalPlayTests
         finally
         {
             if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-        }
-    }
-
-    /// <summary>
-    /// Minimal <see cref="ILogger{T}"/> that captures the level and fully
-    /// formatted message of each entry — enough to assert the illegal-play
-    /// warning surfaced and the per-file catch stayed quiet.
-    /// </summary>
-    private sealed class CapturingLogger : ILogger<LocalFolderProcessor>
-    {
-        public readonly List<(LogLevel Level, string Message)> Entries = [];
-
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception)));
-
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-            public void Dispose() { }
         }
     }
 }

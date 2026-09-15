@@ -523,6 +523,23 @@ The controller's `Status`/`Cancel` actions are thin pass-throughs to
 gap remains — an abandoned job whose client never polls to completion lingers
 for the process lifetime (see the "Abandoned-job expiry" next step).
 
+**Skips are recorded; cancellation is never one**
+(halheinrich/backgammon#223). One bad file must not kill a batch, so every
+pathway catches a file that fails and moves on — and the Xgp pathway also
+catches a single decision whose write fails. Every one of those catches calls
+one seam, `LocalFolderProcessor.RecordSkip`, and none logs on its own: the
+seam logs the skip and appends a `SkippedItem` (file name; the decision's id
+for a decision skip; the exception's message as the reason) to the run's
+record. Every snapshot the run reports, progress and terminal alike, carries a
+copy of that record as `ProcessingProgress.Skipped`, with the file and
+decision counts derived from it. Every skip catch excludes
+`OperationCanceledException` (`when (ex is not OperationCanceledException)`),
+so a cancellation raised inside a file's body cancels the run on all four
+pathways rather than being recorded as a skipped file. The record reaches the
+terminal snapshot on success and on cancellation (the controller's cancel path
+marks the last reported snapshot); the error path builds a fresh snapshot and
+does not carry it.
+
 ### Opening-book enrichment
 
 `.xg` files stamp opening-book–analysed candidates with a bare 998/999 "book"
@@ -626,12 +643,39 @@ project via relative path — not duplicated here.
   contract is what's being tested).
 - `LocalFolderProcessorPptxTests` — wiring test for the Local-mode PPTX
   pathway. Runs the processor against the fixture folder, asserts the
-  written file is a valid OOXML zip with at least one slide. Deck-level
-  conformance is owned by `BackgammonDiagram_Lib`'s `PptxConformanceTests`.
+  written file is a valid OOXML zip with at least one slide, and that no
+  fixture file was skipped — a non-zero row count alone passes with files
+  dropped. Deck-level conformance is owned by `BackgammonDiagram_Lib`'s
+  `PptxConformanceTests`.
 - `LocalFolderProcessorPdfTests` — wiring test for the Local-mode PDF
   pathway. Runs the processor against the fixture folder, asserts the
-  written file begins with the `%PDF-` magic bytes. Document-level
-  conformance is owned by `BackgammonDiagram_Lib`'s own tests.
+  written file begins with the `%PDF-` magic bytes and that no fixture file
+  was skipped. Document-level conformance is owned by
+  `BackgammonDiagram_Lib`'s own tests.
+- `LocalFolderProcessorIllegalPlayTests` — the consumer half of the
+  illegal-play log contract: a real tournament file carrying XG's
+  illegal-play marker renders a PDF with nothing skipped, and the illegal
+  play surfaces as a contextual warning through the logger the deck pathway
+  hands the iterator.
+- `LocalFolderProcessorSkipTests` — the skip contract
+  (halheinrich/backgammon#223) on all four pathways, twice each. *Skips are
+  recorded*: a temp folder holds one fixture and one malformed file the test
+  synthesizes (garbage bytes under an `.xg` name, never committed, named to
+  sort first so the good file comes after the skip); the run completes, the
+  good file's rows are all there (checked against the producer read
+  directly), and the bad file is recorded once, by name, with a non-empty
+  reason. *Cancellation is not a skip*: a one-file run cancelled from its
+  first progress report throws `OperationCanceledException`, its last
+  snapshot records no skip, and nothing logged the cancellation as a skip.
+  The log half is what catches the Diagram JSON pathway: there, the old
+  catches' swallow was re-thrown by the final write before any snapshot could
+  show it. Uses a synchronous `IProgress<T>`, because `Progress<T>` posts its
+  callback and would race the cancellation point.
+- `ProcessingProgressWireTests` — the skip record round-trips under
+  `JsonSerializerDefaults.Web`, the defaults both ends of the status endpoint
+  actually use: record constructor binding, `DecisionId` in its canonical
+  form, and the derived counts. A body with no `skipped` field reads as an
+  empty record, not null.
 - `HomeWiringTests` — bUnit wire tests pinning the `FilterSurface` → `Home`
   integration through the composite's rendered DOM (the panels are
   producer-internal; `FindComponent` over them is banned, host tests
@@ -830,11 +874,15 @@ POST /api/process/start
 GET  /api/process/{jobId}/status
   200 →  ProcessingProgress { Current, Total, Phase, FileName, TotalRows,
                               Complete, Cancelled, ElapsedSec, FilesPerSec,
-                              ErrorMessage?, PercentComplete (computed) }
+                              ErrorMessage?, Skipped[],
+                              PercentComplete, SkippedFileCount,
+                              SkippedDecisionCount (all three computed) }
          — PercentComplete is derived from Current/Total; ErrorMessage is
            non-null only on the catch path (terminal error state); Phase is
            the JobPhase discriminator the client picks its progress bar from
-           (FileName is presentation and is never parsed for it).
+           (FileName is presentation and is never parsed for it); Skipped is
+           the run's skip record so far, SkippedItem { FileName, DecisionId?,
+           Reason }, and the two counts are derived from it.
 
 POST /api/process/{jobId}/cancel
   200 →  (empty)
@@ -932,7 +980,22 @@ project reference.
 - `ProcessRequest` — POST body for `/api/process/start`
   (`FolderPath`, `OutputPath`, `Filters` of type
   `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`, `XgpOptions`).
-- `ProcessingProgress` — status-endpoint payload.
+- `ProcessingProgress` — status-endpoint payload; a settable DTO the
+  processor fills and the panel reads. `Skipped`
+  (`IReadOnlyList<SkippedItem>`, empty by default) is the run's skip record as
+  of the snapshot. `SkippedFileCount` and `SkippedDecisionCount` are get-only
+  and derived from it, like `PercentComplete`: they serialize for any reader
+  of the wire but are never bound back, so they cannot disagree with the list.
+  Every snapshot gets its own copy of the list, so a reported snapshot never
+  changes afterwards.
+- `SkippedItem` — `sealed record SkippedItem(string FileName, DecisionId?
+  DecisionId, string Reason)`, one entry of that record. `FileName` is the
+  source file's bare name (the name the run reports and stamps on its rows);
+  `DecisionId` is null for a whole-file skip and set for the Xgp pathway's
+  per-decision skip, crossing in the library's canonical string form through
+  `DecisionId`'s own bundled converter; `Reason` is the exception's message.
+  A positional record like `AppModeResponse` and `OpeningBookStatus`: an entry
+  is a fact about what happened and has no reason to change.
 
 `FilterConfig` is **not** in `Client/Shared` — it lives in
 `XgFilter_Lib.Filtering` (lib-owned). Both client and server reference the
@@ -974,6 +1037,11 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   that's meant to change freely. `LocalModePanelBusyAffordanceTests` pins the
   direction that catches it: the same snapshot with a "Rendering…" `FileName`
   but `Phase = Processing` keeps the determinate bar.
+- **A per-file exception is a recorded skip, never a swallowed cancellation.**
+  Skip catches go through `RecordSkip` and filter out
+  `OperationCanceledException`; a bare `catch (Exception)` in the processor
+  either hides a dropped file or turns a cancel into a skip (see Job
+  lifecycle).
 - **`prerender:false` is required.** Filter state and file pickers live in
   the WASM runtime; a prerendered server pass would double-init components
   and lose state. Don't enable prerendering on the routable components.
