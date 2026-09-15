@@ -376,6 +376,12 @@ export. In Local mode the count is the final
   the filter set it describes. The edge, not a level check: an edit made
   *during* a run spends the edge while busy, so the result that run then
   produces survives (`LocalModePanelGateTests` pins exactly this).
+  On a terminal snapshot whose `Skipped` record is non-empty it shows a
+  `skipped-notice` alert under the status line (halheinrich/backgammon#223):
+  the non-zero counts, then each skipped input with its reason, a file by its
+  name and a decision by its canonical `DecisionId`. It sits outside the
+  success/cancelled/error branches, so a cancelled run's partial record shows
+  too; mid-run it stays hidden while the record is still growing.
 - **`WebModePanel.razor`** — file picker, preview table, download; every slow
   gesture runs through `RunBusyAsync` (see "Busy affordance"). Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`,
@@ -759,6 +765,12 @@ project via relative path — not duplicated here.
   doesn't, and **kept when the filter left effect during the run that
   produced it**. That last case is the one that distinguishes the falling
   edge from a level check; the first two deliberately do not, and say so.
+- `LocalModePanelSkippedNoticeTests` — the client half of
+  halheinrich/backgammon#223: a completed snapshot with skips shows the
+  notice beside the Done line, with the counts and every name and reason (a
+  decision by its canonical id); a cancelled one shows its partial record;
+  one without skips shows nothing, and neither does a mid-run snapshot that
+  already carries skips.
 - `LocalModePanelFilterWireTests` — bUnit wire tests pinning the filter half of
   the `/api/process/start` POST (the sibling `LocalModePanelXgpAnonymizeTests`
   covers its format/anonymize half): the applied `FilterConfig` reaches the
