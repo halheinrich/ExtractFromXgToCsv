@@ -38,12 +38,16 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
         return cut;
     }
 
+    // Names as the processor records them: paths under the input folder.
+    private static readonly string NestedFile = Path.Combine("2026", "truncated.xgp");
+    private static readonly string NestedMatch = Path.Combine("club", "match.xg");
+
     private static IReadOnlyList<SkippedItem> TwoFilesAndADecision() =>
     [
         new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic."),
-        new SkippedItem("truncated.xgp", null, "Unexpected end of stream."),
+        new SkippedItem(NestedFile, null, "Unexpected end of stream."),
         new SkippedItem(
-            "match.xg", new XgDecisionId("match.xg", 3, 12, IsCube: true), "Access denied."),
+            NestedMatch, new XgDecisionId("match.xg", 3, 12, IsCube: true), "Access denied."),
     ];
 
     [Fact]
@@ -69,11 +73,40 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
         Assert.Equal(3, entries.Count);
         Assert.Contains("broken.xg", entries[0]);
         Assert.Contains("Not a valid XG file: bad magic.", entries[0]);
-        Assert.Contains("truncated.xgp", entries[1]);
+        Assert.Contains(NestedFile, entries[1]);
         Assert.Contains("Unexpected end of stream.", entries[1]);
-        // A decision is named by the library's canonical id, which carries its file.
-        Assert.Contains("match.xg:g3:m12:cube", entries[2]);
+        // A decision shows its file's path under the input folder, then the
+        // library's canonical id — which names the file by bare name only.
+        Assert.Contains(NestedMatch, entries[2]);
+        Assert.Contains("decision match.xg:g3:m12:cube", entries[2]);
         Assert.Contains("Access denied.", entries[2]);
+    }
+
+    [Fact]
+    public void CompletedRunWithZeroRowsAndSkips_TheZeroMatchNoticeYieldsToTheSkips()
+    {
+        // Zero rows through an active filter would normally blame the filter,
+        // but that inference assumes every file was read. With skips the zero
+        // may be theirs, so only the skip notice speaks.
+        var cut = Render<LocalModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.Csv)
+            .Add(c => c.FilterConfig, new FilterConfig { Players = ["Alice"] })
+            .Add(c => c.FilterApplied, true)
+            .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.XgpAnonymize, false));
+        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", new ProcessingProgress
+        {
+            Current = 1,
+            Total = 1,
+            Complete = true,
+            TotalRows = 0,
+            Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic.")],
+        });
+        cut.Render();
+
+        Assert.Contains("Done", cut.Find("span.text-success").TextContent);
+        Assert.Empty(cut.FindAll("div.zero-match-notice"));
+        Assert.Contains("broken.xg", cut.Find(Notice).TextContent);
     }
 
     [Fact]

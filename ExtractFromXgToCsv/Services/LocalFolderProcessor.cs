@@ -18,9 +18,11 @@ namespace ExtractFromXgToCsv.Services;
 /// <para>
 /// A file that fails (and, on the Xgp pathway, a decision whose write fails)
 /// is skipped, not fatal, and every skip is recorded through one seam,
-/// <see cref="RecordSkip"/>, onto the run's
-/// <see cref="ProcessingProgress.Skipped"/>. Cancellation is never a skip:
-/// every skip catch excludes <see cref="OperationCanceledException"/>.
+/// <see cref="RecordSkip"/>, onto the run's <see cref="SkipRecord"/>, which
+/// every snapshot carries as <see cref="ProcessingProgress.Skipped"/>. A
+/// caller passes its own record to read it after a run-ending failure.
+/// Cancellation is never a skip: every skip catch excludes
+/// <see cref="OperationCanceledException"/>.
 /// </para>
 /// </summary>
 public class LocalFolderProcessor
@@ -77,44 +79,77 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
+    /// The run's skip record: the caller's, when it passed one to read after
+    /// a failure, otherwise a fresh one of the run's own.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="skipRecord"/> already holds entries — a record belongs
+    /// to one run, and a reused one would report another run's skips as this
+    /// run's.
+    /// </exception>
+    private static SkipRecord RecordFor(SkipRecord? skipRecord)
+    {
+        if (skipRecord is { IsEmpty: false })
+            throw new ArgumentException(
+                "A skip record belongs to one run; pass a fresh one.", nameof(skipRecord));
+        return skipRecord ?? new SkipRecord();
+    }
+
+    /// <summary>
     /// The one skip seam: every per-file and per-decision catch in this
     /// processor calls it, and none logs on its own. Logs the skip and appends
-    /// it to <paramref name="skipped"/>, the run-scoped record every snapshot
-    /// the run reports carries a copy of (<see cref="ProcessingProgress.Skipped"/>
-    /// — a copy, because a snapshot must not change after it is reported). The
-    /// exception's message is the recorded reason.
+    /// it to <paramref name="skips"/>, the run's record, which every snapshot
+    /// the run reports carries a copy of (<see cref="ProcessingProgress.Skipped"/>).
+    /// The exception's message is the recorded reason.
+    /// <para>
+    /// The two names differ on purpose. The record names the file by its path
+    /// relative to <paramref name="folderPath"/>, because discovery is
+    /// recursive and two subfolders can hold files of the same name; the
+    /// record is the only place a skipped file is named, so it must be
+    /// unambiguous. The log names it by its bare name, like everything else
+    /// the run emits: rows and decision ids carry the bare filename (the
+    /// producer's convention — <see cref="DecisionId.Filename"/> holds no
+    /// directory), and the log line sits among them.
+    /// </para>
     /// </summary>
-    /// <param name="skipped">The current run's record.</param>
+    /// <param name="skips">The current run's record.</param>
     /// <param name="ex">What skipped the input; never an <see cref="OperationCanceledException"/> — the catches exclude it.</param>
-    /// <param name="fileName">The source file's bare name.</param>
+    /// <param name="folderPath">The run's input folder, which the recorded name is relative to.</param>
+    /// <param name="file">The source file's full path, as discovered.</param>
     /// <param name="decisionId">The skipped decision, or <see langword="null"/> when the whole file was skipped.</param>
     private void RecordSkip(
-        List<SkippedItem> skipped,
+        SkipRecord skips,
         Exception ex,
-        string fileName,
+        string folderPath,
+        string file,
         DecisionId? decisionId = null)
     {
+        var fileName = Path.GetFileName(file);
         if (decisionId is null)
             _logger.LogWarning(ex, "Skipping {File}", fileName);
         else
             _logger.LogWarning(ex, "Skipping decision {DecisionId} in {File}", decisionId, fileName);
 
-        skipped.Add(new SkippedItem(fileName, decisionId, ex.Message));
+        skips.Add(new SkippedItem(Path.GetRelativePath(folderPath, file), decisionId, ex.Message));
     }
 
     /// <summary>
     /// CSV pathway: streams the folder's <c>.xg</c>/<c>.xgp</c> files one at a
     /// time, applies <paramref name="filterSet"/>, and writes matching
     /// <see cref="DecisionRow"/>s to <paramref name="outputPath"/> as CSV,
-    /// reporting through <paramref name="progress"/>.
+    /// reporting through <paramref name="progress"/>. Pass
+    /// <paramref name="skipRecord"/> (fresh) to read what the run skipped after
+    /// a failure has ended it; the snapshots carry the record either way.
     /// </summary>
     public async Task ProcessAsync(
         string folderPath,
         string outputPath,
         DecisionFilterSet filterSet,
         IProgress<ProcessingProgress> progress,
+        SkipRecord? skipRecord = null,
         CancellationToken cancellationToken = default)
     {
+        var skips = RecordFor(skipRecord);
         var files = DiscoverInputFiles(folderPath);
 
         var outputDir = Path.GetDirectoryName(outputPath);
@@ -125,7 +160,6 @@ public class LocalFolderProcessor
         await writer.WriteLineAsync(DecisionRow.CsvHeader);
 
         int totalRows = 0;
-        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
         const int reportEvery = 10; // client polls every second; no need to update on every file
 
@@ -149,7 +183,7 @@ public class LocalFolderProcessor
                     TotalRows = totalRows,
                     ElapsedSec = elapsed,
                     FilesPerSec = filesPerSec,
-                    Skipped = [.. skipped]
+                    Skipped = skips.Snapshot()
                 });
             }
 
@@ -168,7 +202,7 @@ public class LocalFolderProcessor
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                RecordSkip(skipped, ex, fileName);
+                RecordSkip(skips, ex, folderPath, file);
             }
         }
 
@@ -184,21 +218,24 @@ public class LocalFolderProcessor
             Complete = true,
             ElapsedSec = totalElapsed,
             FilesPerSec = finalFilesPerSec,
-            Skipped = [.. skipped]
+            Skipped = skips.Snapshot()
         });
     }
     /// <summary>
     /// Diagram-JSON pathway: same per-file streaming as <see cref="ProcessAsync"/>,
     /// but buffers matching decisions and writes them to
     /// <paramref name="outputPath"/> as a single indented JSON array.
+    /// <paramref name="skipRecord"/> as on <see cref="ProcessAsync"/>.
     /// </summary>
     public async Task ProcessDiagramAsync(
             string folderPath,
             string outputPath,
             DecisionFilterSet filterSet,
             IProgress<ProcessingProgress> progress,
+            SkipRecord? skipRecord = null,
             CancellationToken cancellationToken = default)
     {
+        var skips = RecordFor(skipRecord);
         var files = DiscoverInputFiles(folderPath);
 
         var outputDir = Path.GetDirectoryName(outputPath);
@@ -207,7 +244,6 @@ public class LocalFolderProcessor
 
         var allItems = new List<BgDecisionData>();
         int totalRows = 0;
-        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
         const int reportEvery = 10;
 
@@ -231,7 +267,7 @@ public class LocalFolderProcessor
                     TotalRows = totalRows,
                     ElapsedSec = elapsed,
                     FilesPerSec = filesPerSec,
-                    Skipped = [.. skipped]
+                    Skipped = skips.Snapshot()
                 });
             }
 
@@ -251,7 +287,7 @@ public class LocalFolderProcessor
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                RecordSkip(skipped, ex, fileName);
+                RecordSkip(skips, ex, folderPath, file);
             }
         }
 
@@ -272,7 +308,7 @@ public class LocalFolderProcessor
             Complete = true,
             ElapsedSec = totalElapsed,
             FilesPerSec = finalFilesPerSec,
-            Skipped = [.. skipped]
+            Skipped = skips.Snapshot()
         });
     }
 
@@ -303,10 +339,14 @@ public class LocalFolderProcessor
     /// other — with the producer resolving which header slot each role lands
     /// in, per position.
     /// </para>
+    /// <para>
+    /// <paramref name="skipRecord"/> as on <see cref="ProcessAsync"/>.
+    /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="options"/> fails validation (surfaces to
-    /// the client through the job's ErrorMessage channel).
+    /// the client through the job's ErrorMessage channel), or when
+    /// <paramref name="skipRecord"/> is not fresh.
     /// </exception>
     public async Task ProcessXgpAsync(
             string folderPath,
@@ -316,11 +356,13 @@ public class LocalFolderProcessor
             FilterConfig filters,
             IProgress<ProcessingProgress> progress,
             bool anonymize = false,
+            SkipRecord? skipRecord = null,
             CancellationToken cancellationToken = default)
     {
-        // Create validates the options — the single ArgumentException throw
+        // Create validates the options — the single options-validation throw
         // point shared with the Web-mode pathway.
         var allocator = XgpNameAllocator.Create(options, filters);
+        var skips = RecordFor(skipRecord);
 
         var files = DiscoverInputFiles(folderPath);
 
@@ -332,7 +374,6 @@ public class LocalFolderProcessor
         var nameOverrides = anonymize ? XgpSliceOptions.Anonymized : null;
 
         int totalRows = 0;
-        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
 
         for (int i = 0; i < files.Count; i++)
@@ -350,7 +391,7 @@ public class LocalFolderProcessor
                 TotalRows = totalRows,
                 ElapsedSec = elapsed,
                 FilesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0,
-                Skipped = [.. skipped]
+                Skipped = skips.Snapshot()
             });
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -411,13 +452,13 @@ public class LocalFolderProcessor
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        RecordSkip(skipped, ex, fileName, row.Id);
+                        RecordSkip(skips, ex, folderPath, file, row.Id);
                     }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                RecordSkip(skipped, ex, fileName);
+                RecordSkip(skips, ex, folderPath, file);
             }
         }
 
@@ -432,7 +473,7 @@ public class LocalFolderProcessor
             Complete = true,
             ElapsedSec = totalElapsed,
             FilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0,
-            Skipped = [.. skipped]
+            Skipped = skips.Snapshot()
         });
     }
 
@@ -440,35 +481,39 @@ public class LocalFolderProcessor
     /// PPTX pathway: collects filtered decisions into a Problem/Solution slide
     /// deck at <paramref name="outputPath"/>. Thin wrapper over the shared deck
     /// helper (PDF twin: <see cref="ProcessPdfAsync"/>). Local mode only —
-    /// rendering is server-side.
+    /// rendering is server-side. <paramref name="skipRecord"/> as on
+    /// <see cref="ProcessAsync"/>.
     /// </summary>
     public Task ProcessPptxAsync(
             string folderPath,
             string outputPath,
             DecisionFilterSet filterSet,
             IProgress<ProcessingProgress> progress,
+            SkipRecord? skipRecord = null,
             CancellationToken cancellationToken = default)
         => ProcessDeckAsync(
             folderPath, outputPath, filterSet, progress,
             (reqs, opts) => DiagramRasterRenderer.RenderPptx(reqs, opts),
-            "PPTX", cancellationToken);
+            "PPTX", skipRecord, cancellationToken);
 
     /// <summary>
     /// PDF pathway: collects filtered decisions into a Problem/Solution page
     /// deck at <paramref name="outputPath"/>. Thin wrapper over the shared deck
     /// helper (the PDF twin of <see cref="ProcessPptxAsync"/>). Local mode only
-    /// — rendering is server-side.
+    /// — rendering is server-side. <paramref name="skipRecord"/> as on
+    /// <see cref="ProcessAsync"/>.
     /// </summary>
     public Task ProcessPdfAsync(
             string folderPath,
             string outputPath,
             DecisionFilterSet filterSet,
             IProgress<ProcessingProgress> progress,
+            SkipRecord? skipRecord = null,
             CancellationToken cancellationToken = default)
         => ProcessDeckAsync(
             folderPath, outputPath, filterSet, progress,
             (reqs, opts) => DiagramRasterRenderer.RenderPdf(reqs, opts),
-            "PDF", cancellationToken);
+            "PDF", skipRecord, cancellationToken);
 
     private async Task ProcessDeckAsync(
             string folderPath,
@@ -477,8 +522,10 @@ public class LocalFolderProcessor
             IProgress<ProcessingProgress> progress,
             Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> renderer,
             string formatLabel,
+            SkipRecord? skipRecord,
             CancellationToken cancellationToken)
     {
+        var skips = RecordFor(skipRecord);
         var files = DiscoverInputFiles(folderPath);
 
         var outputDir = Path.GetDirectoryName(outputPath);
@@ -487,7 +534,6 @@ public class LocalFolderProcessor
 
         var requests = new List<DiagramRequest>();
         int totalRows = 0;
-        var skipped = new List<SkippedItem>();
         var stopwatch = Stopwatch.StartNew();
         const int reportEvery = 10;
 
@@ -511,7 +557,7 @@ public class LocalFolderProcessor
                     TotalRows = totalRows,
                     ElapsedSec = elapsed,
                     FilesPerSec = filesPerSec,
-                    Skipped = [.. skipped]
+                    Skipped = skips.Snapshot()
                 });
             }
 
@@ -538,7 +584,7 @@ public class LocalFolderProcessor
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                RecordSkip(skipped, ex, fileName);
+                RecordSkip(skips, ex, folderPath, file);
             }
         }
 
@@ -561,7 +607,7 @@ public class LocalFolderProcessor
             ElapsedSec = stopwatch.Elapsed.TotalSeconds,
             FilesPerSec = stopwatch.Elapsed.TotalSeconds > 0
                 ? (int)(files.Count / stopwatch.Elapsed.TotalSeconds) : 0,
-            Skipped = [.. skipped]
+            Skipped = skips.Snapshot()
         });
 
         if (requests.Count == 0)
@@ -583,7 +629,7 @@ public class LocalFolderProcessor
             Complete = true,
             ElapsedSec = totalElapsed,
             FilesPerSec = finalFilesPerSec,
-            Skipped = [.. skipped]
+            Skipped = skips.Snapshot()
         });
     }
 }

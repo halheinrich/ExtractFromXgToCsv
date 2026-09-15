@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Shared;
@@ -25,11 +24,12 @@ namespace ExtractFromXgToCsv.Tests;
 /// </para>
 /// </summary>
 /// <remarks>
-/// The malformed file is synthesized inline — garbage bytes under an
-/// <c>.xg</c> name, written per test and never committed (the fixture
-/// convention for a degenerate case). Its name sorts ahead of the good
-/// fixture's, so the good file is processed <i>after</i> the skip: the tests
-/// prove the run goes on, not merely that it survives a bad last file.
+/// The malformed file is synthesized per test (<see cref="MalformedXg"/>). It
+/// sits in a subfolder, so the name the record carries is a real path relative
+/// to the input folder rather than one that merely equals the bare name, and
+/// its path sorts ahead of the good fixture's, so the good file is processed
+/// <i>after</i> the skip: the tests prove the run goes on, not merely that it
+/// survives a bad last file.
 /// </remarks>
 public class LocalFolderProcessorSkipTests
 {
@@ -37,7 +37,7 @@ public class LocalFolderProcessorSkipTests
 
     // '0' sorts before 'M' under the producer's OrdinalIgnoreCase discovery
     // order, so this is the first file every pathway meets.
-    private const string MalformedName = "0-malformed.xg";
+    private static readonly string MalformedRelativePath = Path.Combine("0-broken", "0-malformed.xg");
 
     /// <summary>
     /// Loose enough that the good fixture yields decisions, tight enough to
@@ -159,6 +159,62 @@ public class LocalFolderProcessorSkipTests
         }
     }
 
+    [Fact]
+    public async Task SameNamedFilesInTwoSubfolders_AreRecordedByTheirPathsUnderTheInputFolder()
+    {
+        // Discovery is recursive, so a bare name cannot tell these apart; the
+        // record names each by its path under the input folder. The log keeps
+        // the bare name, like the rows and decision ids the run emits.
+        var folder = TempFolder(withMalformed: false);
+        try
+        {
+            var first = Path.Combine("a", "dup.xg");
+            var second = Path.Combine("b", "dup.xg");
+            MalformedXg.Write(Path.Combine(folder, first));
+            MalformedXg.Write(Path.Combine(folder, second));
+            var logger = new CapturingLogger<LocalFolderProcessor>();
+            var progress = new RecordingProgress();
+
+            await new LocalFolderProcessor(logger).ProcessAsync(
+                folder, Path.Combine(folder, "out.csv"), NarrowFilter(), progress);
+
+            var terminal = progress.Reports[^1];
+            Assert.Equal(new[] { first, second }, terminal.Skipped.Select(s => s.FileName));
+            Assert.Equal(2, logger.Entries.Count(e => e.Message == "Skipping dup.xg"));
+        }
+        finally
+        {
+            DeleteFolder(folder);
+        }
+    }
+
+    [Fact]
+    public async Task CallersSkipRecord_HoldsTheRunsRecord_AndBelongsToThatRunOnly()
+    {
+        var folder = TempFolder(withMalformed: true);
+        try
+        {
+            var record = new SkipRecord();
+            var progress = new RecordingProgress();
+
+            await Processor().ProcessAsync(
+                folder, Path.Combine(folder, "out.csv"), NarrowFilter(), progress, record);
+
+            // The caller's record is the run's record: what a caller reads after
+            // a run-ending failure is what every snapshot carried.
+            Assert.Equal(progress.Reports[^1].Skipped, record.Snapshot());
+
+            // A second run would report the first run's skips as its own.
+            await Assert.ThrowsAsync<ArgumentException>(() => Processor().ProcessAsync(
+                folder, Path.Combine(folder, "again.csv"), NarrowFilter(),
+                new RecordingProgress(), record));
+        }
+        finally
+        {
+            DeleteFolder(folder);
+        }
+    }
+
     // ── Cancellation is not a skip ──────────────────────────────────────────
     //
     // Each run holds one good file and cancels from the first progress report.
@@ -186,7 +242,8 @@ public class LocalFolderProcessorSkipTests
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessAsync(
-                folder, Path.Combine(folder, "out.csv"), NarrowFilter(), progress, cts.Token));
+                folder, Path.Combine(folder, "out.csv"), NarrowFilter(), progress,
+                cancellationToken: cts.Token));
 
             AssertCancelledWithNoSkip(progress, logger);
         }
@@ -207,7 +264,8 @@ public class LocalFolderProcessorSkipTests
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessDiagramAsync(
-                folder, Path.Combine(folder, "out.json"), NarrowFilter(), progress, cts.Token));
+                folder, Path.Combine(folder, "out.json"), NarrowFilter(), progress,
+                cancellationToken: cts.Token));
 
             AssertCancelledWithNoSkip(progress, logger);
         }
@@ -251,7 +309,8 @@ public class LocalFolderProcessorSkipTests
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessPptxAsync(
-                folder, Path.Combine(folder, "deck.pptx"), NarrowFilter(), progress, cts.Token));
+                folder, Path.Combine(folder, "deck.pptx"), NarrowFilter(), progress,
+                cancellationToken: cts.Token));
 
             AssertCancelledWithNoSkip(progress, logger);
         }
@@ -268,7 +327,7 @@ public class LocalFolderProcessorSkipTests
         Assert.True(terminal.Complete);
 
         var skip = Assert.Single(terminal.Skipped);
-        Assert.Equal(MalformedName, skip.FileName);
+        Assert.Equal(MalformedRelativePath, skip.FileName);
         Assert.Null(skip.DecisionId);
         Assert.False(string.IsNullOrWhiteSpace(skip.Reason));
 
@@ -323,9 +382,7 @@ public class LocalFolderProcessorSkipTests
             Path.Combine(FixtureHelper.FixtureDir, GoodFixture),
             Path.Combine(dir, GoodFixture));
         if (withMalformed)
-            File.WriteAllBytes(
-                Path.Combine(dir, MalformedName),
-                Encoding.ASCII.GetBytes("This is not an XG file; its header magic is wrong."));
+            MalformedXg.Write(Path.Combine(dir, MalformedRelativePath));
         return dir;
     }
 

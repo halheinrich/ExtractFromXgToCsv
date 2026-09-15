@@ -143,7 +143,8 @@
                             ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
                             (@_progress.FilesPerSec files/sec) → @_outputPath
                         </span>
-                        @if (_progress.TotalRows == 0 && _builtSet is { IsEmpty: false })
+                        @if (_progress.TotalRows == 0 && _builtSet is { IsEmpty: false }
+                             && _progress.Skipped.Count == 0)
                         {
                             // A successful run wrote zero rows through a non-empty
                             // filter set. Because an empty (inactive) set admits
@@ -153,6 +154,11 @@
                             // "Done — 0 rows" line read as a silent success. Sibling
                             // of WebModePanel's zero-match notice; folder wording for
                             // Local mode. IsEmpty is the seam — no FilterConfig peek.
+                            //
+                            // Only when nothing was skipped: that inference assumes
+                            // every file was read. With skips the zero may be theirs,
+                            // and the skip notice below already says what was lost,
+                            // so this one yields rather than blame the filter.
                             <div class="alert alert-warning zero-match-notice mt-2" role="alert">
                                 No decisions matched these filters — adjust the filters
                                 or point at a different folder.
@@ -188,7 +194,15 @@
                         <ul class="mb-0">
                             @foreach (var item in _progress.Skipped)
                             {
-                                <li><code>@(item.DecisionId?.ToString() ?? item.FileName)</code> — @item.Reason</li>
+                                // The file by its path under the input folder (the
+                                // record's unambiguous name); a decision adds its
+                                // canonical id, which carries only the bare filename.
+                                <li>
+                                    <code>@item.FileName</code>@if (item.DecisionId is { } id)
+                                    {
+                                        <text>, decision <code>@id</code></text>
+                                    } — @item.Reason
+                                </li>
                             }
                         </ul>
                     </div>

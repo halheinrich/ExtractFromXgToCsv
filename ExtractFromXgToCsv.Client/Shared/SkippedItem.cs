@@ -10,8 +10,10 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// server processor and the WASM panel share the one wire shape.
 /// </summary>
 /// <param name="FileName">
-/// The source file's bare name — the name the run reports in
-/// <see cref="ProcessingProgress.FileName"/> and stamps on the rows it emits.
+/// The source file's path relative to the run's input folder. The search is
+/// recursive, so a bare name could name two files; rows, decision ids and
+/// <see cref="ProcessingProgress.FileName"/> keep the bare name, which is the
+/// producer's convention.
 /// </param>
 /// <param name="DecisionId">
 /// The skipped decision's identity, or <see langword="null"/> when the whole

@@ -74,7 +74,8 @@ Architecture). Four areas:
   opening-book status, the saved-filters file relay, shutdown. Thin
   pass-throughs to the services (see Public API).
 - **Local-mode services** — `Services/`: `LocalFolderProcessor` (the four
-  output pathways over a folder, and the run's skip record), `JobStore` (the
+  output pathways over a folder) and `SkipRecord` (one run's record of what
+  it skipped), `JobStore` (the
   job registry and its self-cleaning status read), `OpeningBookProvider`
   (resolves and loads the book), `FilterDocumentStore` (the named-file IO
   behind the relay) and `AppModeService` (the configured mode).
@@ -102,8 +103,8 @@ holder and restore notice XgFilter_Razor's composite needs. Three areas:
 of the services and the naming engine, bUnit tests of `Home` and both panels,
 hosted `WebApplicationFactory` pins for the file relay, and processor runs
 over real files. Shared support: `bUnitTestHelpers` (private-field access and
-stub HTTP handlers), `CapturingLogger<T>`, `FixtureHelper`,
-`XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
+stub HTTP handlers), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
+(the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
 linked into the build output rather than kept in this repo (see Test project,
 and the fixture pitfall).
 
@@ -326,10 +327,16 @@ export. In Local mode the count is the final
   produces survives (`LocalModePanelGateTests` pins exactly this).
   On a terminal snapshot whose `Skipped` record is non-empty it shows a
   `skipped-notice` alert under the status line (halheinrich/backgammon#223):
-  the non-zero counts, then each skipped input with its reason, a file by its
-  name and a decision by its canonical `DecisionId`. It sits outside the
-  success/cancelled/error branches, so a cancelled run's partial record shows
-  too; mid-run it stays hidden while the record is still growing.
+  the non-zero counts, then each skipped input with its reason. A file is
+  shown by its path under the input folder, and a decision adds its canonical
+  `DecisionId`. It sits outside the success/cancelled/error branches, so a
+  cancelled or failed run's record shows too; mid-run it stays hidden while
+  the record is still growing. The zero-match notice **yields** to it. That
+  notice concludes "the filter matched nothing" from zero rows through an
+  active filter, and the conclusion holds only if every file was read, so it
+  renders only when the record is empty. Suppressing it, rather than rewording
+  it to mention the skips, keeps two independent notices, each with one
+  condition, instead of adding a third combined state.
 - **`WebModePanel.razor`** — file picker, preview table, download; every slow
   gesture runs through `RunBusyAsync` (see "Busy affordance"). Parameters:
   `OutputFormat`, `FilterConfig`, `FilterApplied`,
@@ -482,17 +489,37 @@ for the process lifetime (see the "Abandoned-job expiry" next step).
 pathway catches a file that fails and moves on — and the Xgp pathway also
 catches a single decision whose write fails. Every one of those catches calls
 one seam, `LocalFolderProcessor.RecordSkip`, and none logs on its own: the
-seam logs the skip and appends a `SkippedItem` (file name; the decision's id
-for a decision skip; the exception's message as the reason) to the run's
-record. Every snapshot the run reports, progress and terminal alike, carries a
-copy of that record as `ProcessingProgress.Skipped`, with the file and
-decision counts derived from it. Every skip catch excludes
-`OperationCanceledException` (`when (ex is not OperationCanceledException)`),
-so a cancellation raised inside a file's body cancels the run on all four
-pathways rather than being recorded as a skipped file. The record reaches the
-terminal snapshot on success and on cancellation (the controller's cancel path
-marks the last reported snapshot); the error path builds a fresh snapshot and
-does not carry it.
+seam logs the skip and appends a `SkippedItem` (the file's path relative to
+the input folder; the decision's id for a decision skip; the exception's
+message as the reason) to the run's `SkipRecord`. Every snapshot the run
+reports, progress and terminal alike, carries a copy of that record as
+`ProcessingProgress.Skipped`, with the file and decision counts derived from
+it. Every skip catch excludes `OperationCanceledException`
+(`when (ex is not OperationCanceledException)`), so a cancellation raised
+inside a file's body cancels the run on all four pathways rather than being
+recorded as a skipped file.
+
+The record belongs to the run, so it reaches every terminal snapshot, the two
+the job runner builds as well as the one the processor reports. The runner in
+`ProcessController` creates one `SkipRecord` per job and passes it to the
+processor, and its cancel and error catches both copy it onto the snapshot
+they set. They cannot take it from the last reported snapshot: a run-ending
+exception reports nothing, and the streaming pathways report only every tenth
+file. The processor rejects a record that already holds entries, since one run
+must not report another's skips. A failed run therefore shows its error and
+its skips together.
+
+The runner's progress sink applies each report inline (`InlineProgress`),
+not through `Progress<T>`. `Progress<T>` posts every report to the thread
+pool, so a report posted just before a failure could be applied after the
+catch had set the terminal snapshot. It would overwrite that snapshot with a
+non-terminal one, and the client would poll forever.
+
+**Names differ on purpose.** The record names a file by its path relative to
+the input folder, because discovery is recursive and two subfolders can hold
+files of the same name, and the record is the only place a skipped file is
+named. Rows, decision ids and the skip log line keep the bare filename, the
+producer's convention (`DecisionId.Filename` holds no directory).
 
 ### Opening-book enrichment
 
@@ -614,11 +641,15 @@ project via relative path — not duplicated here.
 - `LocalFolderProcessorSkipTests` — the skip contract
   (halheinrich/backgammon#223) on all four pathways, twice each. *Skips are
   recorded*: a temp folder holds one fixture and one malformed file the test
-  synthesizes (garbage bytes under an `.xg` name, never committed, named to
-  sort first so the good file comes after the skip); the run completes, the
-  good file's rows are all there (checked against the producer read
-  directly), and the bad file is recorded once, by name, with a non-empty
-  reason. *Cancellation is not a skip*: a one-file run cancelled from its
+  synthesizes (`MalformedXg`: garbage bytes under an `.xg` name, never
+  committed, placed in a subfolder that sorts first so the good file comes
+  after the skip); the run completes, the good file's rows are all there
+  (checked against the producer read directly), and the bad file is recorded
+  once, by its path under the input folder, with a non-empty reason. Two
+  same-named files in different subfolders are recorded by their distinct
+  relative paths while the log keeps the bare name; a caller's `SkipRecord`
+  holds exactly what the snapshots carried and is refused for a second run.
+  *Cancellation is not a skip*: a one-file run cancelled from its
   first progress report throws `OperationCanceledException`, its last
   snapshot records no skip, and nothing logged the cancellation as a skip.
   The log half is what catches the Diagram JSON pathway: there, the old
@@ -630,6 +661,13 @@ project via relative path — not duplicated here.
   actually use: record constructor binding, `DecisionId` in its canonical
   form, and the derived counts. A body with no `skipped` field reads as an
   empty record, not null.
+- `ProcessEndpointTests` — hosted pins (`WebApplicationFactory`, Local
+  config) for the terminal snapshot the job runner builds itself when a run
+  fails, which nothing below the controller can observe. A Diagram JSON run
+  that skips a file and then fails on an unwritable output path, and a deck
+  run whose every file is skipped (nothing to render), both end with the
+  error and the skip together. Each polls the real status endpoint as the
+  panel does.
 - `HomeWiringTests` — bUnit wire tests pinning the `FilterSurface` → `Home`
   integration through the composite's rendered DOM (the panels are
   producer-internal; `FindComponent` over them is banned, host tests
@@ -716,9 +754,10 @@ project via relative path — not duplicated here.
 - `LocalModePanelSkippedNoticeTests` — the client half of
   halheinrich/backgammon#223: a completed snapshot with skips shows the
   notice beside the Done line, with the counts and every name and reason (a
-  decision by its canonical id); a cancelled one shows its partial record;
-  one without skips shows nothing, and neither does a mid-run snapshot that
-  already carries skips.
+  decision by its file's relative path and its canonical id); a cancelled one
+  shows its partial record; one without skips shows nothing, and neither does
+  a mid-run snapshot that already carries skips; and zero rows through an
+  active filter with skips shows the skip notice and not the zero-match one.
 - `LocalModePanelFilterWireTests` — bUnit wire tests pinning the filter half of
   the `/api/process/start` POST (the sibling `LocalModePanelXgpAnonymizeTests`
   covers its format/anonymize half): the applied `FilterConfig` reaches the
@@ -842,7 +881,9 @@ GET  /api/process/{jobId}/status
            the JobPhase discriminator the client picks its progress bar from
            (FileName is presentation and is never parsed for it); Skipped is
            the run's skip record so far, SkippedItem { FileName, DecisionId?,
-           Reason }, and the two counts are derived from it.
+           Reason } with FileName relative to the input folder, on every
+           snapshot including the error one; the two counts are derived
+           from it.
 
 POST /api/process/{jobId}/cancel
   200 →  (empty)
@@ -950,7 +991,9 @@ project reference.
   changes afterwards.
 - `SkippedItem` — `sealed record SkippedItem(string FileName, DecisionId?
   DecisionId, string Reason)`, one entry of that record. `FileName` is the
-  source file's bare name (the name the run reports and stamps on its rows);
+  source file's path relative to the run's input folder, unambiguous under the
+  recursive search, whereas rows and logs keep the bare name (see Job
+  lifecycle for why the two differ);
   `DecisionId` is null for a whole-file skip and set for the Xgp pathway's
   per-decision skip, crossing in the library's canonical string form through
   `DecisionId`'s own bundled converter; `Reason` is the exception's message.
@@ -1001,6 +1044,10 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   Skip catches go through `RecordSkip` and filter out
   `OperationCanceledException`; a bare `catch (Exception)` in the processor
   either hides a dropped file or turns a cancel into a skip (see Job
+  lifecycle).
+- **The job runner's progress sink is inline — don't restore `Progress<T>`.**
+  A posted report can land after the runner's catch and overwrite a terminal
+  snapshot with a non-terminal one, so the client polls forever (see Job
   lifecycle).
 - **`prerender:false` is required.** Filter state and file pickers live in
   the WASM runtime; a prerendered server pass would double-init components
