@@ -38,6 +38,18 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   Referenced by the WASM Client csproj only — the server has no filter UI to
   host, and its saved-filters file relay must stay ignorant of the document
   names (see Pitfalls).
+- **BgUiPrimitives_Razor** — `Notice`, the one component every alert box in
+  this host renders through, with the two selectors its callers name:
+  `NoticeKind` (what the notice tells the user, and so its colour) and
+  `NoticeAnnouncement` (polite, assertive, or by an enclosing region). It
+  provides the box, the close button, the whole-box dismiss target, the
+  live-region role and where that role sits; this host provides what each box
+  *is* and, for a dismissible one, the dismissal's holder (see "Notices").
+  Referenced **directly** by the WASM Client csproj, although it also arrives
+  transitively through XgFilter_Razor: this host's own components render it,
+  and a dependency a project uses is one it states. It places two obligations
+  on the host — Bootstrap's stylesheet, and a link to the host's scoped-CSS
+  bundle (see Pitfalls).
 - **XgFilter_Razor.Testing** — the producer's test-support assembly:
   `FilterPanelTestState.SeedStoredSelection(JSInterop, config)` arranges the
   browser state its filter panel restores from, so a host test can stage "a
@@ -68,8 +80,9 @@ Architecture). Four areas:
 - **Hosting** — `Program.cs`: the `AppMode` guard that registers the
   Local-mode services only in Local mode, and the QuestPDF license. With it
   `Components/` (the root document, router, layout and server error page that
-  host the WASM app, `prerender:false`) and `appsettings*.json` (`AppMode`,
-  and the optional `OpeningBookPath`).
+  host the WASM app, `prerender:false`; the root document links Bootstrap,
+  `app.css` and this host's scoped-CSS bundle) and `appsettings*.json`
+  (`AppMode`, and the optional `OpeningBookPath`).
 - **HTTP surface** — `Controllers/`: process start/status/cancel, app mode,
   opening-book status, the saved-filters file relay, shutdown. Thin
   pass-throughs to the services (see Public API).
@@ -83,16 +96,19 @@ Architecture). Four areas:
   only bespoke CSS), `app.js`, and vendored Bootstrap.
 
 **`ExtractFromXgToCsv.Client/`** — the Blazor WebAssembly app: all UI in both
-modes, and all processing in Web mode. `Program.cs` registers the filter
-holder and restore notice XgFilter_Razor's composite needs. Three areas:
+modes, and all processing in Web mode. `Program.cs` registers the app-scoped
+state: the filter holder and restore notice XgFilter_Razor's composite needs,
+and `BrowserStorage`. Three areas:
 
 - **Components** — `Pages/Home.razor` (the shell and `FilterSurface` host)
   and the two mode panels, `LocalModePanel` and `WebModePanel` (see
   Components).
 - **Services** — the Web-mode pipeline and its client-side state:
   `XgProcessingService` (WASM extraction and the `.xgp` zip),
-  `FilteredRowCache` (loaded rows and their filtered projections) and
-  `HttpDocumentStorage` (the storage seam over the server's file relay).
+  `FilteredRowCache` (loaded rows and their filtered projections),
+  `HttpDocumentStorage` (the storage seam over the server's file relay) and
+  `BrowserStorage` (the guarded `localStorage` seam, and the owner of the
+  storage-unavailable condition and its notice's dismissal).
 - **Shared** — the wire types the server references too (`ProcessRequest`,
   `ProcessingProgress` and `SkippedItem`, `JobPhase`, `OutputFormat`,
   `AppModeResponse`, `OpeningBookStatus`, the strict enum converter), and the
@@ -103,7 +119,8 @@ holder and restore notice XgFilter_Razor's composite needs. Three areas:
 of the services and the naming engine, bUnit tests of `Home` and both panels,
 hosted `WebApplicationFactory` pins for the file relay, and processor runs
 over real files. Shared support: `bUnitTestHelpers` (private-field access and
-stub HTTP handlers), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
+stub HTTP handlers), `NoticeAssert` (reads a rendered notice box back against
+the shared component's documented shape), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
 (the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
 linked into the build output rather than kept in this repo (see Test project,
 and the fixture pitfall).
@@ -293,11 +310,13 @@ export. In Local mode the count is the final
     `else Clear()` is not redundant with the keyed read** — see the
     path-token-equality pitfall.
   - **The `localStorage` seam (halheinrich/backgammon#91).** Every
-    `localStorage` call Home makes goes through `TryGetItemAsync` /
-    `TrySetItemAsync` / `TryRemoveItemAsync`, and none of them throws: a
+    `localStorage` call Home makes goes through the app-scoped
+    `BrowserStorage` service's `TryGetItemAsync` / `TrySetItemAsync` /
+    `TryRemoveItemAsync`, and none of them throws: a
     refused store (disabled storage, hostile privacy setting) raises a
     `SecurityError` that arrives as a `JSException`, caught there and
-    latched in `_storageUnavailable`. A refused read returns null —
+    latched in `BrowserStorage.IsUnavailable` — once per loaded app, never
+    retried, since storage does not come back mid-session. A refused read returns null —
     "nothing is stored", which every read site already answers with its own
     documented default, so no default is restated in the seam and none can
     drift from the field initializers. The invariant: **every read lands on
@@ -305,9 +324,13 @@ export. In Local mode the count is the final
     never at stake**; a first failure partway through leaves a truthful mix
     of the two (the realistic case throws on read one and yields defaults
     throughout). `JSException` only — a parse or migration bug is not a
-    storage failure and must still surface. The latch renders a
-    non-dismissible `#storageUnavailableNotice`, host-owned because
-    `FilterRestoreNotice` states something else and is producer-armed.
+    storage failure and must still surface. The latch renders
+    `#storageUnavailableNotice` — dismissible, with `BrowserStorage` holding
+    the dismissal too (see "Notices") — host-owned because
+    `FilterRestoreNotice` states something else and is producer-armed. The
+    service raises no change notification: every gesture that can flip the
+    latch is one of Home's own awaited storage calls, from the restore or an
+    event handler, and each is followed by a render.
     Home's siblings are **not** covered — `WebModePanel`,
     `LocalModePanel` and the producer's `FilterPanel` still read raw; that
     is halheinrich/backgammon#102.
@@ -326,7 +349,7 @@ export. In Local mode the count is the final
   *during* a run spends the edge while busy, so the result that run then
   produces survives (`LocalModePanelGateTests` pins exactly this).
   On a terminal snapshot whose `Skipped` record is non-empty it shows a
-  `skipped-notice` alert under the status line (halheinrich/backgammon#223):
+  `skipped-notice` box under the status line (halheinrich/backgammon#223):
   the non-zero counts, then each skipped input with its reason. A file is
   shown by its path under the input folder, and a decision adds its canonical
   `DecisionId`. It sits outside the success/cancelled/error branches, so a
@@ -377,6 +400,84 @@ Apply re-arms, and the user re-applies against the new source. The old
 — filters can still be staged first, but the *commit* that arms a run is
 per-source.
 
+### Notices
+
+The umbrella's `../SPEC-notices.md` is the ratified model
+(halheinrich/backgammon#248); BgUiPrimitives_Razor's `Notice` is how a box
+presents. This host decides only what each box **is**, because that — never
+its colour — decides whether it dismisses, and, for a dismissible box, **who
+holds the dismissal**. No `.razor` file here types alert markup.
+
+| Box | What it is | Dismissible | Announced |
+| --- | --- | --- | --- |
+| `#storageUnavailableNotice` (Home) | condition notice | yes, per occurrence | assertive |
+| the run error (both panels) | error | yes | assertive |
+| `zero-match-notice` (both panels) | gate reason — the run's result | no | assertive |
+| `skipped-notice` (Local) | gate reason — the record of what a run lost | no | assertive |
+| the selected-size limit (Web) | gate reason — why nothing loaded and Download is dark | no | assertive |
+| `busy-notice` (Web) | live indicator | no | polite |
+
+**A dismissal belongs to one occurrence, lives as long as it, is never
+stored, and has one holder — the occurrence's owner**, because only the owner
+knows when a new occurrence begins and whether the old one outlives the page.
+Every dismissible box here is caller-held (`@bind-Dismissed:get/set`), so the
+component keeps no bit that could disagree with the owner's:
+
+- **The run error — the panel's `_runError`.** One occurrence is one failed
+  gesture: in Local mode a run the client could not start or follow, in Web
+  mode a file read or a download build that threw. `_runError` (nullable) is
+  non-null exactly while one stands, so it is the box's presence, its text
+  and its dismissal at once: closing the box assigns null, exactly as the next
+  gesture and (Local) the filter's falling edge already do, and **there is no
+  dismissed bit anywhere**. A second failure assigns the field again and shows
+  fresh although its text may be identical — the text was never the
+  occurrence. It replaced a `_hasError` flag beside a `_statusMessage` string:
+  two fields for one fact, to which a dismissal would have added a third.
+  The occurrence dies with the panel, so the panel is the right owner; it is
+  bound rather than left component-held with an `OccurrenceKey` because a key
+  would need a run counter — a new fact invented to name one the panel
+  already holds. Local mode's `_progress.ErrorMessage` is a different fact
+  (the server's report of a job that started and then failed) and is not a
+  box.
+- **Storage unavailable — the app-scoped `BrowserStorage`.** Storage does not
+  come back mid-session, so the condition is one occurrence per loaded app:
+  it begins at the first refused call and ends only with a full reload. That
+  outlives the page, so neither bit may be a page field. `BrowserStorage`
+  (registered Scoped — one per loaded app under WebAssembly) owns the seam,
+  the `IsUnavailable` latch and `IsUnavailableNoticeDismissed` together: a
+  navigate-back remount neither re-tries storage nor shows a dismissed notice
+  again, and a reload constructs a fresh instance, so everything returns.
+  `DismissUnavailableNotice()` throws while storage is *not* unavailable — a
+  dismissal recorded before its occurrence would hide it at birth. Dismissing
+  hides nothing the screen needs (the defaults the notice explains are
+  visible on every control), which is what makes it a condition and not a
+  gate reason. Before #248 the latch was a Home field and the notice was
+  deliberately non-dismissible; the model overruled the second, and the
+  first had to move for the dismissal to have its occurrence's lifetime.
+
+**The selected-size limit is one fact with one box.** `HandleFileSelectionAsync`
+used to write the over-limit refusal into the run error *as well as* letting
+the gate reason by the picker render from `_totalSelectedBytes` — one fact in
+two boxes, and under the model the second copy would have been a dismissible
+statement of a gate reason. The handler now simply returns; the gate reason is
+the refusal's only statement, which is also why it is **assertive**: it carried
+no role before, and it is now the one thing telling the user that the
+selection they just made was refused.
+
+**The run errors carried no role at all** before the adoption — a failed
+gesture nobody announced. They are assertive, per the model.
+
+**The busy notice's layout is the panel's, on an element inside the notice.**
+The box's children are the component's (its content wrapper, and a close
+button on a dismissible box), so the `d-flex align-items-center gap-2` that
+used to sit on the hand-written box now sits on a `div` of the panel's own
+around the spinner and the text. On the box those classes would lay out the
+component's structure and reach neither. Measured in a browser at the adoption:
+box, spinner and text geometry are identical to the pre-adoption markup's. Its
+old `aria-live="polite"` is gone — the box refuses it, and `status` already
+implies it. `RunBusyAsync`'s paint contract is untouched: the notice is a
+child rendered in the same batch as the panel.
+
 ### Busy affordance
 
 Measured on a 266-file / 14.4 MB corpus (issue halheinrich/backgammon#53).
@@ -390,7 +491,7 @@ ms and deliberately gets nothing.
 `WebModePanel` routes every slow gesture — file selection, opening-book pick,
 and all three download formats — through one private `RunBusyAsync(message,
 body)`, which raises `_busy`/`_busyMessage`, renders, **yields**, runs the
-body, and releases in a `finally`. It drives a single `busy-notice` alert at
+body, and releases in a `finally`. It drives a single `busy-notice` box at
 the top of the panel (the Download button's own "Building…" label is the local
 half of the same state). The yield is load-bearing, not stylistic — see
 Pitfalls. `RunBusyForTest` is its test seam, sibling of `RowCache`.
@@ -720,7 +821,36 @@ project via relative path — not duplicated here.
   notice on the first persisted gesture. **Fails Home's own keys only** — a
   real refusal throws for every caller, and bUnit rethrows the siblings'
   lifecycle exceptions, so a whole-browser model must wait for
-  halheinrich/backgammon#102.
+  halheinrich/backgammon#102. Also the notice as a box
+  (halheinrich/backgammon#248): assertive, dismissible, its id and style on
+  the box; dismissed by the box and by the close button; and the model's
+  navigate-back row — a second `Home` in the same app scope stays silent
+  after a dismissal **and makes no further storage call**, with the
+  undismissed remount as the control that pins the silence on the dismissal.
+- `BrowserStorageTests` — the owner's own contract: a working store reads
+  and writes through; a refused read or write latches and reads as nothing
+  stored; once latched, storage is never tried again; a failure that is not a
+  `JSException` still surfaces; a dismissal cannot precede its occurrence
+  (throws); and it lasts the instance while a fresh instance — a full reload
+  — remembers nothing.
+- `WebModePanelNoticeTests` / `LocalModePanelNoticeTests` — what kind of box
+  each of a panel's notices is (see "Notices"), through real DOM events: every
+  box's announcement read off the content wrapper with no role on the box;
+  each gate reason and the live indicator rendering no close button and
+  answering a click with `MissingEventHandlerException`; the run error
+  dismissing by the box and by the close button and **showing fresh on the
+  next failure although its text is identical**; the busy notice's flex row
+  inside the content wrapper and not on the box; and the over-limit
+  selection stated once, with no run error beside it. All through
+  `NoticeAssert`, whose `IsNoticeBox` also fails on any attribute the call
+  site did not name — the splat trap (see Pitfalls). What the zero-match and
+  skipped notices *say*, and when, stays with their own classes.
+- `ScopedCssBundleLinkTests` — hosted (`WebApplicationFactory`): the root
+  document links this host's scoped-CSS bundle, the bundle is served and
+  `@import`s BgUiPrimitives_Razor's, and that one is served and carries the
+  `Notice`'s rules. It follows the links a browser would and reads what is
+  served; it does **not** execute CSS — see the bundle pitfall for what that
+  leaves unpinned.
 - `HomeRestoreNoticeTests` — the §4 notice's host wiring: `FilterRestoreNotice`
   registered at app scope and bound to the hosted `FilterSurface`, so the
   producer's decision reaches the page and an edit takes it away again. The
@@ -1033,6 +1163,49 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   must be changed in the panels and the stylesheet together. That is the price
   of the affordance living in CSS rather than in the components, which is where
   it belongs.
+- **The root document must link this host's scoped-CSS bundle — and nothing
+  fails when it doesn't.** `Components/App.razor` links
+  `@Assets["ExtractFromXgToCsv.styles.css"]` (through the static-assets
+  manifest, because the bundle's own `@import` is fingerprinted). Nothing in
+  this repository has scoped CSS of its own; the bundle exists to carry the
+  `@import` of BgUiPrimitives_Razor's, and that CSS is half of how a
+  dismissible `Notice` works: it makes the content wrapper transparent to the
+  pointer, so a click on the notice's text lands on the box and dismisses.
+  Without the link the notice still renders and its close button and padding
+  still dismiss — only the large target is silently gone, and no bUnit test
+  can see it, since component tests load no stylesheet. This host had never
+  linked the bundle before halheinrich/backgammon#248. The bundle belongs to
+  the **server** project, where the root document lives — not
+  `ExtractFromXgToCsv.Client.styles.css`. `ScopedCssBundleLinkTests` pins the
+  delivery chain, not that the rules *apply*: a dismissible box computing
+  `cursor: pointer` and its content wrapper `pointer-events: none` on a real
+  page load was checked in a browser at the adoption, and this repository has
+  no browser-level suite to hold it. Re-check it in a browser after touching
+  the root document's links or the static-assets pipeline.
+- **A green build proves nothing about a `<Notice>` tag.** `Notice` captures
+  unmatched attributes, so a parameter name it does not have — a misspelt
+  `Announcement` or `Dismissible` — compiles clean and is splatted onto the box
+  as a plain attribute, while the real parameter silently takes its default:
+  polite, not dismissible. (Measured in the first adopter, 2026-09-21, and
+  reproduced here at the adoption: `Anouncement=` built with no warning.)
+  Every box is therefore pinned off the rendered DOM for its announcement and
+  its dismissibility, and `NoticeAssert.IsNoticeBox` fails on any box attribute
+  the call site did not name. A new box needs the same pins; the compiler
+  will not ask for them. `Kind` and `ChildContent` are the exception — they
+  are `[EditorRequired]`, so omitting one is a build error.
+- **A gate reason is never also a run error.** A standing reason a control is
+  dark renders from the state that makes it so (the selected-size limit from
+  `_totalSelectedBytes`) and is not dismissible. Writing the same fact into
+  `_runError` as well gives it a second, dismissible box — the defect the
+  adoption removed from `HandleFileSelectionAsync`. `_runError` is for a
+  gesture that threw, and for nothing that is still true after the box is
+  closed.
+- **Don't add a dismissed flag beside `_runError`, and don't hold the
+  storage notice's dismissal in `Home`.** Each dismissal has exactly one
+  holder, the occurrence's owner (see "Notices"). A panel-side flag would be
+  a second bit that can disagree with the field; a page-side one would die on
+  navigation while the condition it belongs to does not, so a navigate-back
+  would re-show a notice the user had closed.
 - **`ProcessingProgress.Phase` is the progress-stage SSOT; `FileName` is
   presentation.** The rendering line reads "Rendering PPTX (…)" for humans,
   but the client branches on `JobPhase.Rendering`. Don't re-derive the stage by
