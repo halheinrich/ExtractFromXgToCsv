@@ -451,7 +451,7 @@ component keeps no bit that could disagree with the owner's:
   dismissal recorded before its occurrence would hide it at birth. Dismissing
   hides nothing the screen needs (the defaults the notice explains are
   visible on every control), which is what makes it a condition and not a
-  gate reason. Before #248 the latch was a Home field and the notice was
+  gate reason. Before halheinrich/backgammon#248 the latch was a Home field and the notice was
   deliberately non-dismissible; the model overruled the second, and the
   first had to move for the dismissal to have its occurrence's lifetime.
 
