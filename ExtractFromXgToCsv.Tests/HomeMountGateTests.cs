@@ -49,6 +49,8 @@ public class HomeMountGateTests : BunitContext
         Services.AddSingleton<XgProcessingService>();
         Services.AddScoped<AppliedFilter>();
         Services.AddScoped<FilterRestoreNotice>();
+        // Home's localStorage seam — the restore these tests gate on reads through it.
+        Services.AddScoped<BrowserStorage>();
     }
 
     private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();

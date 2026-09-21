@@ -75,6 +75,8 @@ public class HomeStorageUnavailableTests : BunitContext
         });
         Services.AddScoped<AppliedFilter>();
         Services.AddScoped<FilterRestoreNotice>();
+        // The seam under test, registered at the scope Program.cs gives it.
+        Services.AddScoped<BrowserStorage>();
     }
 
     private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();
@@ -203,5 +205,75 @@ public class HomeStorageUnavailableTests : BunitContext
         Assert.Single(cut.FindAll("#storageUnavailableNotice"));
         // The gesture itself still took effect — only its persistence was lost.
         Assert.Single(cut.FindAll("#xgpOptions"));
+    }
+
+    // ── The notice itself: a condition notice, dismissible per occurrence ───
+    //
+    // halheinrich/backgammon#248, SPEC-notices.md §1–§2. The occurrence is the
+    // app's — storage does not come back mid-session — so its owner is the
+    // app-scoped BrowserStorage, and these pin the three rows of the model's
+    // dismissal table through the page (the reload row is a fresh owner, which
+    // only BrowserStorageTests can stage).
+
+    private const string StorageNotice = "#storageUnavailableNotice";
+
+    [Fact]
+    public void TheNotice_IsAnAssertiveDismissibleNotice_WithItsIdAndStyleOnTheBox()
+    {
+        WithReadsRefused();
+
+        var box = RenderHome().Find(StorageNotice);
+
+        NoticeAssert.IsNoticeBox(box, "alert-warning", "id", "style");
+        NoticeAssert.Announces(box, "alert");
+        NoticeAssert.IsDismissible(box);
+        Assert.Equal("max-width:800px", box.GetAttribute("style"));
+    }
+
+    [Theory]
+    [InlineData(StorageNotice)]                          // the whole box
+    [InlineData(StorageNotice + " > button.btn-close")]  // the close button
+    public void TheNotice_DismissesByTheBoxAndByTheCloseButton(string target)
+    {
+        WithReadsRefused();
+        var cut = RenderHome();
+
+        cut.Find(target).Click();
+
+        Assert.Empty(cut.FindAll(StorageNotice));
+        // The condition is untouched — only its notice was closed.
+        Assert.True(Services.GetRequiredService<BrowserStorage>().IsUnavailable);
+    }
+
+    [Fact]
+    public async Task Dismissed_StaysDismissedAcrossANavigateBack_AndStorageIsNotRetried()
+    {
+        WithReadsRefused();
+        var firstVisit = RenderHome();
+        firstVisit.Find(StorageNotice + " > button.btn-close").Click();
+        var refusedReads = JSInterop.Invocations.Count(IsHomeKey);
+
+        // Navigating away and back: the page is new, the app-scoped owner is
+        // not. The same condition is not a new occurrence, so nothing is
+        // re-discovered and nothing is said again.
+        await DisposeComponentsAsync();
+        var secondVisit = RenderHome();
+
+        Assert.Empty(secondVisit.FindAll(StorageNotice));
+        Assert.Equal(refusedReads, JSInterop.Invocations.Count(IsHomeKey));
+    }
+
+    [Fact]
+    public async Task NotDismissed_IsStillShownAfterANavigateBack()
+    {
+        // The control for the one above: the second visit's silence there is
+        // the dismissal's doing, not the remount's.
+        WithReadsRefused();
+        RenderHome();
+
+        await DisposeComponentsAsync();
+        var secondVisit = RenderHome();
+
+        Assert.Single(secondVisit.FindAll(StorageNotice));
     }
 }

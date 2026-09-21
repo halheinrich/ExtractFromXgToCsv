@@ -54,10 +54,21 @@
         </div>
     </section>
 
-    @if (_hasError && !string.IsNullOrEmpty(_statusMessage))
-    {
-        <div class="alert alert-danger mt-2">@_statusMessage</div>
-    }
+    @* The run error — dismissible (SPEC-notices.md, Fork A), and assertive: a
+       gesture the user made failed. One occurrence is one failed run, and
+       _runError is non-null exactly while one stands, so closing the box ends
+       the occurrence — the field is cleared, as the next Run and the filter's
+       falling edge already clear it — and there is no dismissed bit anywhere,
+       here or in the Notice (the binding makes it caller-held, so it keeps
+       none). A second failure assigns the field again and shows fresh although
+       its text may be identical: the text was never the occurrence. No @if
+       around it — one fact, read once. *@
+    <Notice class="mt-2" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
+            Dismissible="true"
+            @bind-Dismissed:get="_runError is null"
+            @bind-Dismissed:set="_ => _runError = null">
+        @_runError
+    </Notice>
 
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
@@ -159,10 +170,14 @@
                             // every file was read. With skips the zero may be theirs,
                             // and the skip notice below already says what was lost,
                             // so this one yields rather than blame the filter.
-                            <div class="alert alert-warning zero-match-notice mt-2" role="alert">
+                            //
+                            // A gate reason — it is the run's result — so not
+                            // dismissible (SPEC-notices.md, Fork C).
+                            <Notice class="zero-match-notice mt-2" Kind="NoticeKind.Warning"
+                                    Announcement="NoticeAnnouncement.Assertive">
                                 No decisions matched these filters — adjust the filters
                                 or point at a different folder.
-                            </div>
+                            </Notice>
                         }
                     }
                     else if (_progress.Cancelled)
@@ -189,7 +204,11 @@
                     // (halheinrich/backgammon#223). Outside the branch chain on
                     // purpose: a cancelled run's partial record is as true as a
                     // finished one's, and so would an error's be if it carried one.
-                    <div class="alert alert-warning skipped-notice mt-2" role="alert">
+                    //
+                    // A gate reason — the record of what the run lost — so not
+                    // dismissible (SPEC-notices.md, Fork C).
+                    <Notice class="skipped-notice mt-2" Kind="NoticeKind.Warning"
+                            Announcement="NoticeAnnouncement.Assertive">
                         <div class="fw-bold">⚠ @SkipHeadline(_progress)</div>
                         <ul class="mb-0">
                             @foreach (var item in _progress.Skipped)
@@ -205,7 +224,7 @@
                                 </li>
                             }
                         </ul>
-                    </div>
+                    </Notice>
                 }
             }
         </div>
@@ -262,8 +281,15 @@
     private ProcessingProgress? _progress = null;
     private string? _currentJobId = null;
     private bool _busy = false;
-    private bool _hasError = false;
-    private string _statusMessage = string.Empty;
+
+    // The failed run standing on screen, as its message; null when none is.
+    // The run error notice's whole state — presence, text and dismissal are
+    // this one field (see the notice's comment in the markup). Distinct from
+    // _progress.ErrorMessage, which is the server's report of a job that
+    // started and then failed; this is the client's own failure to start or
+    // follow one.
+    private string? _runError;
+
     // Previous render's FilterApplied, for the falling edge the post-run status
     // block is dropped on (see OnParametersSet). Starts false — nothing is in
     // effect before the host's first parameters-set — so that first set can
@@ -352,8 +378,7 @@
         if (!FilterApplied && _lastFilterApplied && !_busy)
         {
             _progress = null;
-            _hasError = false;
-            _statusMessage = string.Empty;
+            _runError = null;
         }
         _lastFilterApplied = FilterApplied;
     }
@@ -387,7 +412,7 @@
 
     private async Task RunLocalAsync()
     {
-        _busy = true; _hasError = false; _statusMessage = string.Empty;
+        _busy = true; _runError = null;
         _progress = null; _currentJobId = null;
         StateHasChanged();
 
@@ -412,8 +437,7 @@
 
             if (_currentJobId is null)
             {
-                _hasError = true;
-                _statusMessage = "Failed to start job — no jobId returned.";
+                _runError = "Failed to start job — no jobId returned.";
                 return;
             }
 
@@ -447,8 +471,7 @@
         }
         catch (Exception ex)
         {
-            _hasError = true;
-            _statusMessage = $"Error: {ex.Message}";
+            _runError = $"Error: {ex.Message}";
         }
         finally
         {

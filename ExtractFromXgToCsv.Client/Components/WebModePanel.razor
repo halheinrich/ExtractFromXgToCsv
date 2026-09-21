@@ -18,11 +18,21 @@
         // on the WASM thread, so this is the only thing the user can see while it
         // does — it must be rendered *and* handed a frame to paint in before the
         // work starts (see RunBusyAsync).
-        <div class="alert alert-info d-flex align-items-center gap-2 busy-notice"
-             role="status" aria-live="polite" style="max-width:800px">
-            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
-            <span>@_busyMessage</span>
-        </div>
+        //
+        // A live indicator, so not dismissible, and polite (SPEC-notices.md §1).
+        // The spinner-and-text row is laid out by an element of this panel's
+        // own, inside the notice: the box's children are the component's (its
+        // content wrapper, and a close button on a dismissible one), so flex
+        // classes on the box would lay out the component's structure rather
+        // than this content — and would reach nothing, the wrapper being the
+        // box's only child here.
+        <Notice class="busy-notice" style="max-width:800px" Kind="NoticeKind.Information"
+                Announcement="NoticeAnnouncement.Polite">
+            <div class="d-flex align-items-center gap-2">
+                <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                <span>@_busyMessage</span>
+            </div>
+        </Notice>
     }
 
     <section class="mb-4">
@@ -34,11 +44,19 @@
             }
             @if (_totalSelectedBytes > WebModeLimitBytes)
             {
-                <div class="alert alert-warning mt-1 mb-1 py-1">
+                // A gate reason — why nothing loaded and the run cannot start —
+                // so not dismissible (SPEC-notices.md, Fork C), and the one
+                // statement of this fact: it is read straight off
+                // _totalSelectedBytes, and the run error no longer repeats it
+                // (see HandleFileSelectionAsync). Assertive, because it is now
+                // the only thing that tells the user the selection they just
+                // made was refused — a gesture that failed.
+                <Notice class="mt-1 mb-1 py-1" Kind="NoticeKind.Warning"
+                        Announcement="NoticeAnnouncement.Assertive">
                     Selected files total @(_totalSelectedBytes / 1024 / 1024)MB —
                     limit is @(WebModeLimitBytes / 1024 / 1024)MB.
                     Please select fewer files.
-                </div>
+                </Notice>
             }
             <InputFile OnChange="HandleFileSelectionAsync" multiple
                        accept=".xg,.xgp" class="form-control mb-3" disabled="@_busy" />
@@ -76,10 +94,22 @@
         </div>
     </section>
 
-    @if (_hasError && !string.IsNullOrEmpty(_statusMessage))
-    {
-        <div class="alert alert-danger mt-2">@_statusMessage</div>
-    }
+    @* The run error — dismissible (SPEC-notices.md, Fork A), and assertive: a
+       gesture the user made failed. One occurrence is one failed gesture (a
+       file read or a download build), and _runError is non-null exactly while
+       one stands, so closing the box ends the occurrence — the field is
+       cleared, as the next selection and the next download already clear it —
+       and there is no dismissed bit anywhere, here or in the Notice (the
+       binding makes it caller-held, so it keeps none). A second failure
+       assigns the field again and shows fresh although its text may be
+       identical: the text was never the occurrence. No @if around it — one
+       fact, read once. *@
+    <Notice class="mt-2" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
+            Dismissible="true"
+            @bind-Dismissed:get="_runError is null"
+            @bind-Dismissed:set="_ => _runError = null">
+        @_runError
+    </Notice>
 
     @if (_rowCache.Rows.Count > 0)
     {
@@ -93,10 +123,14 @@
                     // count here means the filters are genuinely active — so we can
                     // say so without re-inspecting FilterConfig. Replaces the bland
                     // "0 of N rows match" line that read as a silent success.
-                    <div class="alert alert-warning zero-match-notice" role="alert">
+                    //
+                    // A gate reason — it is the filter's result — so not
+                    // dismissible (SPEC-notices.md, Fork C).
+                    <Notice class="zero-match-notice" Kind="NoticeKind.Warning"
+                            Announcement="NoticeAnnouncement.Assertive">
                         No decisions matched these filters — adjust the filters or
                         select different files.
-                    </div>
+                    </Notice>
                 }
                 else
                 {
@@ -238,8 +272,12 @@
     // same one LocalModePanel's root uses (issue halheinrich/backgammon#77).
     private string? BusyCssClass => _busy ? "is-busy" : null;
 
-    private bool _hasError = false;
-    private string _statusMessage = string.Empty;
+    // The failed gesture standing on screen, as its message; null when none
+    // is. The run error notice's whole state — presence, text and dismissal
+    // are this one field (see the notice's comment in the markup). The
+    // selected-size limit is deliberately not written here: it is a standing
+    // gate reason with its own owner, _totalSelectedBytes.
+    private string? _runError;
 
     // Live-preview row state — the loaded rows, the materialized filter, and
     // the filtered projections all live in the cache; the panel only decides
@@ -306,12 +344,12 @@
 
     private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
     {
-        _hasError = false; _statusMessage = string.Empty;
+        _runError = null;
         _rowCache.Clear();
         _fileBytes.Clear();
 
         // The old selection is gone as of the clears above, on every path out
-        // of this handler — success, over-limit error, and the dismissed
+        // of this handler — success, over-limit refusal, and the dismissed
         // picker's empty selection alike — so the source-change announcement
         // is unconditional and fires before any outcome is known.
         await OnSelectionChanged.InvokeAsync();
@@ -319,12 +357,13 @@
         var files = e.GetMultipleFiles(500).ToList();
         _totalSelectedBytes = files.Sum(f => f.Size);
 
-        if (_totalSelectedBytes > WebModeLimitBytes)
-        {
-            _hasError = true;
-            _statusMessage = $"Selected files total {_totalSelectedBytes / 1024 / 1024}MB — limit is {WebModeLimitBytes / 1024 / 1024}MB. Please select fewer files.";
-            return;
-        }
+        // Over the limit nothing is read. The reason is on screen already, by
+        // the picker, rendered from _totalSelectedBytes itself — a gate reason
+        // that stands until the selection changes. It used to be written into
+        // the run error as well: one fact in two boxes, and the second copy
+        // would now be a dismissible statement of a gate reason
+        // (SPEC-notices.md §1). One fact, one owner, one box.
+        if (_totalSelectedBytes > WebModeLimitBytes) return;
 
         // A dismissed picker selects nothing: the clear above is the whole
         // effect, and raising busy for it would flash a notice over no work
@@ -350,8 +389,7 @@
                 }
                 catch (Exception ex)
                 {
-                    _hasError = true;
-                    _statusMessage = $"Error: {ex.Message}";
+                    _runError = $"Error: {ex.Message}";
                 }
             });
     }
@@ -504,7 +542,7 @@
 
     private async Task DownloadCoreAsync()
     {
-        _hasError = false; _statusMessage = string.Empty;
+        _runError = null;
         try
         {
             byte[] bytes;
@@ -544,8 +582,7 @@
         }
         catch (Exception ex)
         {
-            _hasError = true;
-            _statusMessage = $"Error: {ex.Message}";
+            _runError = $"Error: {ex.Message}";
         }
     }
 }

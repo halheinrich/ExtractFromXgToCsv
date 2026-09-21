@@ -28,4 +28,12 @@ builder.Services.AddScoped<AppliedFilter>();
 // and bind it to FilterSurface.
 builder.Services.AddScoped<FilterRestoreNotice>();
 
+// The guarded localStorage seam, and the owner of the one condition it can
+// discover — that browser storage is unavailable. Scoped for the reason the
+// two above are: the condition is the app's, not a page's (storage does not
+// come back mid-session), so both its latch and the dismissal of the notice
+// that reports it must survive a navigate-back and die with a reload, which
+// constructs a fresh instance. Neither is ever stored (SPEC-notices.md §2).
+builder.Services.AddScoped<BrowserStorage>();
+
 await builder.Build().RunAsync();

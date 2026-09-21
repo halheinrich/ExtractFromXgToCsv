@@ -28,6 +28,8 @@ public class HomeXgpPatternTests : BunitContext
         // but the page can't render without them registered.
         Services.AddScoped<XgFilter_Razor.AppliedFilter>();
         Services.AddScoped<XgFilter_Razor.FilterRestoreNotice>();
+        // Home's localStorage seam — every persistence pin below goes through it.
+        Services.AddScoped<BrowserStorage>();
         Services.AddSingleton(new HttpClient(new StubAppModeHandler("Web"))
         {
             BaseAddress = new Uri("http://localhost/"),

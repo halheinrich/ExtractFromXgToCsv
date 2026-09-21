@@ -49,6 +49,8 @@ public class HomeWiringTests : BunitContext
         // the app registers it, and resolved by tests to assert the gate SSOT.
         Services.AddScoped<AppliedFilter>();
         Services.AddScoped<FilterRestoreNotice>();
+        // Home's localStorage seam — the folder restore and persistence go through it.
+        Services.AddScoped<BrowserStorage>();
     }
 
     private StubAppModeHandler RegisterHttpClient(string appMode)

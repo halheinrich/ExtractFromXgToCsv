@@ -42,6 +42,8 @@ public class HomeOutputFormatRestoreTests : BunitContext
         });
         Services.AddScoped<AppliedFilter>();
         Services.AddScoped<FilterRestoreNotice>();
+        // Home's localStorage seam — the format restore reads through it.
+        Services.AddScoped<BrowserStorage>();
     }
 
     private void WithStoredFormat(string token) =>

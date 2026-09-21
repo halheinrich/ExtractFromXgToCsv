@@ -19,6 +19,10 @@
     <ProjectReference Include="..\..\XgFilter_Lib\XgFilter_Lib\XgFilter_Lib.csproj" />
     <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib\BgDataTypes_Lib.csproj" />
     <ProjectReference Include="..\..\XgFilter_Razor\XgFilter_Razor\XgFilter_Razor.csproj" />
+    <!-- Referenced directly, not through XgFilter_Razor: this host's own
+         panels render the shared Notice, and a dependency a project uses is
+         one it states. -->
+    <ProjectReference Include="..\..\BgUiPrimitives_Razor\BgUiPrimitives_Razor\BgUiPrimitives_Razor.csproj" />
   </ItemGroup>
 
 </Project>

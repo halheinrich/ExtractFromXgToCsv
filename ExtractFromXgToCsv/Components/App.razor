@@ -8,6 +8,13 @@
     <title>ExtractFromXgToCsv</title>
     <link rel="stylesheet" href="bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="app.css" />
+    @* This host's scoped-CSS bundle. Nothing in this repository has scoped CSS
+       of its own; the bundle exists to carry the @import of
+       BgUiPrimitives_Razor's, which is half of how its Notice works — without
+       it a dismissible notice's text is not a click target (only its close
+       button and padding dismiss). Resolved through the static-assets
+       manifest, as the bundle's own @import is fingerprinted. *@
+    <link rel="stylesheet" href="@Assets["ExtractFromXgToCsv.styles.css"]" />
     <HeadOutlet />
 </head>
 

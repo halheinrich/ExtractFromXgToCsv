@@ -3,6 +3,7 @@
   <Project Path="../BackgammonDiagram_Lib/BackgammonDiagram_Lib/BackgammonDiagram_Lib.csproj" />
   <Project Path="../BgDataTypes_Lib/BgDataTypes_Lib/BgDataTypes_Lib.csproj" />
   <Project Path="../BgMoveGen/BgMoveGen/BgMoveGen.csproj" />
+  <Project Path="../BgUiPrimitives_Razor/BgUiPrimitives_Razor/BgUiPrimitives_Razor.csproj" />
   <Project Path="../ConvertXgToJson_Lib/ConvertXgToJson_Lib/ConvertXgToJson_Lib.csproj" />
   <Project Path="../XgFilter_Lib/XgFilter_Lib/XgFilter_Lib.csproj" />
   <Project Path="../XgFilter_Razor/XgFilter_Razor.Testing/XgFilter_Razor.Testing.csproj" />

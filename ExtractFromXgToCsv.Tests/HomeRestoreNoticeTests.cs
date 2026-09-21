@@ -45,6 +45,7 @@ public class HomeRestoreNoticeTests : BunitContext
         // of what this class is here to pin.
         Services.AddScoped<AppliedFilter>();
         Services.AddScoped<FilterRestoreNotice>();
+        Services.AddScoped<BrowserStorage>();
     }
 
     /// <summary>
