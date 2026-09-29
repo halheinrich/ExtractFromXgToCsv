@@ -47,7 +47,7 @@ public class LocalFolderProcessorSkipTests
     private static DecisionFilterSet NarrowFilter() => new FilterConfig { ErrorMin = 0.05 }.Build();
 
     private static LocalFolderProcessor Processor() =>
-        new(NullLogger<LocalFolderProcessor>.Instance);
+        new(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
 
     // ── Skips are recorded ──────────────────────────────────────────────────
 
@@ -175,7 +175,7 @@ public class LocalFolderProcessorSkipTests
             var logger = new CapturingLogger<LocalFolderProcessor>();
             var progress = new RecordingProgress();
 
-            await new LocalFolderProcessor(logger).ProcessAsync(
+            await new LocalFolderProcessor(logger, AppRanking.Ranking).ProcessAsync(
                 folder, Path.Combine(folder, "out.csv"), NarrowFilter(), progress);
 
             var terminal = progress.Reports[^1];
@@ -241,7 +241,7 @@ public class LocalFolderProcessorSkipTests
             var progress = new RecordingProgress(_ => cts.Cancel());
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessAsync(
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger, AppRanking.Ranking).ProcessAsync(
                 folder, Path.Combine(folder, "out.csv"), NarrowFilter(), progress,
                 cancellationToken: cts.Token));
 
@@ -263,7 +263,7 @@ public class LocalFolderProcessorSkipTests
             var progress = new RecordingProgress(_ => cts.Cancel());
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessDiagramAsync(
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger, AppRanking.Ranking).ProcessDiagramAsync(
                 folder, Path.Combine(folder, "out.json"), NarrowFilter(), progress,
                 cancellationToken: cts.Token));
 
@@ -285,7 +285,7 @@ public class LocalFolderProcessorSkipTests
             var progress = new RecordingProgress(_ => cts.Cancel());
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessXgpAsync(
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger, AppRanking.Ranking).ProcessXgpAsync(
                 folder, Path.Combine(folder, "positions"), NarrowFilter(),
                 new XgpExportOptions(), new FilterConfig(), progress,
                 cancellationToken: cts.Token));
@@ -308,7 +308,7 @@ public class LocalFolderProcessorSkipTests
             var progress = new RecordingProgress(_ => cts.Cancel());
             var logger = new CapturingLogger<LocalFolderProcessor>();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger).ProcessPptxAsync(
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LocalFolderProcessor(logger, AppRanking.Ranking).ProcessPptxAsync(
                 folder, Path.Combine(folder, "deck.pptx"), NarrowFilter(), progress,
                 cancellationToken: cts.Token));
 

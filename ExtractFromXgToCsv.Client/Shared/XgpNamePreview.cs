@@ -20,10 +20,11 @@ internal static class XgpNamePreview
     /// </summary>
     /// <remarks>
     /// Built as the producers build a row, through their public surface: a
-    /// record, which holds its own rules, projected by
-    /// <see cref="DecisionRow.From"/> for the application's one ranking. A row
-    /// has no other door, so the sample cannot state a fact a real row could
-    /// not.
+    /// record projected by <see cref="DecisionRow.From"/> for the
+    /// application's one ranking. So the sample holds every rule the producer
+    /// enforces on a record and its row. It is not a position from a real
+    /// game: those rules do not relate a board to its move number, and this
+    /// one puts the standard start at move 5.
     /// </remarks>
     public static DecisionRow SampleRow { get; } = DecisionRow.From(
         new CheckerPlayDecision

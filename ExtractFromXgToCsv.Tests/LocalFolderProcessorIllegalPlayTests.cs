@@ -55,7 +55,7 @@ public class LocalFolderProcessorIllegalPlayTests
         try
         {
             var logger = new CapturingLogger<LocalFolderProcessor>();
-            var processor = new LocalFolderProcessor(logger);
+            var processor = new LocalFolderProcessor(logger, AppRanking.Ranking);
 
             ProcessingProgress? lastProgress = null;
             var progress = new Progress<ProcessingProgress>(p => lastProgress = p);

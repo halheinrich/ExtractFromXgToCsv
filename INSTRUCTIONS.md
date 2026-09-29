@@ -186,11 +186,14 @@ producer's own default stands in for it (Hal, 2026-09-29, on
 halheinrich/backgammon#273). What a ranking means is BgDataTypes_Lib's, and
 nothing here restates it. The sites:
 
-- **Local mode** — `LocalFolderProcessor` takes the value once into
-  `_ranking` and builds its one `XgIteratorOptions` from it and the loaded
-  book, so every row is built for it; the Diagram JSON and deck pathways
-  filter each record through `record.ViewFor(_ranking)`, and the deck draws
-  each through `DiagramRequest.ForDecision(record, _ranking)`.
+- **Local mode** — the composition root (`Program.cs`) hands
+  `AppRanking.Ranking` to `LocalFolderProcessor`'s constructor, where the
+  ranking is a required argument (a defined value, or
+  `ArgumentOutOfRangeException`): the processor states no ranking of its own.
+  It builds its one `XgIteratorOptions` from that ranking and the loaded book,
+  so every row is built for it; the Diagram JSON and deck pathways filter
+  each record through `record.ViewFor(_ranking)`, and the deck draws each
+  through `DiagramRequest.ForDecision(record, _ranking)`.
 - **Web mode** — `WebModePanel` builds its `FilteredRowCache` for the value,
   and extraction reads the ranking back from the cache, so
   `XgProcessingService.ExtractDecisions` / `ExtractDiagramRequests` (which
@@ -200,9 +203,28 @@ nothing here restates it. The sites:
 - **The name preview** — its sample row is `DecisionRow.From(record,
   AppRanking.Ranking)`.
 
-`FilteredRowCacheTests` pins that a run's rows and records are filtered under
-the cache's ranking, under either ranking; `WebModePanelFilteringTests` pins
-that the panel runs under `AppRanking.Ranking`.
+**What fails if a producer default stands in.** Of the producer operations
+above, `ViewFor`, `DecisionRow.From` and `DiagramRequest.ForDecision`
+require a ranking, so the compiler holds them. `XgIteratorOptions` does not:
+its ranking defaults to `Equity`, which is also this app's choice, so a run
+under `Equity` cannot tell the app's ranking from the default. The pins
+therefore run each mode under `DepthFirst`, over a fixture and filter
+(`MatchTest.xg`, "erred by at least 0.001") that each test first proves, from
+the producer's own read, admits different decisions under the two rankings:
+
+- `LocalFolderProcessorRankingTests` — one test per pathway, each against the
+  producer's reference for `DepthFirst`. CSV and Xgp fail if the processor's
+  options drop the ranking (their rows are built by the iterator); Diagram
+  JSON and deck fail if records are filtered under any ranking but the
+  processor's. Both halves were checked by mutation at the time of writing.
+- `WebModeRankingTests` — the pipeline the panel runs (`XgProcessingService`'s
+  two extractions for the cache's ranking, then `FilteredRowCache`) under
+  `DepthFirst`. If `OptionsFor` dropped the ranking, the rows would be built
+  for `Equity` and the cache would refuse them.
+
+Beside those, `FilteredRowCacheTests` pins the cache's own rule over
+hand-built rows under either ranking, and `WebModePanelFilteringTests` pins
+that the panel builds its cache for `AppRanking.Ranking`.
 
 ### XGP export
 
@@ -243,11 +265,14 @@ by the naming engine in `Client/Shared`:
   gone with the producer's change — every money session states its rule —
   and is taken as is, with no compatibility spelling (Hal, 2026-09-29).
 - `XgpNamePreview.SampleRow` — the live preview's sample decision, a 3-1 at
-  3-away/5-away in a 7-point match, game 2, move 5. A real row: a record
-  built through the producers' public surface and projected by
-  `DecisionRow.From` for `AppRanking.Ranking`, so it cannot state a fact a
-  real row could not. App-level, beside the engine rather than in it: it
-  reads the app's ranking, and the engine stays lib-ready.
+  3-away/5-away in a 7-point match, game 2, move 5. A producer-built row: a
+  record built through the producers' public surface and projected by
+  `DecisionRow.From` for `AppRanking.Ranking`, so it holds every rule the
+  producer enforces on a record and its row. It is not a position from a
+  real game — those rules do not relate a board to its move number, and the
+  sample puts the standard start at move 5. App-level, beside the engine
+  rather than in it: it reads the app's ranking, and the engine stays
+  lib-ready.
 - `XgpNameTemplate.TryParse` — the pattern grammar (unmatched/empty braces,
   unknown tokens, filename-illegal literals are parse-time errors; braces
   are delimiters only, with no escape syntax). `Render` never fails; token
@@ -1030,6 +1055,15 @@ project via relative path — not duplicated here.
   the last thing sent before the terminal one, and the streaming pathways never
   report `Rendering`. Runs one small fixture in a temp folder behind a narrow
   filter — a full-corpus deck render costs minutes to learn the same thing.
+- `LocalFolderProcessorRankingTests` — one run, one ranking in Local mode:
+  a processor given `DepthFirst` produces, on each of the four pathway kinds
+  (CSV, Diagram JSON, Xgp, deck), exactly the producer's `DepthFirst`
+  result, over a fixture and filter first proven to admit different
+  decisions under `Equity`; and an undefined ranking is refused. See "The
+  ranking" for which mutation each pathway catches.
+- `WebModeRankingTests` — the same in Web mode: extraction for the cache's
+  ranking and the cache's filtering, under `DepthFirst`, admit exactly the
+  producer's `DepthFirst` decisions in both projections.
 - `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
   failure shape) and per-token rendering, including the counter-unification
   pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
@@ -1153,8 +1187,8 @@ project reference.
 
 - `AppRanking` — `static class` with one member, `Ranking`
   (`PlayRanking.Equity`): the application's one ranking, stated once, which
-  both modes read (see "The ranking"). Public because the server's processor
-  reads it.
+  both modes read (see "The ranking"). Public because the server's
+  composition root reads it, to hand it to the Local-mode processor.
 - `AppModeResponse` — response record for `GET /api/appmode`
   (`record AppModeResponse(string Mode)`). Server returns it; client
   deserializes against it. Object-wrapped rather than a bare string so the

@@ -19,7 +19,7 @@ public class LocalFolderProcessorPptxTests
     [Fact]
     public async Task ProcessPptxAsync_WritesValidPptxFromFixtureFolder()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
         var outputPath = Path.Combine(Path.GetTempPath(),
             $"pptx-test-{Guid.NewGuid():N}.pptx");
 

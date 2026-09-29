@@ -122,8 +122,8 @@ public class XgpNameTemplateTests
     }
 
     /// <summary>
-    /// The live preview's sample decision is a real row, built by the
-    /// producer for the application's one ranking, and renders what the
+    /// The live preview's sample decision is a producer-built row for the
+    /// application's one ranking, and renders what the
     /// preview has always shown: a 3-1 at 3-away/5-away, game 2, move 5.
     /// </summary>
     [Fact]

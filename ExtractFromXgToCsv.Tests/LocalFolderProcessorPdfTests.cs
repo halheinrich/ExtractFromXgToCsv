@@ -23,7 +23,7 @@ public class LocalFolderProcessorPdfTests
     [Fact]
     public async Task ProcessPdfAsync_WritesValidPdfFromFixtureFolder()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
         var outputPath = Path.Combine(Path.GetTempPath(),
             $"pdf-test-{Guid.NewGuid():N}.pdf");
 

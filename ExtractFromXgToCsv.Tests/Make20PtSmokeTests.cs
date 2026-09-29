@@ -10,9 +10,9 @@ using Xunit.Abstractions;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// End-to-end smoke test for the Make20Pt filter path. Exercises the same
-/// FilterConfig.Build + FilteredDecisionIterator.IterateXgDirectory call
-/// sequence LocalFolderProcessor uses, against the real fixture .xg files.
+/// End-to-end smoke test for the Make20Pt filter path. Exercises
+/// FilterConfig.Build + FilteredDecisionIterator.IterateXgDirectory under the
+/// app's ranking, against the real fixture .xg files.
 ///
 /// Strategy: compute the Make20Pt reference set directly from the library's
 /// documented XOR semantic over all unfiltered checker plays, then require

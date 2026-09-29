@@ -54,13 +54,13 @@ public class LocalFolderProcessorOpeningBookTests
         Assert.True(provider.Book is not null,
             $"Expected fixture not present: {BookFixturePath}. Copy OpeningBookV2.ob " +
             "from the eXtreme Gammon 2 install directory into TestData/FixtureFiles/.");
-        return new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, provider);
+        return new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking, provider);
     }
 
     // A processor with no book — a null provider is the same unenriched path as
     // a provider that loaded nothing.
     private static LocalFolderProcessor WithoutBook() =>
-        new(NullLogger<LocalFolderProcessor>.Instance);
+        new(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
 
     // An input folder holding only the book-opening fixture, so filter counts
     // are deterministic and independent of the rest of TestData.

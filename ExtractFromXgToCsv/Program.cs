@@ -1,4 +1,5 @@
 // *** SERVER PROJECT — ExtractFromXgToCsv ***
+using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Components;
 using ExtractFromXgToCsv.Services;
 using QuestPDF.Infrastructure;
@@ -26,7 +27,12 @@ if (appMode.IsLocal)
     // every job — hence singleton. Local mode only: Web mode parses .xg files
     // client-side and offers the book through the browser file picker instead.
     builder.Services.AddSingleton<OpeningBookProvider>();
-    builder.Services.AddScoped<LocalFolderProcessor>();
+    // The processor runs under the application's one ranking, stated once in
+    // AppRanking and handed in here (halheinrich/backgammon#273).
+    builder.Services.AddScoped(sp => new LocalFolderProcessor(
+        sp.GetRequiredService<ILogger<LocalFolderProcessor>>(),
+        AppRanking.Ranking,
+        sp.GetRequiredService<OpeningBookProvider>()));
     builder.Services.AddSingleton<JobStore>();
 }
 

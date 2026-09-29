@@ -23,7 +23,8 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <para>
 /// What a ranking <em>means</em> — the order, the best play, each play's error
 /// and whether it is scored — is BgDataTypes_Lib's, and nothing here restates
-/// it. Public because the server's Local-mode processor reads it too.
+/// it. Public because the server reads it too: its composition root hands it
+/// to the Local-mode processor.
 /// </para>
 /// </remarks>
 public static class AppRanking

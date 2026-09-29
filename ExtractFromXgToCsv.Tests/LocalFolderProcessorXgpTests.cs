@@ -59,7 +59,7 @@ public class LocalFolderProcessorXgpTests
     [Fact]
     public async Task ProcessXgpAsync_WritesOneNamedXgpPerDecision_ThatRoundTrips()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-test-{Guid.NewGuid():N}");
         var options = new XgpExportOptions
         {
@@ -122,7 +122,7 @@ public class LocalFolderProcessorXgpTests
     [Fact]
     public async Task ProcessXgpAsync_NumbersDecisionsInProducerDiscoveryOrder()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-order-{Guid.NewGuid():N}");
         var options = new XgpExportOptions
         {
@@ -170,7 +170,7 @@ public class LocalFolderProcessorXgpTests
         // A pattern without {n} renders the same base name for every
         // decision — the per-run uniquifier is the only thing standing
         // between the batch and a folder of overwrites.
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-uniq-{Guid.NewGuid():N}");
         var options = new XgpExportOptions { NamePattern = "same" };
 
@@ -206,7 +206,7 @@ public class LocalFolderProcessorXgpTests
     [Fact]
     public async Task ProcessXgpAsync_Anonymize_RewritesEveryWrittenPositionToTheRoleNames()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-anon-{Guid.NewGuid():N}");
         var options = new XgpExportOptions
         {
@@ -247,7 +247,7 @@ public class LocalFolderProcessorXgpTests
     [Fact]
     public async Task ProcessXgpAsync_InvalidOptions_Throw()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
 
         await Assert.ThrowsAsync<ArgumentException>(() => processor.ProcessXgpAsync(
             FixtureHelper.FixtureDir,

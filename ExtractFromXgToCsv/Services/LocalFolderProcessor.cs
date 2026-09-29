@@ -29,11 +29,12 @@ public class LocalFolderProcessor
 {
     private readonly ILogger<LocalFolderProcessor> _logger;
 
-    // The run's one ranking — the application's (AppRanking), taken once. Every
-    // producer operation below whose meaning depends on a ranking is handed
-    // this value: the iterator options (so every row is built for it), each
-    // record's filter view, and each diagram. No producer default stands in.
-    private readonly PlayRanking _ranking = AppRanking.Ranking;
+    // The run's one ranking, as the composition root hands it in (the
+    // application's, AppRanking). Every producer operation below whose meaning
+    // depends on a ranking is handed this value: the iterator options (so every
+    // row is built for it), each record's filter view, and each diagram. No
+    // producer default stands in.
+    private readonly PlayRanking _ranking;
 
     // The iterator options, passed to every XgDecisionIterator call: the run's
     // ranking, and the opening book OpeningBookProvider resolved once, so
@@ -46,16 +47,31 @@ public class LocalFolderProcessor
 
     /// <summary>
     /// Creates the processor. <paramref name="logger"/> records per-file skip
-    /// warnings; <paramref name="bookProvider"/> supplies the loaded opening
-    /// book (optional — a null provider, like a provider that loaded no book,
-    /// runs the pipeline unenriched).
+    /// warnings; <paramref name="ranking"/> is the ranking every run is
+    /// interpreted under — the application passes its one ranking,
+    /// <see cref="AppRanking.Ranking"/>, from the composition root;
+    /// <paramref name="bookProvider"/> supplies the loaded opening book
+    /// (optional — a null provider, like a provider that loaded no book, runs
+    /// the pipeline unenriched).
     /// </summary>
+    /// <remarks>
+    /// The ranking is a required argument, not read here, so that no pathway
+    /// can silently run under a default: the producer's
+    /// <see cref="XgIteratorOptions"/> would take <see cref="PlayRanking.Equity"/>
+    /// if none were stated. Stating it also lets a test run a pathway under
+    /// another ranking and see that the pathway honours the one it was given.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ranking"/> is not a defined ranking.</exception>
     public LocalFolderProcessor(
         ILogger<LocalFolderProcessor> logger,
+        PlayRanking ranking,
         OpeningBookProvider? bookProvider = null)
     {
+        if (!Enum.IsDefined(ranking))
+            throw new ArgumentOutOfRangeException(nameof(ranking), ranking, "Not a defined ranking.");
         _logger = logger;
-        _iteratorOptions = new XgIteratorOptions(bookProvider?.Book, _ranking);
+        _ranking = ranking;
+        _iteratorOptions = new XgIteratorOptions(bookProvider?.Book, ranking);
     }
 
     /// <summary>
