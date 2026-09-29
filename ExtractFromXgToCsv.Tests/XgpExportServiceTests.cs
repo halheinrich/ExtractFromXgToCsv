@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -33,6 +34,10 @@ public class XgpExportServiceTests
     private static Dictionary<string, byte[]> Sources(params string[] names) =>
         names.ToDictionary(n => n, FixtureHelper.ReadFixture);
 
+    /// <summary>A source's rows, built for the application's one ranking, as Web mode builds them.</summary>
+    private IReadOnlyList<DecisionRow> Rows(Dictionary<string, byte[]> sources, string name) =>
+        _service.ExtractDecisions(sources[name], name, AppRanking.Ranking);
+
     private static List<ZipArchiveEntry> ReadEntries(byte[] zipBytes, out ZipArchive zip)
     {
         zip = new ZipArchive(new MemoryStream(zipBytes), ZipArchiveMode.Read);
@@ -53,7 +58,7 @@ public class XgpExportServiceTests
         // Counter unification: "quiz{n}" must produce byte-identical names
         // to what the removed Prefix="quiz" option produced.
         var sources = Sources(XgFixture);
-        var rows = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+        var rows = Rows(sources, XgFixture)
             .Take(3).ToList();
         Assert.Equal(3, rows.Count);
 
@@ -78,10 +83,13 @@ public class XgpExportServiceTests
     public void TokenPattern_DrawsBatchTokensFromFiltersAndItemTokensFromEachRow()
     {
         var sources = Sources(XgFixture);
-        var all = _service.ExtractDecisions(sources[XgFixture], XgFixture).ToList();
+        var all = Rows(sources, XgFixture)
+            .Where(r => r.Kind == DecisionKind.CheckerPlay)
+            .ToList();
 
-        // Two rows guaranteed to render distinct names, so no uniquifier
-        // muddies the expected strings.
+        // Two checker plays guaranteed to render distinct names, so no
+        // uniquifier muddies the expected strings. (The cube decision's "00"
+        // is pinned in XgpNameTemplateTests.)
         var first = all[0];
         var second = all.First(r =>
             r.Roll != first.Roll || r.MatchScore != first.MatchScore);
@@ -100,7 +108,7 @@ public class XgpExportServiceTests
         {
             Assert.Equal(
                 rows.Select(r =>
-                    $"Move5_{r.Roll.ToString("D2", CultureInfo.InvariantCulture)}_{r.MatchScore}.xgp"),
+                    $"Move5_{r.Roll!.Value.ToString("D2", CultureInfo.InvariantCulture)}_{r.MatchScore}.xgp"),
                 entries.Select(e => e.FullName));
         }
     }
@@ -112,7 +120,7 @@ public class XgpExportServiceTests
         // uniquifier a {n}-less pattern would produce silently colliding
         // members.
         var sources = Sources(XgFixture);
-        var rows = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+        var rows = Rows(sources, XgFixture)
             .Take(3).ToList();
 
         var options = new XgpExportOptions { NamePattern = "pos" };
@@ -139,10 +147,10 @@ public class XgpExportServiceTests
 
         var picked = new List<DecisionRow>
         {
-            _service.ExtractDecisions(sources[XgFixture], XgFixture)
-                .First(r => !r.IsCube),
-            _service.ExtractDecisions(sources[cubeFixture], cubeFixture)
-                .First(r => r.IsCube),
+            Rows(sources, XgFixture)
+                .First(r => r.Kind == DecisionKind.CheckerPlay),
+            Rows(sources, cubeFixture)
+                .First(r => r.Kind == DecisionKind.Cube),
         };
 
         var zipBytes = _service.BuildXgpZip(
@@ -155,10 +163,10 @@ public class XgpExportServiceTests
             for (int i = 0; i < picked.Count; i++)
             {
                 var reRead = _service
-                    .ExtractDiagramRequests(EntryBytes(entries[i]), entries[i].FullName)
+                    .ExtractDiagramRequests(EntryBytes(entries[i]), entries[i].FullName, AppRanking.Ranking)
                     .Single();
                 Assert.Equal(picked[i].Xgid, reRead.Xgid);
-                Assert.Equal(picked[i].IsCube, reRead.IsCube);
+                Assert.Equal(picked[i].Kind, reRead.Kind);
             }
         }
     }
@@ -169,7 +177,7 @@ public class XgpExportServiceTests
         // An .xgp source already is a single-position analyzed file — the
         // export copies it byte-for-byte rather than re-slicing.
         var sources = Sources(XgpFixture);
-        var row = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
+        var row = Rows(sources, XgpFixture).Single();
         Assert.IsType<XgpDecisionId>(row.Id);
 
         var zipBytes = _service.BuildXgpZip(
@@ -187,9 +195,9 @@ public class XgpExportServiceTests
     public void MixedSources_ParseEachXgSourceOnceAndNumberInGivenOrder()
     {
         var sources = Sources(XgFixture, XgpFixture);
-        var xgRows = _service.ExtractDecisions(sources[XgFixture], XgFixture)
+        var xgRows = Rows(sources, XgFixture)
             .Take(2).ToList();
-        var xgpRow = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
+        var xgpRow = Rows(sources, XgpFixture).Single();
 
         // Interleave: xg, xgp, xg — numbering must follow list order.
         var rows = new List<DecisionRow> { xgRows.First(), xgpRow, xgRows.Last() };
@@ -220,9 +228,9 @@ public class XgpExportServiceTests
         // Both are single-decision surfaces, so BOTH must come back named by
         // role — the toggle closes the mixed-batch privacy gap or it lies.
         var sources = Sources(XgFixture, XgpFixture);
-        var xgRow = _service.ExtractDecisions(sources[XgFixture], XgFixture)
-            .First(r => !r.IsCube);
-        var xgpRow = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
+        var xgRow = Rows(sources, XgFixture)
+            .First(r => r.Kind == DecisionKind.CheckerPlay);
+        var xgpRow = Rows(sources, XgpFixture).Single();
         Assert.IsType<XgpDecisionId>(xgpRow.Id);
 
         var zipBytes = _service.BuildXgpZip(
@@ -251,9 +259,9 @@ public class XgpExportServiceTests
         var xgNames = ReadPlayerNames(sources[XgFixture]);
         var xgpNames = ReadPlayerNames(sources[XgpFixture]);
 
-        var xgRow = _service.ExtractDecisions(sources[XgFixture], XgFixture)
-            .First(r => !r.IsCube);
-        var xgpRow = _service.ExtractDecisions(sources[XgpFixture], XgpFixture).Single();
+        var xgRow = Rows(sources, XgFixture)
+            .First(r => r.Kind == DecisionKind.CheckerPlay);
+        var xgpRow = Rows(sources, XgpFixture).Single();
 
         var zipBytes = _service.BuildXgpZip(
             sources, new List<DecisionRow> { xgRow, xgpRow },
@@ -287,7 +295,8 @@ public class XgpExportServiceTests
     {
         var rows = new List<DecisionRow>
         {
-            new() { Id = new XgDecisionId("absent.xg", 1, 1, false), Roll = 31 },
+            TestRecords.Row(TestRecords.CheckerPlay(
+                id: new XgDecisionId("absent.xg", Game: 1, MoveNumber: 1, IsCube: false))),
         };
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -301,7 +310,7 @@ public class XgpExportServiceTests
     {
         var rows = new List<DecisionRow>
         {
-            new() { Id = new XgpDecisionId(XgpFixture), Roll = 31 },
+            TestRecords.Row(TestRecords.CheckerPlay(id: new XgpDecisionId(XgpFixture))),
         };
 
         Assert.Throws<ArgumentException>(() => _service.BuildXgpZip(

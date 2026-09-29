@@ -57,21 +57,27 @@ internal class XgProcessingService
     }
 
     /// <summary>
-    /// The book, mapped to iterator options — the single "book → options"
-    /// mapping point for both extraction methods. A null book yields null
-    /// options (the iterator's unenriched default).
+    /// The iterator options for one extraction — the single mapping point for
+    /// both extraction methods. Always stated, never null: the options carry
+    /// the caller's ranking, so the iterator's own default ranking never
+    /// stands in for it. A null book is the unenriched path.
     /// </summary>
-    private static XgIteratorOptions? OptionsFor(OpeningBook? book) =>
-        book is null ? null : new XgIteratorOptions(book);
+    private static XgIteratorOptions OptionsFor(PlayRanking ranking, OpeningBook? book) =>
+        new(book, ranking);
 
+    /// <summary>
+    /// Reads one file's decisions as rows, each built by the producer for
+    /// <paramref name="ranking"/> — the run's one ranking (see
+    /// <see cref="AppRanking"/>), which the caller states.
+    /// </summary>
     public IReadOnlyList<DecisionRow> ExtractDecisions(
-        byte[] fileBytes, string fileName, OpeningBook? book = null)
+        byte[] fileBytes, string fileName, PlayRanking ranking, OpeningBook? book = null)
     {
         using var ms = new MemoryStream(fileBytes);
         var xgFile = XgFileReader.ReadStream(ms);
 
         string sourceFile = Path.GetFileName(fileName);
-        return XgDecisionIterator.Iterate(xgFile, sourceFile, options: OptionsFor(book)).ToList();
+        return XgDecisionIterator.Iterate(xgFile, sourceFile, options: OptionsFor(ranking, book)).ToList();
     }
 
     public string BuildCsv(IEnumerable<DecisionRow> rows)
@@ -82,14 +88,21 @@ internal class XgProcessingService
             sb.AppendLine(row.ToCsvLine());
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Reads one file's decisions as records. A record depends on no ranking;
+    /// <paramref name="ranking"/> rides the iterator's options all the same, so
+    /// the one walk configuration is the run's and not the producer's default
+    /// (the caller filters each record through its view for the same ranking).
+    /// </summary>
     public IReadOnlyList<BgDecisionData> ExtractDiagramRequests(
-        byte[] fileBytes, string fileName, OpeningBook? book = null)
+        byte[] fileBytes, string fileName, PlayRanking ranking, OpeningBook? book = null)
     {
         using var ms = new MemoryStream(fileBytes);
         var xgFile = XgFileReader.ReadStream(ms);
         string sourceFile = Path.GetFileName(fileName);
         return XgDecisionIterator
-            .IterateDiagramRequests(xgFile, sourceFile, options: OptionsFor(book))
+            .IterateDiagramRequests(xgFile, sourceFile, options: OptionsFor(ranking, book))
             .ToList();
     }
 

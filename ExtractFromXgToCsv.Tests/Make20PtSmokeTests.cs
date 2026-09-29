@@ -1,4 +1,5 @@
 using BgDataTypes_Lib;
+using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.Logging.Abstractions;
 using XgFilter_Lib;
 using XgFilter_Lib.Enums;
@@ -26,17 +27,15 @@ public class Make20PtSmokeTests(ITestOutputHelper output)
         // Reference set: unfiltered iteration + manual XOR check.
         var allRows = new FilteredDecisionIterator(
                 new DecisionFilterSet(),
+                AppRanking.Ranking,
                 NullLogger<FilteredDecisionIterator>.Instance)
             .IterateXgDirectory(FixtureHelper.FixtureDir)
             .ToList();
 
         static bool SatisfiesMake20Pt(DecisionRow r) =>
-            !r.IsCube
-            && r.Board.Count            > 20
-            && r.AfterBestBoard.Count   >  5
-            && r.AfterPlayerBoard.Count >  5
+            r is { Kind: DecisionKind.CheckerPlay, AfterBestBoard: { } best, AfterPlayerBoard: { } player }
             && r.Board[20] < 2
-            && ((r.AfterBestBoard[5] <= -2) ^ (r.AfterPlayerBoard[5] <= -2));
+            && ((best[5] <= -2) ^ (player[5] <= -2));
 
         var referenceXgids = allRows
             .Where(SatisfiesMake20Pt)
@@ -47,6 +46,7 @@ public class Make20PtSmokeTests(ITestOutputHelper output)
         var cfg = new FilterConfig { PlayTypes = { PlayType.Make20Pt } };
         var filteredRows = new FilteredDecisionIterator(
                 cfg.Build(),
+                AppRanking.Ranking,
                 NullLogger<FilteredDecisionIterator>.Instance)
             .IterateXgDirectory(FixtureHelper.FixtureDir)
             .ToList();
@@ -67,13 +67,15 @@ public class Make20PtSmokeTests(ITestOutputHelper output)
         // manifest the XOR. Logs the boards so a human reviewer can verify
         // the training signal is real.
         var sample = filteredRows[0];
-        bool bestMakes   = sample.AfterBestBoard  [5] <= -2;
-        bool playerMakes = sample.AfterPlayerBoard[5] <= -2;
+        var sampleBest   = sample.AfterBestBoard!.Value;
+        var samplePlayer = sample.AfterPlayerBoard!.Value;
+        bool bestMakes   = sampleBest  [5] <= -2;
+        bool playerMakes = samplePlayer[5] <= -2;
         output.WriteLine($"");
         output.WriteLine($"Spot-check: {sample.Xgid}");
         output.WriteLine($"  Board[20]           = {sample.Board[20]}  (must be < 2)");
-        output.WriteLine($"  AfterBestBoard[5]   = {sample.AfterBestBoard[5]}  (<= -2? {bestMakes})");
-        output.WriteLine($"  AfterPlayerBoard[5] = {sample.AfterPlayerBoard[5]}  (<= -2? {playerMakes})");
+        output.WriteLine($"  AfterBestBoard[5]   = {sampleBest[5]}  (<= -2? {bestMakes})");
+        output.WriteLine($"  AfterPlayerBoard[5] = {samplePlayer[5]}  (<= -2? {playerMakes})");
         output.WriteLine($"  XOR holds: {bestMakes ^ playerMakes}");
         Assert.True(bestMakes ^ playerMakes);
     }

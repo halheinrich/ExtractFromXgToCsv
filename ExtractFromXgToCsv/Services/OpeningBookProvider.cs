@@ -4,8 +4,8 @@ namespace ExtractFromXgToCsv.Services;
 
 /// <summary>
 /// Resolves, loads, and holds XG's opening-book database
-/// (<c>OpeningBookV2.ob</c>) once for the Local-mode processing pipeline, then
-/// offers it as ready-to-pass <see cref="XgIteratorOptions"/>. Registered as a
+/// (<c>OpeningBookV2.ob</c>) once for the Local-mode processing pipeline, which
+/// hands it to the iterators through <see cref="XgIteratorOptions"/>. Registered as a
 /// singleton (Local mode only) so the ~13.6&#160;MB database is read and
 /// decoded a single time per process — the book is immutable after load and
 /// safe for the concurrent reads the iterators perform.
@@ -23,8 +23,8 @@ namespace ExtractFromXgToCsv.Services;
 ///
 /// <para>
 /// A disabled key, a missing file, or an unreadable/invalid book is logged and
-/// degrades gracefully: <see cref="Book"/> and <see cref="IteratorOptions"/>
-/// are <see langword="null"/>, book-analysed decisions stamp their unenriched
+/// degrades gracefully: <see cref="Book"/> is <see langword="null"/>,
+/// book-analysed decisions stamp their unenriched
 /// "Book V2" / level Unknown form, and extraction proceeds. Loading the book is
 /// never allowed to fail a run.
 /// </para>
@@ -51,22 +51,18 @@ public sealed class OpeningBookProvider
         ArgumentNullException.ThrowIfNull(logger);
 
         Book = Load(ResolvePath(configuration), logger);
-        IteratorOptions = Book is null ? null : new XgIteratorOptions(Book);
     }
 
     /// <summary>
     /// The loaded book, or <see langword="null"/> when enrichment is disabled,
     /// the file is absent, or it could not be read as a valid opening book.
     /// </summary>
+    /// <remarks>
+    /// The provider offers the book, not iterator options: the options also
+    /// carry the run's ranking, which is the application's and not this
+    /// provider's, so the processor builds them from this book and that ranking.
+    /// </remarks>
     public OpeningBook? Book { get; }
-
-    /// <summary>
-    /// Iterator options carrying the loaded book, or <see langword="null"/> when
-    /// no book is available — pass straight to <see cref="XgDecisionIterator"/>'s
-    /// <c>options</c> parameter, where a <see langword="null"/> is the "default
-    /// behaviour" (unenriched) signal the iterator already honours.
-    /// </summary>
-    public XgIteratorOptions? IteratorOptions { get; }
 
     /// <summary>How <see cref="ResolvePath"/> arrived at (or declined) a path.</summary>
     internal enum PathSource

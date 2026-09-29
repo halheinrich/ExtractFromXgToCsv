@@ -1,4 +1,5 @@
-﻿using BgDataTypes_Lib;
+using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Services;
 using System.Text.Json;
 using Xunit;
@@ -9,21 +10,9 @@ public class XgProcessingServiceTests
 {
     private readonly XgProcessingService _svc = new();
 
-    private static DecisionRow MakeRow(int index) => new()
-    {
-        Id = new XgpDecisionId("test.xgp"),
-        Xgid = $"XGID=test{index}",
-        Error = 0.01 * index,
-        MatchLength = 7,
-        Player = "Alice",
-        SourceFile = "TestMatch.xg",
-        Game = 1,
-        MoveNumber = index,
-        Roll = 31,
-        AnalysisDepth = "3-ply",
-        Equity = 0.5,
-        Board = new int[26],
-    };
+    private static DecisionRow MakeRow(int index) => TestRecords.Row(
+        TestRecords.CheckerPlay(
+            id: new XgDecisionId("TestMatch.xg", Game: 1, MoveNumber: index, IsCube: false)));
 
     [Fact]
     public void BuildCsv_HeaderAndRowCount()
@@ -41,51 +30,42 @@ public class XgProcessingServiceTests
     {
         var items = new List<BgDecisionData>
         {
-            new()
-            {
-                Id = new XgpDecisionId("test.xgp"),
-                Position = new PositionData { Mop = new int[26], OnRollNeeds = 3, OpponentNeeds = 4 },
-                Decision = new DecisionData { IsCube = false, Dice = [3, 1] },
-                Descriptive = new DescriptiveData { MatchLength = 7, OnRollName = "Alice" },
-            },
-            new()
-            {
-                Id = new XgpDecisionId("test.xgp"),
-                Position = new PositionData { Mop = new int[26], OnRollNeeds = 5, OpponentNeeds = 2 },
-                Decision = new DecisionData { IsCube = true, Dice = [0, 0] },
-                Descriptive = new DescriptiveData { MatchLength = 7, OnRollName = "Bob" },
-            }
+            TestRecords.CheckerPlay(),
+            TestRecords.Cube(),
         };
 
         var json = _svc.BuildDiagramJson(items);
         var deserialized = JsonSerializer.Deserialize<List<BgDecisionData>>(json);
 
         Assert.NotNull(deserialized);
-        Assert.Equal(2, deserialized.Count);
+        Assert.Equal(
+            [DecisionKind.CheckerPlay, DecisionKind.Cube],
+            deserialized.Select(d => d.Kind));
     }
 
     [Fact]
     public void BuildDiagramJson_RoundTripsProperties()
     {
-        var item = new BgDecisionData
-        {
-            Id = new XgpDecisionId("test.xgp"),
-            Position = new PositionData { Mop = new int[26], OnRollNeeds = 3, OpponentNeeds = 4, CubeSize = 2 },
-            Decision = new DecisionData { IsCube = true, Dice = [0, 0], NoDoubleEquity = 0.45 },
-            Descriptive = new DescriptiveData { MatchLength = 9, OnRollName = "Alice", OpponentName = "Bob" },
-        };
+        var item = TestRecords.Cube(
+            position: TestRecords.Position(
+                mop: TestRecords.Cube().Position.Mop,
+                cubeSize: 2,
+                cubeOwner: CubeOwner.OnRoll,
+                session: TestRecords.MatchSession(length: 9, onRollNeeds: 3, opponentNeeds: 4)),
+            decision: TestRecords.CubeData(noDoubleEquity: 0.45),
+            descriptive: TestRecords.Descriptive(onRollName: "Alice", opponentName: "Bob"));
 
         var json = _svc.BuildDiagramJson([item]);
         var list = JsonSerializer.Deserialize<List<BgDecisionData>>(json);
 
         Assert.NotNull(list);
-        var rt = list[0];
-        Assert.Equal(3, rt.Position.OnRollNeeds);
-        Assert.Equal(4, rt.Position.OpponentNeeds);
+        var rt = Assert.IsType<CubeDecision>(Assert.Single(list));
+        var match = Assert.IsType<MatchSession>(rt.Position.Session);
+        Assert.Equal(9, match.Terms.Length);
+        Assert.Equal(3, match.OnRollNeeds);
+        Assert.Equal(4, match.OpponentNeeds);
         Assert.Equal(2, rt.Position.CubeSize);
-        Assert.True(rt.Decision.IsCube);
         Assert.Equal(0.45, rt.Decision.NoDoubleEquity);
-        Assert.Equal(9, rt.Descriptive.MatchLength);
         Assert.Equal("Alice", rt.Descriptive.OnRollName);
     }
 }

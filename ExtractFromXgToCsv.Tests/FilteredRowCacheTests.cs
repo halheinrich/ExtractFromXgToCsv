@@ -1,4 +1,5 @@
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Services;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -12,20 +13,19 @@ namespace ExtractFromXgToCsv.Tests;
 /// through the panel's private fields by reflection: no build before the
 /// first Refilter; build on the first Refilter; cache hit on the same
 /// <see cref="FilterConfig"/> reference; rebuild on a new reference; row
-/// replacement re-projects without rebuilding. The panel-side routing is
-/// pinned separately by <c>WebModePanelFilteringTests</c>.
+/// replacement re-projects without rebuilding. And the run's one ranking:
+/// the rows and the records are filtered under the cache's ranking, never
+/// two. The panel-side routing is pinned separately by
+/// <c>WebModePanelFilteringTests</c>.
 /// </summary>
 public class FilteredRowCacheTests
 {
-    private static DecisionRow Row(string player, string file = "a.xgp") =>
-        new() { Id = new XgpDecisionId(file), Player = player, Roll = 31 };
+    private static CheckerPlayDecision Record(string player) =>
+        TestRecords.CheckerPlay(descriptive: TestRecords.Descriptive(onRollName: player));
 
-    private static BgDecisionData DiagramRow(string player, string file = "a.xgp") =>
-        new()
-        {
-            Id = new XgpDecisionId(file),
-            Descriptive = new DescriptiveData { OnRollName = player },
-        };
+    private static DecisionRow Row(string player) => TestRecords.Row(Record(player));
+
+    private static FilteredRowCache NewCache() => new(PlayRanking.Equity);
 
     private static FilterConfig AliceOnly() =>
         new() { Players = new List<string> { "Alice" } };
@@ -33,9 +33,9 @@ public class FilteredRowCacheTests
     [Fact]
     public void ReplaceRows_BeforeAnyRefilter_DoesNotBuild_AndProjectsNothing()
     {
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
 
-        cache.ReplaceRows(new[] { Row("Alice") }, new[] { DiagramRow("Alice") });
+        cache.ReplaceRows(new[] { Row("Alice") }, new[] { Record("Alice") });
 
         Assert.Null(cache.BuiltSet);
         Assert.Single(cache.Rows);
@@ -46,22 +46,22 @@ public class FilteredRowCacheTests
     [Fact]
     public void FirstRefilter_Builds_AndProjectsBothRowKinds()
     {
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
         cache.ReplaceRows(
             new[] { Row("Alice"), Row("Bob") },
-            new[] { DiagramRow("Alice"), DiagramRow("Bob") });
+            new[] { Record("Alice"), Record("Bob") });
 
         cache.Refilter(AliceOnly());
 
         Assert.NotNull(cache.BuiltSet);
         Assert.Equal("Alice", Assert.Single(cache.FilteredRows).Player);
-        Assert.Equal("Alice", Assert.Single(cache.FilteredDiagramRows).Player);
+        Assert.Equal("Alice", Assert.Single(cache.FilteredDiagramRows).Descriptive.OnRollName);
     }
 
     [Fact]
     public void Refilter_SameConfigReference_ReusesBuiltSet()
     {
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
         var cfg = AliceOnly();
 
         cache.Refilter(cfg);
@@ -74,7 +74,7 @@ public class FilteredRowCacheTests
     [Fact]
     public void Refilter_NewConfigReference_Rebuilds()
     {
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
         cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
 
         cache.Refilter(AliceOnly());
@@ -91,13 +91,13 @@ public class FilteredRowCacheTests
         // The seam the file-load site depends on: rows that arrive while a
         // filter is applied are filtered through it in the same call — no
         // second Refilter, and no Build.
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
         cache.Refilter(AliceOnly());
         var built = cache.BuiltSet;
 
         cache.ReplaceRows(
             new[] { Row("Alice"), Row("Bob"), Row("Alice") },
-            new[] { DiagramRow("Bob") });
+            new[] { Record("Bob") });
 
         Assert.Same(built, cache.BuiltSet);
         Assert.Equal(2, cache.FilteredRows.Count);
@@ -108,7 +108,7 @@ public class FilteredRowCacheTests
     [Fact]
     public void ReplaceRows_ReplacesRatherThanAccumulates()
     {
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
         cache.Refilter(new FilterConfig());
         cache.ReplaceRows(new[] { Row("Alice") }, Array.Empty<BgDecisionData>());
 
@@ -121,10 +121,10 @@ public class FilteredRowCacheTests
     [Fact]
     public void Clear_EmptiesRowsAndProjections_ButKeepsTheMaterializedFilter()
     {
-        var cache = new FilteredRowCache();
+        var cache = NewCache();
         cache.Refilter(AliceOnly());
         var built = cache.BuiltSet;
-        cache.ReplaceRows(new[] { Row("Alice") }, new[] { DiagramRow("Alice") });
+        cache.ReplaceRows(new[] { Row("Alice") }, new[] { Record("Alice") });
 
         cache.Clear();
 
@@ -136,5 +136,101 @@ public class FilteredRowCacheTests
         Assert.Same(built, cache.BuiltSet);
         cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
         Assert.Equal("Alice", Assert.Single(cache.FilteredRows).Player);
+    }
+
+    // -----------------------------------------------------------------------
+    //  One run, one ranking
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// A 3-1 whose best play differs by ranking: the player played 8/5 6/5,
+    /// at 4-ply +0.25, beside 13/10 6/5 at 2-ply +0.50. Under equity the
+    /// shallower play is best, so the player erred by 0.25; under depth first
+    /// the deeper play is best, and the player's is it, erring by 0.
+    /// </summary>
+    private static CheckerPlayDecision RankingSplit() =>
+        TestRecords.CheckerPlay(decision: TestRecords.CheckerPlayData(
+            plays:
+            [
+                TestRecords.Candidate(
+                    play: [new(8, 5), new(6, 5)], analysisLevel: AnalysisLevel.Ply4, equity: 0.25),
+                TestRecords.Candidate(
+                    play: [new(13, 10), new(6, 5)], analysisLevel: AnalysisLevel.Ply2, equity: 0.50),
+            ],
+            userPlayIndex: 0));
+
+    /// <summary>
+    /// The pin for halheinrich/backgammon#273's one-run-one-ranking rule: a
+    /// run's rows and its diagram records are filtered under the same ranking,
+    /// the cache's. "Erred by at least 0.1" admits the split decision under
+    /// equity and not under depth first, so each case shows the row and the
+    /// record judged alike — and the depth-first case shows the record was
+    /// judged under the cache's ranking, since a view under the equity default
+    /// would have admitted it.
+    /// </summary>
+    [Theory]
+    [InlineData(PlayRanking.Equity, 1)]
+    [InlineData(PlayRanking.DepthFirst, 0)]
+    public void OneRun_RowsAndRecords_AreFilteredUnderTheCachesRanking(
+        PlayRanking ranking, int expectedMatches)
+    {
+        var record = RankingSplit();
+        var cache = new FilteredRowCache(ranking);
+        cache.ReplaceRows([DecisionRow.From(record, ranking)], [record]);
+
+        cache.Refilter(new FilterConfig { ErrorMin = 0.1 });
+
+        Assert.Equal(ranking, cache.Ranking);
+        Assert.Equal(expectedMatches, cache.FilteredRows.Count);
+        Assert.Equal(expectedMatches, cache.FilteredDiagramRows.Count);
+    }
+
+    [Fact]
+    public void ReplaceRows_RefusesARowBuiltForAnotherRanking_AndReplacesNothing()
+    {
+        var cache = NewCache();
+        cache.ReplaceRows([Row("Alice")], [Record("Alice")]);
+
+        var ex = Assert.Throws<ArgumentException>(() => cache.ReplaceRows(
+            [TestRecords.Row(Record("Bob"), PlayRanking.DepthFirst)], [Record("Bob")]));
+
+        Assert.Equal("rows", ex.ParamName);
+        Assert.Equal("Alice", Assert.Single(cache.Rows).Player);
+    }
+
+    [Fact]
+    public void Constructor_RefusesAnUndefinedRanking()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new FilteredRowCache((PlayRanking)99));
+    }
+
+    // -----------------------------------------------------------------------
+    //  The collection rider
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// What the cache hands out is immutable, so no holder can change what
+    /// the cache or another holder reads (the collection rider of
+    /// halheinrich/backgammon#273): each list refuses a write through the
+    /// mutable interface it might be cast to.
+    /// </summary>
+    [Fact]
+    public void HandedOutCollections_AreImmutable()
+    {
+        var cache = NewCache();
+        cache.ReplaceRows([Row("Alice")], [Record("Alice")]);
+        cache.Refilter(new FilterConfig());
+
+        AssertImmutable(cache.Rows);
+        AssertImmutable(cache.FilteredRows);
+        AssertImmutable(cache.FilteredDiagramRows);
+    }
+
+    private static void AssertImmutable<T>(IReadOnlyList<T> list)
+    {
+        var asList = Assert.IsAssignableFrom<IList<T>>(list);
+        Assert.True(asList.IsReadOnly);
+        Assert.Throws<NotSupportedException>(() => asList.Add(list[0]));
+        Assert.Throws<NotSupportedException>(() => asList[0] = list[0]);
     }
 }

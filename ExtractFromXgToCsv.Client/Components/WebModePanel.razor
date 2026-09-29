@@ -283,8 +283,10 @@
     // the filtered projections all live in the cache; the panel only decides
     // *when* the filter is in effect (the FilterApplied gate) and renders from
     // the cache's properties. Exposed internally so wire tests can pin the
-    // panel→cache routing without reflection.
-    private readonly FilteredRowCache _rowCache = new();
+    // panel→cache routing without reflection. The cache is the run's, built
+    // for the application's one ranking; extraction reads the ranking back
+    // from it, so the rows and the records it filters are one ranking's.
+    private readonly FilteredRowCache _rowCache = new(AppRanking.Ranking);
     internal FilteredRowCache RowCache => _rowCache;
 
     // OpeningBookV2.ob is ~13.6 MB; the InputFile stream default cap (500 KB)
@@ -495,15 +497,18 @@
     // the filter already in effect — so rows loaded after an Apply are
     // filtered immediately, and enrichment never depends on the order the
     // file and book picks were made in. Called on a fresh file selection and
-    // whenever the book changes.
+    // whenever the book changes. Both extractions state the cache's ranking —
+    // the run's one ranking — so the rows are built for the ranking the
+    // records are filtered under.
     private void ExtractLoadedFiles()
     {
+        var ranking = _rowCache.Ranking;
         var rows = new List<DecisionRow>();
         var diagramRows = new List<BgDecisionData>();
         foreach (var (name, bytes) in _fileBytes)
         {
-            rows.AddRange(Processor.ExtractDecisions(bytes, name, _openingBook));
-            diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, name, _openingBook));
+            rows.AddRange(Processor.ExtractDecisions(bytes, name, ranking, _openingBook));
+            diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, name, ranking, _openingBook));
         }
         _rowCache.ReplaceRows(rows, diagramRows);
     }

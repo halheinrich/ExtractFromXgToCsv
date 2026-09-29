@@ -1,14 +1,23 @@
-﻿using BgDataTypes_Lib;
+using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Services;
+using ExtractFromXgToCsv.Client.Shared;
 using XgFilter_Lib.Enums;
 using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
+/// <summary>
+/// The CSV pathway (rows) and the Diagram JSON pathway (records) see the same
+/// decisions through the same filter, under the application's one ranking:
+/// each row is the producer's, built for <see cref="AppRanking.Ranking"/>, and
+/// each record is judged through its view for that same ranking.
+/// </summary>
 public class OutputConsistencyTests
 {
     private readonly XgProcessingService _svc = new();
+
+    private static readonly PlayRanking Ranking = AppRanking.Ranking;
 
     [Theory]
     [InlineData("MatchTest.xg")]
@@ -17,8 +26,8 @@ public class OutputConsistencyTests
     {
         var bytes = FixtureHelper.ReadFixture(fileName);
 
-        var rows = _svc.ExtractDecisions(bytes, fileName);
-        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName);
+        var rows = _svc.ExtractDecisions(bytes, fileName, Ranking);
+        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName, Ranking);
 
         Assert.Equal(rows.Count, diagrams.Count);
     }
@@ -31,20 +40,26 @@ public class OutputConsistencyTests
     {
         var bytes = FixtureHelper.ReadFixture(fileName);
 
-        var rows = _svc.ExtractDecisions(bytes, fileName);
-        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName);
+        var rows = _svc.ExtractDecisions(bytes, fileName, Ranking);
+        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName, Ranking);
 
         for (int i = 0; i < rows.Count; i++)
         {
             IDecisionFilterData r = rows[i];
-            IDecisionFilterData d = diagrams[i];
+            IDecisionFilterData d = diagrams[i].ViewFor(Ranking);
 
+            Assert.Equal(Ranking, r.Ranking);
+            Assert.Equal(r.Ranking, d.Ranking);
+            Assert.Equal(r.Kind, d.Kind);
             Assert.Equal(r.Player, d.Player);
-            Assert.Equal(r.IsCube, d.IsCube);
-            Assert.Equal(r.MatchLength, d.MatchLength);
-            Assert.Equal(r.OnRollNeeds, d.OnRollNeeds);
-            Assert.Equal(r.OpponentNeeds, d.OpponentNeeds);
-            Assert.Equal(r.IsCrawford, d.IsCrawford);
+            Assert.Equal(r.Session, d.Session);
+            Assert.Equal(r.MoveNumber, d.MoveNumber);
+            Assert.Equal(r.IsStandardStart, d.IsStandardStart);
+            Assert.Equal(r.PlayerResult, d.PlayerResult);
+            Assert.Equal(r.Board, d.Board);
+            Assert.Equal(r.Dice, d.Dice);
+            Assert.Equal(r.AfterBestBoard, d.AfterBestBoard);
+            Assert.Equal(r.AfterPlayerBoard, d.AfterPlayerBoard);
         }
     }
 
@@ -57,13 +72,13 @@ public class OutputConsistencyTests
     {
         var bytes = FixtureHelper.ReadFixture(fileName);
 
-        var rows = _svc.ExtractDecisions(bytes, fileName);
-        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName);
+        var rows = _svc.ExtractDecisions(bytes, fileName, Ranking);
+        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName, Ranking);
 
         var fs = new FilterConfig { DecisionType = decisionType }.Build();
 
         var filteredRows = rows.Where(r => fs.Matches(r)).Count();
-        var filteredDiagrams = diagrams.Where(d => fs.Matches(d)).Count();
+        var filteredDiagrams = diagrams.Where(d => fs.Matches(d.ViewFor(Ranking))).Count();
 
         Assert.Equal(filteredRows, filteredDiagrams);
     }

@@ -8,10 +8,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Tests for <see cref="OpeningBookProvider"/>: the pure path resolution
 /// (config key absent / empty / explicit) and the load-and-degrade behaviour
-/// (a real fixture book loads and yields iterator options; a missing or empty
-/// configuration degrades to no book without throwing). The provider is the
-/// single place Local mode turns configuration into an
-/// <see cref="ConvertXgToJson_Lib.XgIteratorOptions"/> for the pipeline.
+/// (a real fixture book loads; a missing or empty configuration degrades to
+/// no book without throwing). The provider is the single place Local mode
+/// turns configuration into a loaded book; the processor pairs it with the
+/// run's ranking in the iterator options.
 /// </summary>
 public class OpeningBookProviderTests
 {
@@ -70,7 +70,7 @@ public class OpeningBookProviderTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void ExplicitPath_ToRealBook_LoadsAndExposesIteratorOptions()
+    public void ExplicitPath_ToRealBook_Loads()
     {
         Assert.True(File.Exists(BookFixturePath),
             $"Expected fixture not present: {BookFixturePath}. Copy OpeningBookV2.ob " +
@@ -80,17 +80,14 @@ public class OpeningBookProviderTests
 
         Assert.NotNull(provider.Book);
         Assert.True(provider.Book!.EntryCount > 0, "the shipped book has entries");
-        Assert.NotNull(provider.IteratorOptions);
-        Assert.Same(provider.Book, provider.IteratorOptions!.OpeningBook);
     }
 
     [Fact]
-    public void EmptyConfig_DisablesEnrichment_NoBookNoOptions()
+    public void EmptyConfig_DisablesEnrichment_NoBook()
     {
         var provider = Provider(openingBookPath: "");
 
         Assert.Null(provider.Book);
-        Assert.Null(provider.IteratorOptions);
     }
 
     [Fact]
@@ -101,6 +98,5 @@ public class OpeningBookProviderTests
         var provider = Provider(missing);
 
         Assert.Null(provider.Book);
-        Assert.Null(provider.IteratorOptions);
     }
 }

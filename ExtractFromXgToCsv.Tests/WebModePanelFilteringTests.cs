@@ -1,7 +1,9 @@
+using BgDataTypes_Lib;
 using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
+using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -92,5 +94,35 @@ public class WebModePanelFilteringTests : BunitContext
             .Add(c => c.FilterConfig, new FilterConfig())
             .Add(c => c.FilterApplied, false));
         Assert.Same(built1, cut.Instance.RowCache.BuiltSet);
+    }
+
+    /// <summary>
+    /// One run, one ranking, through the panel (halheinrich/backgammon#273):
+    /// a real file selection loads rows built for the application's ranking
+    /// into a cache for that same ranking, so the preview's rows and the
+    /// Diagram JSON's records are filtered under one ranking. The cache's own
+    /// test pins that it filters both under its ranking; this pins that the
+    /// panel builds it for the application's, and extracts for it.
+    /// </summary>
+    [Fact]
+    public void FileSelection_LoadsAndFiltersUnderTheAppsOneRanking()
+    {
+        const string fixture = "MTCH4064.xg";
+        var cut = Render<WebModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.Csv)
+            .Add(c => c.FilterConfig, new FilterConfig())
+            .Add(c => c.FilterApplied, true));
+
+        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+        cut.FindComponents<InputFile>()[0].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(fixture), fixture));
+
+        var cache = cut.Instance.RowCache;
+        Assert.Equal(AppRanking.Ranking, cache.Ranking);
+        Assert.NotEmpty(cache.Rows);
+        Assert.All(cache.Rows, r => Assert.Equal(AppRanking.Ranking, r.Ranking));
+        Assert.Equal(
+            cache.FilteredRows.Select(r => r.Id),
+            cache.FilteredDiagramRows.Select(d => d.Id));
     }
 }

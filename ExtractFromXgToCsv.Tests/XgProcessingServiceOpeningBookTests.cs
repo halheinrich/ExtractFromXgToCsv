@@ -1,5 +1,7 @@
+using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Services;
+using ExtractFromXgToCsv.Client.Shared;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -61,8 +63,8 @@ public class XgProcessingServiceOpeningBookTests
     {
         var xgBytes = FixtureHelper.ReadFixture(BookOpeningFixture);
 
-        var row = _svc.ExtractDecisions(xgBytes, BookOpeningFixture, LoadBook())
-            .Single(r => !r.IsCube && r.Game == 9 && r.MoveNumber == 1);
+        var row = _svc.ExtractDecisions(xgBytes, BookOpeningFixture, AppRanking.Ranking, LoadBook())
+            .Single(r => r.Kind == DecisionKind.CheckerPlay && r.Game == 9 && r.MoveNumber == 1);
 
         Assert.Equal(EnrichedDepth, row.AnalysisDepth);
     }
@@ -72,8 +74,8 @@ public class XgProcessingServiceOpeningBookTests
     {
         var xgBytes = FixtureHelper.ReadFixture(BookOpeningFixture);
 
-        var row = _svc.ExtractDecisions(xgBytes, BookOpeningFixture)
-            .Single(r => !r.IsCube && r.Game == 9 && r.MoveNumber == 1);
+        var row = _svc.ExtractDecisions(xgBytes, BookOpeningFixture, AppRanking.Ranking)
+            .Single(r => r.Kind == DecisionKind.CheckerPlay && r.Game == 9 && r.MoveNumber == 1);
 
         Assert.Equal("Book V2", row.AnalysisDepth);
     }
@@ -83,12 +85,11 @@ public class XgProcessingServiceOpeningBookTests
     {
         var xgBytes = FixtureHelper.ReadFixture(BookOpeningFixture);
 
-        var req = _svc.ExtractDiagramRequests(xgBytes, BookOpeningFixture, LoadBook())
-            .Single(r => !r.Decision.IsCube
-                      && r.Descriptive.Game == 9
-                      && r.Descriptive.MoveNumber == 1);
+        var req = _svc.ExtractDiagramRequests(xgBytes, BookOpeningFixture, AppRanking.Ranking, LoadBook())
+            .OfType<CheckerPlayDecision>()
+            .Single(r => r.Game == 9 && r.MoveNumber == 1);
 
-        Assert.Equal(EnrichedDepth, req.Decision.Plays[0].Depth);
+        Assert.Equal(EnrichedDepth, req.Decision.RankedBy(AppRanking.Ranking).Best.Candidate.Depth);
     }
 
     [Fact]
@@ -96,11 +97,10 @@ public class XgProcessingServiceOpeningBookTests
     {
         var xgBytes = FixtureHelper.ReadFixture(BookOpeningFixture);
 
-        var req = _svc.ExtractDiagramRequests(xgBytes, BookOpeningFixture)
-            .Single(r => !r.Decision.IsCube
-                      && r.Descriptive.Game == 9
-                      && r.Descriptive.MoveNumber == 1);
+        var req = _svc.ExtractDiagramRequests(xgBytes, BookOpeningFixture, AppRanking.Ranking)
+            .OfType<CheckerPlayDecision>()
+            .Single(r => r.Game == 9 && r.MoveNumber == 1);
 
-        Assert.Equal("Book V2", req.Decision.Plays[0].Depth);
+        Assert.Equal("Book V2", req.Decision.RankedBy(AppRanking.Ranking).Best.Candidate.Depth);
     }
 }

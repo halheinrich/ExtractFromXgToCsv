@@ -1,4 +1,5 @@
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Shared;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -24,14 +25,8 @@ public class XgpNameAllocatorTests
             },
             filters ?? new FilterConfig());
 
-    private static DecisionRow Row(int roll = 31) => new()
-    {
-        Id = new XgDecisionId("t.xg", 1, 1, roll == 0),
-        Roll = roll,
-        MatchLength = 7,
-        OnRollNeeds = 3,
-        OpponentNeeds = 5,
-    };
+    private static DecisionRow Row(int moveNumber = 1) => TestRecords.Row(TestRecords.CheckerPlay(
+        id: new XgDecisionId("t.xg", Game: 1, MoveNumber: moveNumber, IsCube: false)));
 
     [Fact]
     public void DuplicateBaseNames_GetWindowsStyleSuffixes()
@@ -89,10 +84,10 @@ public class XgpNameAllocatorTests
         // same counter slot so the persisted counter matches what's on disk.
         var allocator = Create("pos{n}");
 
-        Assert.Equal("pos001.xgp", allocator.Peek(Row(roll: 21))); // write fails
-        Assert.Equal("pos001.xgp", allocator.Peek(Row(roll: 43))); // next decision
-        allocator.Commit(Row(roll: 43));
-        Assert.Equal("pos002.xgp", allocator.Peek(Row(roll: 65)));
+        Assert.Equal("pos001.xgp", allocator.Peek(Row(moveNumber: 1))); // write fails
+        Assert.Equal("pos001.xgp", allocator.Peek(Row(moveNumber: 2))); // next decision
+        allocator.Commit(Row(moveNumber: 2));
+        Assert.Equal("pos002.xgp", allocator.Peek(Row(moveNumber: 3)));
     }
 
     [Fact]

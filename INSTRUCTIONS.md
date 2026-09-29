@@ -20,15 +20,17 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 
 - **ConvertXgToJson_Lib** — `XgDecisionIterator`, `XgFileReader`, `XgIteratorState`
   for .xg/.xgp reading and decision iteration; `XgpExporter` (slice surface)
-  for the per-decision .xgp export pathway; `OpeningBook` + `XgIteratorOptions`
-  for opening-book enrichment (the loaded book rides `XgIteratorOptions` into
-  the iterators — see "Opening-book enrichment").
+  for the per-decision .xgp export pathway; `XgIteratorOptions`, which carries
+  the run's ranking and the optional `OpeningBook` into the iterators (see
+  "The ranking" and "Opening-book enrichment").
 - **XgFilter_Lib** — `DecisionFilterSet`, `FilteredDecisionIterator`,
   `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
-- **BgDataTypes_Lib** — `DecisionRow`, `BgDecisionData`, `IDecisionFilterData`
-  and constituent types. All four output pathways
-  (CSV, Diagram JSON, PPTX, and PDF) share the filter pipeline via
-  `IDecisionFilterData`.
+- **BgDataTypes_Lib** — `DecisionRow`, the decision records (`BgDecisionData`
+  and its two kinds, `CheckerPlayDecision` and `CubeDecision`),
+  `IDecisionFilterData`, `PlayRanking` and constituent types. All four output
+  pathways (CSV, Diagram JSON, PPTX, and PDF) share the filter pipeline via
+  `IDecisionFilterData`: a row is its own view, and a record is filtered
+  through its view for the run's ranking (`ViewFor`).
 - **XgFilter_Razor** — `FilterSurface` (the one consumer-facing filter
   composite: filter panel + saved-filters panel + all wiring, the
   applied-holder mediation, and the source-change rule) plus the non-visual
@@ -57,8 +59,15 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
   storage key (halheinrich/backgammon#93). **Referenced by the test csproj
   only** — it is `IsPackable=false`, ships beside nothing, and no app-graph
   project may reference it.
-- **BackgammonDiagram_Lib** — `DiagramRequest.FromDecisionData` and the
-  diagram model/options types. Native-free (SVG-only) core.
+- **BgDataTypes_Lib.TestSupport** — the producer's record builders,
+  `TestRecords`: the one way this repo's tests build a record or a row, so no
+  test restates a record's construction. **Referenced by the test csproj
+  only**, like XgFilter_Razor.Testing; the assembly declares itself
+  unsupported on the browser platform, so a use from the Client is a CA1416
+  build error. Production code builds records only through the producers'
+  public surface (the name preview's sample, see "XGP export").
+- **BackgammonDiagram_Lib** — `DiagramRequest.ForDecision(record, ranking)`
+  and the diagram model/options types. Native-free (SVG-only) core.
 - **BackgammonDiagram_Lib.ExportRaster** — `DiagramRasterRenderer.RenderPptx`
   / `RenderPdf` for the PPTX and PDF output pathways. Server-side only; the
   client csproj does not reference it (the native rasterization deps —
@@ -111,14 +120,17 @@ and `BrowserStorage`. Three areas:
   storage-unavailable condition and its notice's dismissal).
 - **Shared** — the wire types the server references too (`ProcessRequest`,
   `ProcessingProgress` and `SkippedItem`, `JobPhase`, `OutputFormat`,
-  `AppModeResponse`, `OpeningBookStatus`, the strict enum converter), and the
+  `AppModeResponse`, `OpeningBookStatus`, the strict enum converter), the
   `.xgp` naming engine (`XgpExportOptions`, `XgpNameAllocator` and its
-  internal parts). See Client-shared types.
+  internal parts) with the name preview's sample (`XgpNamePreview`), and
+  `AppRanking`, the application's one ranking, which both modes read. See
+  Client-shared types.
 
 **`ExtractFromXgToCsv.Tests/`** — xUnit, one class per contract: direct tests
 of the services and the naming engine, bUnit tests of `Home` and both panels,
 hosted `WebApplicationFactory` pins for the file relay, and processor runs
-over real files. Shared support: `bUnitTestHelpers` (private-field access and
+over real files. Records and rows a test states come from the producer's
+`TestRecords`. Shared support: `bUnitTestHelpers` (private-field access and
 stub HTTP handlers), `NoticeAssert` (reads a rendered notice box back against
 the shared component's documented shape), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
 (the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
@@ -160,6 +172,38 @@ XGP export pathway can re-parse its source files at download time — raw
 zlib-compressed bytes are smaller than parsed record graphs and are already
 bounded by the 50 MB selection cap.
 
+### The ranking: one run, one ranking
+
+Which checker play is best — and so a play's error, the best play's depth
+and after-board, and the order a diagram draws — is a ranking's
+(`PlayRanking`; the umbrella's `SPEC-scoring.md` §2a, ruled on
+halheinrich/backgammon#282). This app has no ranking setting, so it selects
+the specified default, `Equity` ("Apps without the setting use the default"),
+**once**: `AppRanking.Ranking` in `Client/Shared`. Every producer operation
+whose meaning depends on a ranking is handed that same value, so one run's
+rows, its filtering and its diagrams are interpreted under one ranking; no
+producer's own default stands in for it (Hal, 2026-09-29, on
+halheinrich/backgammon#273). What a ranking means is BgDataTypes_Lib's, and
+nothing here restates it. The sites:
+
+- **Local mode** — `LocalFolderProcessor` takes the value once into
+  `_ranking` and builds its one `XgIteratorOptions` from it and the loaded
+  book, so every row is built for it; the Diagram JSON and deck pathways
+  filter each record through `record.ViewFor(_ranking)`, and the deck draws
+  each through `DiagramRequest.ForDecision(record, _ranking)`.
+- **Web mode** — `WebModePanel` builds its `FilteredRowCache` for the value,
+  and extraction reads the ranking back from the cache, so
+  `XgProcessingService.ExtractDecisions` / `ExtractDiagramRequests` (which
+  take the ranking as a required argument, as the producers do) build the rows
+  for the ranking the cache filters the records under. The cache refuses a
+  row built for another ranking.
+- **The name preview** — its sample row is `DecisionRow.From(record,
+  AppRanking.Ranking)`.
+
+`FilteredRowCacheTests` pins that a run's rows and records are filtered under
+the cache's ranking, under either ranking; `WebModePanelFilteringTests` pins
+that the panel runs under `AppRanking.Ranking`.
+
 ### XGP export
 
 Selecting the **XGP positions** output format emits the filtered decisions
@@ -189,7 +233,21 @@ by the naming engine in `Client/Shared`:
   Validation, rendering, and the UI's insert-token dropdown all derive from
   it; adding a token is one added element. Tokens render against an
   `XgpNameContext` (primitives + lib types only — the engine is deliberately
-  lib-ready).
+  lib-ready). `{dice}` is the row's roll, two digits in rolled order; a cube
+  decision has no roll (the row states none), and the token renders `00` for
+  it — the token's established file-name spelling of that absence,
+  presentation only, never a roll handed to any API (Hal, 2026-09-29,
+  halheinrich/backgammon#273). `{score}` is the row's `MatchScore`: `3a5a`,
+  `1a5aC` in a Crawford game, and for money `moneyJ` or `moneyNJ` by its
+  Jacoby rule. The bare `money` a row with no stated rule once rendered is
+  gone with the producer's change — every money session states its rule —
+  and is taken as is, with no compatibility spelling (Hal, 2026-09-29).
+- `XgpNamePreview.SampleRow` — the live preview's sample decision, a 3-1 at
+  3-away/5-away in a 7-point match, game 2, move 5. A real row: a record
+  built through the producers' public surface and projected by
+  `DecisionRow.From` for `AppRanking.Ranking`, so it cannot state a fact a
+  real row could not. App-level, beside the engine rather than in it: it
+  reads the app's ranking, and the engine stays lib-ready.
 - `XgpNameTemplate.TryParse` — the pattern grammar (unmatched/empty braces,
   unknown tokens, filename-illegal literals are parse-time errors; braces
   are delimiters only, with no escape syntax). `Render` never fails; token
@@ -367,16 +425,21 @@ export. In Local mode the count is the final
   gesture — every `HandleFileSelectionAsync` invocation, since each one
   replaces or clears the retained selection — so Home can bump the
   selection generation), and the XGP members.
-  The live row state — loaded decision and diagram rows, the materialized
-  `DecisionFilterSet`, and the filtered projections — lives in
+  The live row state — loaded decision rows and diagram records, the
+  materialized `DecisionFilterSet`, and the filtered projections — lives in
   `FilteredRowCache` (Client `Services/`); the panel's own filtering logic
   is one gate: `OnParametersSet` calls `Refilter(FilterConfig)` only when
   `FilterApplied` (Apply remains the materialization
-  point — no HTTP boundary to serialize across). The cache builds via
+  point — no HTTP boundary to serialize across). The cache is built for the
+  run's one ranking (see "The ranking"): it accepts only rows built for it and
+  filters each record through its view for it, built once when the records
+  arrive. It builds the filter via
   `FilterConfig.Build()` once per config instance (reference-identity
   cached); `ReplaceRows` re-projects fresh rows through the set already in
   effect — a panel-layer rule only, since end to end a selection is a
-  source change that re-gates first (see Pitfalls). The panel exposes the
+  source change that re-gates first (see Pitfalls). Every list it hands out
+  is an immutable array, replaced whole, never a live list (the collection
+  rider of halheinrich/backgammon#273). The panel exposes the
   cache internally (`RowCache`) as the wire-test seam. When an applied
   filter set excludes every loaded row (`Rows.Count > 0` but
   `FilteredRows.Count == 0`) the panel renders an explicit zero-match
@@ -551,7 +614,8 @@ pins the state→class binding for both panels.
   `request.XgpOptions`). The PPTX and PDF public methods are one-line
   wrappers around a shared private `ProcessDeckAsync` helper parameterized
   on the renderer delegate — both collect filtered decisions, map them via
-  `DiagramRequest.FromDecisionData`, and expand into Problem/Solution pairs
+  `DiagramRequest.ForDecision(record, ranking)` for the run's ranking, and
+  expand into Problem/Solution pairs
   rendered via `DiagramRasterRenderer.RenderPptx` or `RenderPdf`.
 - Stop → `POST /api/process/{jobId}/cancel`. Exit → `ShutdownController`.
 
@@ -641,11 +705,14 @@ safe). Resolution: the `OpeningBookPath` config key when set to a non-empty
 path; **absent** → auto-detect the default install
 (`C:\Program Files (x86)\eXtreme Gammon 2\OpeningBookV2.ob`); **empty** (`""`)
 → disabled. `ResolvePath` (the three-branch decision) is pure and separately
-tested; loading is the IO half. The provider exposes `IteratorOptions`
-(null when no book); `LocalFolderProcessor` holds that single value in a field
-and passes it as `options:` at all four iterator call sites (CSV, Diagram JSON,
-Xgp, deck). A null provider, a disabled key, a missing file, or an unreadable
-book all resolve to the same null-options / unenriched path.
+tested; loading is the IO half. The provider exposes the loaded `Book`
+(null when none) and not iterator options: the options also carry the run's
+ranking, which is the application's, not the provider's.
+`LocalFolderProcessor` builds its one `XgIteratorOptions` from the book and
+the run's ranking, holds it in a field, and passes it as `options:` at all
+four iterator call sites (CSV, Diagram JSON, Xgp, deck). A null provider, a
+disabled key, a missing file, or an unreadable book all resolve to the same
+null-book / unenriched path.
 `GET /api/openingbook/status` surfaces the load state so `LocalModePanel` can
 show a status line by the folder input.
 
@@ -656,8 +723,9 @@ producer's loader is path-based and WASM has no real path for picked bytes, so
 it stages the image to an Emscripten MEMFS temp file, calls
 `OpeningBook.TryLoad`, and deletes it — keeping components off both the path API
 and the temp-file mechanics. `ExtractDecisions` / `ExtractDiagramRequests` take
-an optional `OpeningBook?` and map it to options through one private
-`OptionsFor` helper. `WebModePanel` retains the loaded book alongside the raw
+the run's ranking and an optional `OpeningBook?`, and map the two to options
+through one private `OptionsFor` helper, which always states options, so the
+iterator's own default ranking never stands in. `WebModePanel` retains the loaded book alongside the raw
 file bytes and **re-extracts** on a book change, so a book chosen after the
 files still enriches them — pick order is irrelevant. A status line reports the
 entry count (or an invalid-file error).
@@ -672,6 +740,9 @@ lives in `FilteredRowCache.Refilter`, driven by `WebModePanel`'s
 see "FilterConfig materialization differs by mode" in Pitfalls. CSV,
 Diagram JSON, PPTX, and PDF pathways all feed the same filter set via
 `IDecisionFilterData` — one filter implementation, four extraction outputs.
+A row is its own view, built for the run's ranking; a record is not a view,
+and is filtered through `record.ViewFor(ranking)` for that same ranking (see
+"The ranking").
 
 The analysis-depth facet is three symmetric per-mode pairs (XgFilter_Lib
 cbca4b3): `IncludeEvaluations`/`EvaluationLevels`,
@@ -692,7 +763,9 @@ corpora.
 ### Deck output (PPTX/PDF)
 
 Local mode only. Filtered `BgDecisionData` is buffered in memory, mapped to
-`DiagramRequest` via `DiagramRequest.FromDecisionData`, then expanded to a
+`DiagramRequest` via `DiagramRequest.ForDecision(record, ranking)` — the
+ranking each was just filtered under, so the diagram orders, numbers and
+marks the candidates by the run's one ranking — then expanded to a
 Problem/Solution pair via `DiagramRequestExtensions.ToProblemSolutionPair`.
 The pairs are flattened into a single deck (two slides/pages per decision —
 problem first, then solution) via `DiagramRasterRenderer.RenderPptx` or
@@ -712,16 +785,19 @@ xUnit, targets .NET 10. Fixture files live in the umbrella
 `TestData/FixtureFiles/*.xg` directory and are referenced from the test
 project via relative path — not duplicated here.
 
-- `XgProcessingServiceTests` — end-to-end Local-mode pipeline against
-  fixture files.
+- `XgProcessingServiceTests` — the service's CSV and Diagram JSON builders
+  over producer-built rows and records (`TestRecords`): the CSV's header and
+  row count, and the JSON read back as records of both kinds.
 - `Make20PtSmokeTests` — wire test for the Make20Pt filter category.
-  Exercises the same `FilterConfig.Build` + `FilteredDecisionIterator`
-  call sequence `LocalFolderProcessor` uses, against the real fixture
+  Exercises `FilterConfig.Build` + `FilteredDecisionIterator` under the
+  app's ranking, against the real fixture
   `.xg` files; the reference set is computed directly from the lib's
   XOR semantics so adding/removing fixtures shifts both sides together.
 - `OutputConsistencyTests` — verifies that the CSV pathway and the Diagram
-  JSON pathway see the same decisions through the same filter set. Uses
-  `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
+  JSON pathway see the same decisions through the same filter set, under the
+  app's ranking: each row is built for `AppRanking.Ranking`, each record is
+  read through its view for it, and every view member the two share agrees.
+  Uses `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
   contract is what's being tested).
 - `LocalFolderProcessorPptxTests` — wiring test for the Local-mode PPTX
   pathway. Runs the processor against the fixture folder, asserts the
@@ -761,7 +837,9 @@ project via relative path — not duplicated here.
   `JsonSerializerDefaults.Web`, the defaults both ends of the status endpoint
   actually use: record constructor binding, `DecisionId` in its canonical
   form, and the derived counts. A body with no `skipped` field reads as an
-  empty record, not null.
+  empty record, not null. And the record handed out is an immutable copy —
+  never the list the JSON reader built, nor one a caller set and kept (the
+  collection rider).
 - `ProcessEndpointTests` — hosted pins (`WebApplicationFactory`, Local
   config) for the terminal snapshot the job runner builds itself when a run
   fails, which nothing below the controller can observe. A Diagram JSON run
@@ -901,7 +979,13 @@ project via relative path — not duplicated here.
   before the first `Refilter`; build on the first; cache hit on the same
   `FilterConfig` reference; rebuild on a new reference; `ReplaceRows`
   re-projects through the set in effect without rebuilding; `Clear` empties
-  rows and projections but keeps the materialized filter.
+  rows and projections but keeps the materialized filter. **One run, one
+  ranking**: over a decision whose best play differs by ranking, "erred by at
+  least 0.1" admits the row and the record together under equity and neither
+  under depth first — the second case is the one a record judged under the
+  equity default would fail; a row built for another ranking is refused
+  whole; an undefined ranking is refused. And every list the cache hands out
+  refuses a write through `IList<T>` (the collection rider).
 - `WebModePanelFilteringTests` — bUnit wire tests pinning that
   `WebModePanel` routes live filtering through `FilteredRowCache` under
   the `FilterApplied` gate (no materialization before
@@ -909,7 +993,9 @@ project via relative path — not duplicated here.
   filter no longer in effect leaves the cache untouched — the shape an
   edit now arrives in), observed through the panel's
   internal `RowCache` seam. Guards the migration failure mode of a panel
-  that compiles but filters beside the cache instead of through it.
+  that compiles but filters beside the cache instead of through it. And a
+  real file selection loads under `AppRanking.Ranking`: the cache's ranking,
+  every row's, and the same decisions in both projections.
 - `WebModePanelBusyAffordanceTests` — the busy contract, pinned as two
   independent halves because the failure mode is ordering, not duration: the
   busy state is *rendered* before the body runs (drop the `StateHasChanged`
@@ -947,7 +1033,11 @@ project via relative path — not duplicated here.
 - `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
   failure shape) and per-token rendering, including the counter-unification
   pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
-  coverage (internal, via `InternalsVisibleTo`).
+  coverage (internal, via `InternalsVisibleTo`). `{dice}` renders `00` for a
+  cube decision, whose row states no roll — file-name presentation, pinned;
+  `{score}` renders `3a5a`, `1a5aC`, `moneyJ` and `moneyNJ`; and the preview's
+  sample is the producer's row for `AppRanking.Ranking`, rendering `31_3a5a`
+  as before.
 - `XgpNameAllocatorTests` — per-run uniquifier (`name.xgp`, `name (2).xgp`,
   …), Peek idempotence and the Peek-without-Commit slot reuse that keeps
   failed decisions from consuming a number, `{n}` never uniquifying, and
@@ -960,11 +1050,13 @@ project via relative path — not duplicated here.
   fallback), and post-export persistence.
 - `OpeningBookProviderTests` — the provider's pure path resolution (absent →
   auto-detect, empty → disabled, explicit) and load/degrade (real fixture book
-  loads and exposes `IteratorOptions`; empty config and a missing file both
-  degrade to no book without throwing).
+  loads; empty config and a missing file both degrade to no book without
+  throwing).
 - `LocalFolderProcessorOpeningBookTests` — pins that the loaded book reaches
-  every server processing pathway. CSV and Diagram JSON assert the enriched
-  depth label directly (with book) vs. the bare "Book V2" (without); the Xgp and
+  every server processing pathway. CSV asserts the enriched depth label
+  directly (with book) vs. the bare "Book V2" (without); Diagram JSON, whose
+  wire carries the typed depth facts and not the derived label, is read back
+  as records and asserts the same labels off their candidates; the Xgp and
   deck pathways — whose output carries no label — use a filter differential over
   a lone depth clause (`IncludeBookRollouts` qualified by
   `BookRolloutLevels = [Ply4]`): book present ⇒ the enriched decisions survive
@@ -1059,6 +1151,10 @@ project reference.
 
 ### Client-shared types (`ExtractFromXgToCsv.Client/Shared/`)
 
+- `AppRanking` — `static class` with one member, `Ranking`
+  (`PlayRanking.Equity`): the application's one ranking, stated once, which
+  both modes read (see "The ranking"). Public because the server's processor
+  reads it.
 - `AppModeResponse` — response record for `GET /api/appmode`
   (`record AppModeResponse(string Mode)`). Server returns it; client
   deserializes against it. Object-wrapped rather than a bare string so the
@@ -1105,7 +1201,9 @@ project reference.
   `XgpNameAllocator`. See the XGP export section. App-level home beside
   `XgpExportOptions`, but they couple only to primitives and lib types
   (`FilterConfig`, `DecisionRow`); the DTO stops at `XgpNameAllocator.Create`,
-  so a future move into a library is relocation-only. `XgProcessingService`
+  so a future move into a library is relocation-only. `XgpNamePreview`
+  (`internal`, the preview's sample row) sits beside the engine and not in
+  it, because it reads `AppRanking`, an app type. `XgProcessingService`
   (the WASM extraction/zip service in `Client/Services`) is `internal` for the
   same reason — a client-assembly implementation detail, not public surface.
 - `ProcessRequest` — POST body for `/api/process/start`
@@ -1118,7 +1216,9 @@ project reference.
   and derived from it, like `PercentComplete`: they serialize for any reader
   of the wire but are never bound back, so they cannot disagree with the list.
   Every snapshot gets its own copy of the list, so a reported snapshot never
-  changes afterwards.
+  changes afterwards; and setting `Skipped` takes an immutable copy, so what
+  it hands out is never a live list — on the client, not the `List<T>` the
+  JSON reader builds (the collection rider of halheinrich/backgammon#273).
 - `SkippedItem` — `sealed record SkippedItem(string FileName, DecisionId?
   DecisionId, string Reason)`, one entry of that record. `FileName` is the
   source file's path relative to the run's input folder, unambiguous under the
@@ -1410,6 +1510,19 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   a user who bypasses the counter (edits "next number" backwards, exports
   into the same place twice with a reset pattern) gets colliding names —
   by design, the editable field is the escape hatch.
+- **The ranking is stated once, and always stated.** Every producer
+  operation that takes a ranking gets `AppRanking.Ranking` (or, in Web mode,
+  the cache's, which is built from it) — never a `PlayRanking` literal, and
+  never nothing: a producer whose ranking is optional (`XgIteratorOptions`,
+  whose default is `Equity`) is still handed the app's, so `OptionsFor` and
+  the processor build options even with no book. That today's choice and
+  the producers' defaults are both `Equity` is not an agreement to lean on
+  (Hal, 2026-09-29): one run's rows, filtering and diagrams must be one
+  ranking because they were handed one, whatever the defaults become.
+- **`{dice}`'s `00` is presentation.** A cube decision has no roll, and the
+  row states none. The token spells that absence `00` in a file name only;
+  never turn it back into a roll, and never pass `00` (or 0) to a domain API
+  as dice.
 - **`XgpNameTokens.All` is the token SSOT.** Validation, rendering, and the
   insert-token dropdown all derive from the registry — add tokens only
   there, never as a special case in the template parser or the UI. Token

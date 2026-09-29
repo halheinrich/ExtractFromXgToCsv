@@ -356,7 +356,7 @@ public class LocalFolderProcessorSkipTests
     private static List<string> GoodFixtureRows(DecisionFilterSet filter)
     {
         var xgFile = XgFileReader.ReadFile(Path.Combine(FixtureHelper.FixtureDir, GoodFixture));
-        var rows = XgDecisionIterator.Iterate(xgFile, GoodFixture)
+        var rows = XgDecisionIterator.Iterate(xgFile, GoodFixture, options: RunOptions)
             .Where(r => filter.Matches(r))
             .Select(r => r.ToCsvLine())
             .ToList();
@@ -364,12 +364,18 @@ public class LocalFolderProcessorSkipTests
         return rows;
     }
 
+    /// <summary>
+    /// The producer read the references are computed from, configured as the
+    /// processor's run is: the application's one ranking, and no book.
+    /// </summary>
+    private static readonly XgIteratorOptions RunOptions = new(Ranking: AppRanking.Ranking);
+
     /// <summary>The good fixture's decision count through the diagram iterator.</summary>
     private static int GoodFixtureDiagramCount(DecisionFilterSet filter)
     {
         var xgFile = XgFileReader.ReadFile(Path.Combine(FixtureHelper.FixtureDir, GoodFixture));
-        var count = XgDecisionIterator.IterateDiagramRequests(xgFile, GoodFixture)
-            .Count(r => filter.Matches(r));
+        var count = XgDecisionIterator.IterateDiagramRequests(xgFile, GoodFixture, options: RunOptions)
+            .Count(r => filter.Matches(r.ViewFor(AppRanking.Ranking)));
         Assert.True(count > 0, "the good fixture should yield decisions through the filter");
         return count;
     }

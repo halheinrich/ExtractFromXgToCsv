@@ -29,14 +29,20 @@ public class LocalFolderProcessor
 {
     private readonly ILogger<LocalFolderProcessor> _logger;
 
-    // The opening-book iterator options, resolved once by OpeningBookProvider
-    // and passed to every XgDecisionIterator call so book-analysed decisions are
-    // enriched consistently across all pathways. Null when no book is available
-    // (provider absent, disabled, or the file was missing/unreadable) — the
-    // iterator reads null as "default behaviour" and stamps the unenriched
+    // The run's one ranking — the application's (AppRanking), taken once. Every
+    // producer operation below whose meaning depends on a ranking is handed
+    // this value: the iterator options (so every row is built for it), each
+    // record's filter view, and each diagram. No producer default stands in.
+    private readonly PlayRanking _ranking = AppRanking.Ranking;
+
+    // The iterator options, passed to every XgDecisionIterator call: the run's
+    // ranking, and the opening book OpeningBookProvider resolved once, so
+    // book-analysed decisions are enriched consistently across all pathways.
+    // The book is null when none is available (provider absent, disabled, or
+    // the file was missing/unreadable) — book hits then stamp the unenriched
     // "Book V2" / level Unknown form. Single field, single source: every
     // extraction pathway below passes this same value.
-    private readonly XgIteratorOptions? _iteratorOptions;
+    private readonly XgIteratorOptions _iteratorOptions;
 
     /// <summary>
     /// Creates the processor. <paramref name="logger"/> records per-file skip
@@ -49,7 +55,7 @@ public class LocalFolderProcessor
         OpeningBookProvider? bookProvider = null)
     {
         _logger = logger;
-        _iteratorOptions = bookProvider?.IteratorOptions;
+        _iteratorOptions = new XgIteratorOptions(bookProvider?.Book, _ranking);
     }
 
     /// <summary>
@@ -279,7 +285,7 @@ public class LocalFolderProcessor
                 var items = XgDecisionIterator.IterateDiagramRequests(
                     xgFile, fileName, options: _iteratorOptions);
 
-                foreach (var item in items.Where(r => filterSet.Matches(r)))
+                foreach (var item in items.Where(r => filterSet.Matches(r.ViewFor(_ranking))))
                 {
                     allItems.Add(item);
                     totalRows++;
@@ -569,13 +575,15 @@ public class LocalFolderProcessor
                 var items = XgDecisionIterator.IterateDiagramRequests(
                     xgFile, fileName, options: _iteratorOptions, logger: _logger);
 
-                foreach (var item in items.Where(r => filterSet.Matches(r)))
+                foreach (var item in items.Where(r => filterSet.Matches(r.ViewFor(_ranking))))
                 {
                     // Each decision becomes a Problem/Solution pair — the
                     // reader considers the problem slide, then advances to the
-                    // solution slide for the answer.
+                    // solution slide for the answer. The diagram orders and
+                    // scores the candidates by the ranking the decision was
+                    // just filtered under.
                     var (problem, solution) = DiagramRequest
-                        .FromDecisionData(item)
+                        .ForDecision(item, _ranking)
                         .ToProblemSolutionPair();
                     requests.Add(problem);
                     requests.Add(solution);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
@@ -20,8 +21,11 @@ namespace ExtractFromXgToCsv.Tests;
 /// V2 book stamp whose best play enriches, with the real book, to
 /// <see cref="EnrichedDepth"/> — <see cref="AnalysisMode.BookRollout"/> +
 /// <see cref="AnalysisLevel.Ply4"/>; without the book it degrades to a bare
-/// "Book V2" / <see cref="AnalysisLevel.Unknown"/>. The CSV and Diagram-JSON
-/// pathways surface that label directly. The Xgp and deck pathways carry no
+/// "Book V2" / <see cref="AnalysisLevel.Unknown"/>. The CSV pathway surfaces
+/// that label directly. The Diagram-JSON pathway carries the typed depth facts
+/// the label is derived from, never the label itself (the producer's
+/// halheinrich/backgammon#273), so it is read back as records and the label
+/// taken from their candidates. The Xgp and deck pathways carry no
 /// depth label in their output, so they are probed with a book-specific filter
 /// — a lone depth clause, <see cref="FilterConfig.IncludeBookRollouts"/>
 /// qualified by <see cref="FilterConfig.BookRolloutLevels"/> =
@@ -121,6 +125,23 @@ public class LocalFolderProcessorOpeningBookTests
     //  Diagram-JSON pathway (ProcessDiagramAsync)
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    /// Every checker-play candidate's depth label in a Diagram JSON output,
+    /// read back as the records it holds: the label is derived from the typed
+    /// depth facts on the wire, so this is what the file states.
+    /// </summary>
+    private static async Task<HashSet<string?>> CandidateDepthsIn(string jsonPath)
+    {
+        var records = JsonSerializer.Deserialize<List<BgDecisionData>>(
+            await File.ReadAllTextAsync(jsonPath));
+        Assert.NotNull(records);
+        return records
+            .OfType<CheckerPlayDecision>()
+            .SelectMany(r => r.Decision.Plays)
+            .Select(p => p.Depth)
+            .ToHashSet();
+    }
+
     [Fact]
     public async Task ProcessDiagramAsync_WithBook_JsonCarriesEnrichedDepth()
     {
@@ -131,8 +152,7 @@ public class LocalFolderProcessorOpeningBookTests
             await WithBook().ProcessDiagramAsync(
                 dir, outPath, new DecisionFilterSet(), new Progress<ProcessingProgress>());
 
-            var json = await File.ReadAllTextAsync(outPath);
-            Assert.Contains(EnrichedDepth, json);
+            Assert.Contains(EnrichedDepth, await CandidateDepthsIn(outPath));
         }
         finally { Directory.Delete(dir, recursive: true); }
     }
@@ -147,9 +167,9 @@ public class LocalFolderProcessorOpeningBookTests
             await WithoutBook().ProcessDiagramAsync(
                 dir, outPath, new DecisionFilterSet(), new Progress<ProcessingProgress>());
 
-            var json = await File.ReadAllTextAsync(outPath);
-            Assert.Contains("Book V2", json);
-            Assert.DoesNotContain(EnrichedDepth, json);
+            var depths = await CandidateDepthsIn(outPath);
+            Assert.Contains("Book V2", depths);
+            Assert.DoesNotContain(EnrichedDepth, depths);
         }
         finally { Directory.Delete(dir, recursive: true); }
     }

@@ -41,6 +41,13 @@
          beside the component library — no app-graph project (server or
          Client) may reference it. -->
     <ProjectReference Include="..\..\XgFilter_Razor\XgFilter_Razor.Testing\XgFilter_Razor.Testing.csproj" />
+    <!-- BgDataTypes_Lib's test-support assembly (halheinrich/backgammon#273):
+         TestRecords, the producer's builders, so a test states only the facts
+         it cares about and never restates a record's construction. Test
+         projects only, like the reference above: the assembly declares itself
+         unsupported on the browser platform, so the Client could not use it
+         even by mistake, and no app-graph project references it. -->
+    <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib.TestSupport\BgDataTypes_Lib.TestSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>

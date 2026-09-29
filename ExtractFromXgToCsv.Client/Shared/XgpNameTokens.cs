@@ -1,7 +1,6 @@
 using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using BgDataTypes_Lib;
 
 namespace ExtractFromXgToCsv.Client.Shared;
 
@@ -39,12 +38,18 @@ internal static class XgpNameTokens
             Name = "dice",
             Description = "Dice roll, two digits (\"31\"; \"00\" for a cube decision)",
             Source = XgpTokenSource.PerItem,
-            Render = static ctx => ctx.Row.Roll.ToString("D2", CultureInfo.InvariantCulture),
+            // A cube decision has no roll: the row states none (Roll is null
+            // exactly for a cube decision). "00" is this token's established
+            // file-name spelling of that absence — presentation only, never a
+            // roll, and never handed to anything as one.
+            Render = static ctx => ctx.Row.Roll is int roll
+                ? roll.ToString("D2", CultureInfo.InvariantCulture)
+                : "00",
         },
         new()
         {
             Name = "score",
-            Description = "Match score (\"3a5a\", \"3a5aC\", \"money\")",
+            Description = "Match score (\"3a5a\", \"1a5aC\", \"moneyJ\", \"moneyNJ\")",
             Source = XgpTokenSource.PerItem,
             Render = static ctx => ctx.Row.MatchScore,
         },
@@ -59,26 +64,4 @@ internal static class XgpNameTokens
     /// </summary>
     public static bool TryGet(string name, [NotNullWhen(true)] out XgpNameToken? token) =>
         _byName.TryGetValue(name, out token);
-
-    /// <summary>
-    /// Synthetic decision used for the UI's live name preview. Field values
-    /// are chosen so every current — and anticipated — per-item token renders
-    /// something non-trivial (a real roll, a real match score, a mid-game
-    /// move number).
-    /// </summary>
-    public static DecisionRow SampleRow { get; } = new()
-    {
-        Id = new XgDecisionId("sample.xg", Game: 2, MoveNumber: 5, IsCube: false),
-        Xgid = "XGID=-b----E-C---eE---c-e----B-:0:0:1:31:2:4:0:7:10",
-        Player = "Player 1",
-        Game = 2,
-        MoveNumber = 5,
-        Roll = 31,
-        MatchLength = 7,
-        OnRollNeeds = 3,
-        OpponentNeeds = 5,
-        Error = 0.062,
-        Equity = 0.184,
-        AnalysisDepth = "3-ply",
-    };
 }

@@ -59,4 +59,27 @@ public class ProcessingProgressWireTests
         Assert.Equal(0, received.SkippedFileCount);
         Assert.Equal(0, received.SkippedDecisionCount);
     }
+
+    /// <summary>
+    /// The collection rider (halheinrich/backgammon#273): the record a
+    /// snapshot hands out is never a live list — neither the one the JSON
+    /// reader builds on the client, nor one a caller set and kept.
+    /// </summary>
+    [Fact]
+    public void Skipped_HandsOutAnImmutableCopy_NeverTheListItWasGiven()
+    {
+        var sent = new ProcessingProgress { Skipped = [new SkippedItem("bad.xg", null, "Bad.")] };
+        var received = JsonSerializer.Deserialize<ProcessingProgress>(
+            JsonSerializer.Serialize(sent, Web), Web)!;
+        var readBack = Assert.IsAssignableFrom<IList<SkippedItem>>(received.Skipped);
+        Assert.True(readBack.IsReadOnly);
+        Assert.Throws<NotSupportedException>(() => readBack.Clear());
+
+        var kept = new List<SkippedItem> { new("a.xg", null, "A.") };
+        var progress = new ProcessingProgress { Skipped = kept };
+        kept.Add(new SkippedItem("b.xg", null, "B."));
+
+        Assert.Equal("a.xg", Assert.Single(progress.Skipped).FileName);
+        Assert.NotSame(kept, progress.Skipped);
+    }
 }

@@ -22,11 +22,10 @@ Part of the [backgammon tools umbrella repo](https://github.com/halheinrich/back
 
 ### Data model
 
-`DecisionRow` record — mirrors `DecisionRow` from **ConvertXgToJson_Lib**:
-
-```
-Xgid | Error | MatchScore | MatchLength | Player | SourceFile | Game | MoveNumber | Roll | AnalysisDepth | Equity
-```
+A CSV row is **BgDataTypes_Lib**'s `DecisionRow`, built by the producer for
+the run's one ranking; its columns and their order are the producer's
+`DecisionRow.CsvHeader` (see BgDataTypes_Lib's `INSTRUCTIONS.md`,
+"DecisionRow"), not restated here.
 
 ---
 

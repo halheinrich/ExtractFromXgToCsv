@@ -1,4 +1,5 @@
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Shared;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -30,24 +31,20 @@ public class XgpNameTemplateTests
             StartNumber = startNumber,
             SuffixLength = suffixLength,
             Filters = filters ?? new FilterConfig(),
-            Row = row ?? XgpNameTokens.SampleRow,
+            Row = row ?? XgpNamePreview.SampleRow,
             Index = index,
         };
 
-    private static DecisionRow Row(
-        int roll = 31,
-        int matchLength = 7,
-        int onRollNeeds = 3,
-        int opponentNeeds = 5,
-        bool isCrawford = false) => new()
-        {
-            Id = new XgDecisionId("t.xg", 1, 1, roll == 0),
-            Roll = roll,
-            MatchLength = matchLength,
-            OnRollNeeds = onRollNeeds,
-            OpponentNeeds = opponentNeeds,
-            IsCrawford = isCrawford,
-        };
+    /// <summary>
+    /// A checker play's row, built by the producer: the opening 3-1 by
+    /// default, 3-away/5-away in a 7-point match unless
+    /// <paramref name="session"/> says otherwise.
+    /// </summary>
+    private static DecisionRow Row(IReadOnlyList<int>? dice = null, Session? session = null) =>
+        TestRecords.Row(TestRecords.CheckerPlay(
+            position: TestRecords.Position(
+                session: session ?? TestRecords.MatchSession(onRollNeeds: 3, opponentNeeds: 5)),
+            decision: TestRecords.CheckerPlayData(dice: dice)));
 
     // -------------------------------------------------------------------
     //  Rendering
@@ -71,7 +68,7 @@ public class XgpNameTemplateTests
     public void AdjacentTokens_RenderInOrderWithNoSeparator()
     {
         var template = Parse("{n}{dice}{score}");
-        Assert.Equal("001313a5a", template.Render(Context(row: Row(roll: 31))));
+        Assert.Equal("001313a5a", template.Render(Context(row: Row(dice: [3, 1]))));
     }
 
     [Fact]
@@ -81,21 +78,64 @@ public class XgpNameTemplateTests
     }
 
     [Theory]
-    [InlineData(31, "31")]
-    [InlineData(65, "65")]
-    [InlineData(0, "00")] // cube decision
-    public void DiceToken_RendersTwoDigits(int roll, string expected)
+    [InlineData(3, 1, "31")]
+    [InlineData(6, 5, "65")]
+    public void DiceToken_RendersTwoDigits(int first, int second, string expected)
     {
-        Assert.Equal(expected, Parse("{dice}").Render(Context(row: Row(roll: roll))));
+        Assert.Equal(expected, Parse("{dice}").Render(Context(row: Row(dice: [first, second]))));
     }
 
+    /// <summary>
+    /// A cube decision has no roll, and its row states none; the token
+    /// renders its established file-name spelling of that absence, "00"
+    /// (Hal, 2026-09-29, halheinrich/backgammon#273: presentation only,
+    /// never a roll handed to a domain API).
+    /// </summary>
+    [Fact]
+    public void DiceToken_CubeDecision_RendersZeroZero_AsFileNamePresentation()
+    {
+        var cubeRow = TestRecords.Row(TestRecords.Cube());
+
+        Assert.Equal(DecisionKind.Cube, cubeRow.Kind);
+        Assert.Null(cubeRow.Roll);
+        Assert.Equal("00", Parse("{dice}").Render(Context(row: cubeRow)));
+    }
+
+    /// <summary>
+    /// The score token is the row's <see cref="DecisionRow.MatchScore"/>. A
+    /// money session renders <c>moneyJ</c> or <c>moneyNJ</c> by its Jacoby
+    /// rule — every money session states one, so the bare <c>money</c> of an
+    /// unstated rule is gone (halheinrich/backgammon#273) — and a Crawford
+    /// game's match score carries its <c>C</c>.
+    /// </summary>
     [Fact]
     public void ScoreToken_RendersTheMatchScoreFormats()
     {
         var template = Parse("{score}");
-        Assert.Equal("money", template.Render(Context(row: Row(matchLength: 0))));
-        Assert.Equal("3a5aC", template.Render(Context(row: Row(isCrawford: true))));
         Assert.Equal("3a5a", template.Render(Context(row: Row())));
+        Assert.Equal("1a5aC", template.Render(Context(row: Row(
+            session: TestRecords.MatchSession(onRollNeeds: 1, opponentNeeds: 5, isCrawford: true)))));
+        Assert.Equal("moneyJ", template.Render(Context(row: Row(
+            session: TestRecords.MoneySession(isJacoby: true)))));
+        Assert.Equal("moneyNJ", template.Render(Context(row: Row(
+            session: TestRecords.MoneySession(isJacoby: false)))));
+    }
+
+    /// <summary>
+    /// The live preview's sample decision is a real row, built by the
+    /// producer for the application's one ranking, and renders what the
+    /// preview has always shown: a 3-1 at 3-away/5-away, game 2, move 5.
+    /// </summary>
+    [Fact]
+    public void SampleRow_IsTheProducersRow_ForTheAppsRanking()
+    {
+        var sample = XgpNamePreview.SampleRow;
+
+        Assert.Equal(AppRanking.Ranking, sample.Ranking);
+        Assert.Equal(DecisionKind.CheckerPlay, sample.Kind);
+        Assert.Equal(2, sample.Game);
+        Assert.Equal(5, sample.MoveNumber);
+        Assert.Equal("31_3a5a", Parse("{dice}_{score}").Render(Context(row: sample)));
     }
 
     [Fact]
@@ -113,7 +153,7 @@ public class XgpNameTemplateTests
     {
         var template = Parse("Move{min-move}_{dice}_{score}");
         var rendered = template.Render(Context(
-            row: Row(roll: 31),
+            row: Row(dice: [3, 1]),
             filters: new FilterConfig { MoveNumberMin = 5 }));
         Assert.Equal("Move5_31_3a5a", rendered);
     }

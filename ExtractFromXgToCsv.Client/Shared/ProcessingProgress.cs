@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
@@ -54,8 +56,27 @@ public class ProcessingProgress
     /// A skip never ends a run — one bad file must not kill a batch — so this is
     /// the only place a dropped input shows. The two counts below are derived
     /// from it rather than carried beside it, so they cannot disagree with it.
+    /// <para>
+    /// Setting it takes an immutable copy, so what it hands out is never the
+    /// setter's own collection — the list the JSON reader builds included — and
+    /// no holder can change the record another reads (the collection rider of
+    /// halheinrich/backgammon#273).
+    /// </para>
     /// </remarks>
-    public IReadOnlyList<SkippedItem> Skipped { get; set; } = [];
+    /// <exception cref="ArgumentNullException">Set to <see langword="null"/>.</exception>
+    public IReadOnlyList<SkippedItem> Skipped
+    {
+        get => _skipped;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _skipped = value.ToImmutableArray();
+        }
+    }
+
+    // Boxed once, where it is set, so a read hands out the immutable array
+    // without boxing again.
+    private IReadOnlyList<SkippedItem> _skipped = ImmutableArray<SkippedItem>.Empty;
 
     /// <summary>Whole files skipped, derived from <see cref="Skipped"/>.</summary>
     public int SkippedFileCount => Skipped.Count(s => s.DecisionId is null);
