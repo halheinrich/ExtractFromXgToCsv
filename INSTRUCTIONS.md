@@ -390,8 +390,14 @@ export. In Local mode the count is the final
   soon as the current source or filter values differ from its run's
   (`OnParametersSet`, compared by value: the host hands a new config on every
   render). Not while busy: a running job's progress and Stop stay with their
-  own job, and a run that **completes** after its inputs were superseded
-  drops its result on landing (`RunLocalAsync`'s `finally`). Watching "a
+  own job. A run's outcome — its terminal snapshot or its failure — is
+  **judged before it is published**: the poll loop renders only non-terminal
+  progress, and when the run ends its outcome is shown only if the run still
+  describes the inputs on screen. So a run that completes after its inputs
+  were superseded is never shown as the new inputs' result, not even while
+  the XGP export's bookkeeping (Home's counter writes) is pending. That
+  bookkeeping is the job's own and follows publication whatever is on
+  screen, in the format the job ran. Watching "a
   filter is in effect" fall is not enough, and was what this replaced: the
   empty selection stays in effect across a folder change, so nothing falls
   while the folder the result was computed from has gone. The Done line
@@ -1073,6 +1079,12 @@ records what a run was computed from when the run starts.
   stays ready**, and **not shown when the run completes after its inputs were
   superseded** — its progress and Stop staying with it while it runs — with
   the same held run, released unchanged, as the control.
+- `HomeRunResultTests` — a Local XGP run through the real page, storage
+  planned, its bookkeeping's first write held: a run whose folder changed
+  while it ran shows no "Done" while that write is pending nor after it
+  completes, and the export counter still advances by what the job wrote;
+  the same held run over unchanged inputs shows its result throughout, as the
+  control.
 - `LocalModePanelZeroMatchTests` — the Local zero-match notice, through real
   runs against a zero-row server: shown beside the Done line for an active
   filter, not for the empty one, and not when an active filter comes into

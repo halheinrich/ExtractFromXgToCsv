@@ -317,7 +317,8 @@
 
     // The run whose progress, result or error is on screen; null when none is.
     // A result stands only while its run's source and filter values are still
-    // the current ones (see OnParametersSet and RunLocalAsync's finally).
+    // the current ones (see OnParametersSet, and RunLocalAsync's judgement
+    // before it publishes a run's outcome).
     private RunInputs? _run;
 
     // Server-side opening-book load state, fetched once on first render so the
@@ -373,8 +374,8 @@
         // empty filter stays in effect across a folder change, so "a filter is
         // in effect" never falls there, while the source the result was
         // computed from has gone. Not while busy: a running job's progress and
-        // Stop stay with their own job, and its completion is judged when it
-        // lands (RunLocalAsync's finally).
+        // Stop stay with their own job, and its outcome is judged before it is
+        // published (RunLocalAsync).
         if (!_busy && _run is { } run && !DescribesCurrentInputs(run))
             DropResult();
     }
@@ -431,18 +432,23 @@
         _progress = null; _currentJobId = null;
         StateHasChanged();
 
+        var request = new ProcessRequest
+        {
+            FolderPath = FolderPath,
+            OutputPath = run.OutputPath,
+            Filters = run.Filter,
+            OutputFormat = OutputFormat,
+            XgpOptions = XgpOptions,
+            Anonymize = XgpAnonymize
+        };
+
+        // The run's outcome, held back until it is judged: the terminal
+        // snapshot, or the client's own failure to start or follow the job.
+        ProcessingProgress? terminal = null;
+        string? failure = null;
+
         try
         {
-            var request = new ProcessRequest
-            {
-                FolderPath = FolderPath,
-                OutputPath = run.OutputPath,
-                Filters = run.Filter,
-                OutputFormat = OutputFormat,
-                XgpOptions = XgpOptions,
-                Anonymize = XgpAnonymize
-            };
-
             var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
             startResponse.EnsureSuccessStatusCode();
 
@@ -452,54 +458,68 @@
 
             if (_currentJobId is null)
             {
-                _runError = "Failed to start job — no jobId returned.";
-                return;
+                failure = "Failed to start job — no jobId returned.";
             }
-
-            while (true)
+            else
             {
-                await Task.Delay(1000);
-
-                var statusResponse = await Http.GetAsync($"/api/process/{_currentJobId}/status");
-                if (!statusResponse.IsSuccessStatusCode) break;
-
-                var p = await statusResponse.Content
-                    .ReadFromJsonAsync<ProcessingProgress>();
-
-                if (p is not null)
+                while (true)
                 {
+                    await Task.Delay(1000);
+
+                    var statusResponse = await Http.GetAsync($"/api/process/{_currentJobId}/status");
+                    if (!statusResponse.IsSuccessStatusCode) break;
+
+                    var p = await statusResponse.Content
+                        .ReadFromJsonAsync<ProcessingProgress>();
+
+                    if (p is null) continue;
+                    if (p.Complete)
+                    {
+                        terminal = p;
+                        break;
+                    }
+
+                    // The running job's own progress, shown with its Stop
+                    // whatever has changed on screen since it started.
                     _progress = p;
                     StateHasChanged();
-                    if (p.Complete) break;
                 }
-            }
-
-            // Advance the export counter by what actually landed on disk.
-            // Cancelled runs count too — their files were written (the
-            // processor reports per file, so TotalRows is exact); error
-            // terminations don't advance anything.
-            if (OutputFormat == OutputFormat.Xgp
-                && _progress is { Complete: true, ErrorMessage: null } done)
-            {
-                await OnXgpExported.InvokeAsync(done.TotalRows);
             }
         }
         catch (Exception ex)
         {
-            _runError = $"Error: {ex.Message}";
+            failure = $"Error: {ex.Message}";
         }
-        finally
+
+        _busy = false;
+        _currentJobId = null;
+
+        // Judge before publishing: the outcome is shown only while the source
+        // and filter values on screen are still the ones the run was computed
+        // from. A run that completes after its inputs were superseded — the
+        // folder changed, or the filter, while it ran — is never shown as the
+        // new inputs' result, not even for the length of the bookkeeping
+        // below. Once published, OnParametersSet drops it the moment the
+        // inputs move on.
+        if (DescribesCurrentInputs(run))
         {
-            _busy = false;
-            _currentJobId = null;
+            _progress = terminal ?? _progress;
+            _runError = failure;
+        }
+        else
+        {
+            DropResult();
+        }
+        StateHasChanged();
 
-            // A run that completes after its inputs were superseded — the
-            // folder changed, or the filter, while it ran — describes inputs no
-            // longer on screen, so its result is not shown as theirs.
-            if (!DescribesCurrentInputs(run))
-                DropResult();
-
-            StateHasChanged();
+        // The job's own accounting, whatever is on screen: advance the export
+        // counter by what actually landed on disk, in the format the job ran.
+        // Cancelled runs count too — their files were written (the processor
+        // reports per file, so TotalRows is exact); error terminations don't
+        // advance anything.
+        if (request.OutputFormat == OutputFormat.Xgp && terminal is { ErrorMessage: null } done)
+        {
+            await OnXgpExported.InvokeAsync(done.TotalRows);
         }
     }
 
