@@ -1,5 +1,6 @@
 using BgDataTypes_Lib;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components.Web;
@@ -36,6 +37,7 @@ public class LocalModePanelFilterWireTests : BunitContext
     public LocalModePanelFilterWireTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
+        Services.AddClientServices();
     }
 
     /// <summary>
@@ -127,14 +129,13 @@ public class LocalModePanelFilterWireTests : BunitContext
 
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, config)
-            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterInEffect, config)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false)
             .Add(c => c.FolderPath, "D:\\xg"));
 
         // The folder path is a parameter since the source hoist; the output
-        // path is still panel state normally loaded from localStorage — seed
+        // path is still panel state normally restored from browser storage — seed
         // it directly so the Run button's path gate is satisfied.
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\decisions.csv");
         cut.Render();

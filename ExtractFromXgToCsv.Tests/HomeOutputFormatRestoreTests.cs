@@ -1,20 +1,17 @@
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client.Components.Pages;
-using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
-using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
 using XgFilter_Razor;
-using XgFilter_Razor.Components;
+using XgFilter_Razor.TestSupport;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins how Home restores the persisted output format from
-/// <c>localStorage["xg_outputFormat"]</c>: by searching the declared formats
-/// for the token the write half emitted, never by parsing
-/// (halheinrich/backgammon#164).
+/// Pins how Home restores the persisted output format from its
+/// <c>xg_outputFormat</c> key: by searching the declared formats for the token
+/// the write half emitted, never by parsing (halheinrich/backgammon#164).
 ///
 /// <para>The write half is <c>fmt.ToString()</c> — a declaration name — so the
 /// read half must accept those and nothing else. <c>Enum.TryParse</c>, which
@@ -32,30 +29,19 @@ namespace ExtractFromXgToCsv.Tests;
 /// </summary>
 public class HomeOutputFormatRestoreTests : BunitContext
 {
+    private readonly BrowserStoragePlan _storage;
+
     public HomeOutputFormatRestoreTests()
     {
-        JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
-        Services.AddSingleton(new HttpClient(new StubAppModeHandler("Local"))
-        {
-            BaseAddress = new Uri("http://localhost/"),
-        });
-        Services.AddScoped<AppliedFilter>();
-        Services.AddScoped<FilterRestoreNotice>();
-        // Home's localStorage seam — the format restore reads through it.
-        Services.AddScoped<BrowserStorage>();
+        this.AddHomeServices("Local");
+        _storage = BrowserStoragePlan.On(JSInterop);
+        _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
     }
 
-    private void WithStoredFormat(string token) =>
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_outputFormat")
-                 .SetResult(token);
-
-    private IRenderedComponent<Home> RenderHome()
+    private IRenderedComponent<Home> RenderWithStoredFormat(string token)
     {
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<FilterSurface>().Any(), TimeSpan.FromSeconds(5));
-        return cut;
+        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.OutputFormatKey] = token });
+        return this.RenderHome();
     }
 
     /// <summary>The radio the page shows as selected — the observable.</summary>
@@ -77,9 +63,8 @@ public class HomeOutputFormatRestoreTests : BunitContext
     [InlineData(nameof(OutputFormat.Xgp), "fmtXgp")]
     public void StoredDeclarationName_Restores(string token, string expectedRadioId)
     {
-        WithStoredFormat(token);
-
-        Assert.Equal(expectedRadioId, SelectedFormatId(RenderHome()));
+        Assert.Equal(expectedRadioId, SelectedFormatId(RenderWithStoredFormat(token)));
+        _storage.Verify();
     }
 
     /// <summary>
@@ -98,8 +83,7 @@ public class HomeOutputFormatRestoreTests : BunitContext
     [InlineData("")]
     public void StoredNonNameToken_LeavesTheDefaultStanding(string token)
     {
-        WithStoredFormat(token);
-
-        Assert.Equal("fmtCsv", SelectedFormatId(RenderHome()));
+        Assert.Equal("fmtCsv", SelectedFormatId(RenderWithStoredFormat(token)));
+        _storage.Verify();
     }
 }

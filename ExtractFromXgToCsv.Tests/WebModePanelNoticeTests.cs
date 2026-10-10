@@ -1,5 +1,6 @@
 using AngleSharp.Dom;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -35,14 +36,13 @@ public class WebModePanelNoticeTests : BunitContext
     public WebModePanelNoticeTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     private IRenderedComponent<WebModePanel> RenderPanel() =>
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
+            .Add(c => c.FilterInEffect, (FilterConfig?)null)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 
@@ -124,9 +124,8 @@ public class WebModePanelNoticeTests : BunitContext
         var cut = RenderPanel();
         SelectFiles(cut, Fixture());
         cut.Render(p => p
-            .Add(c => c.FilterConfig,
-                new FilterConfig { Players = new List<string> { "__no_such_player__" } })
-            .Add(c => c.FilterApplied, true));
+            .Add(c => c.FilterInEffect,
+                new FilterConfig { Players = new List<string> { "__no_such_player__" } }));
 
         var box = cut.Find(".zero-match-notice");
 
@@ -150,7 +149,7 @@ public class WebModePanelNoticeTests : BunitContext
 
         var cut = RenderPanel();
         SelectFiles(cut, Fixture());
-        cut.Render(p => p.Add(c => c.FilterApplied, true));
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
         return cut;
     }
 

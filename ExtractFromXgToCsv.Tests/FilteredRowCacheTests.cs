@@ -11,9 +11,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// mode's loaded rows, the materialized filter, and the filtered projections.
 /// These pin the invariants <c>WebModePanelFilteringTests</c> used to reach
 /// through the panel's private fields by reflection: no build before the
-/// first Refilter; build on the first Refilter; cache hit on the same
-/// <see cref="FilterConfig"/> reference; rebuild on a new reference; row
-/// replacement re-projects without rebuilding. And the run's one ranking:
+/// first Refilter; build on the first Refilter; cache hit on an equal
+/// <see cref="FilterConfig"/> value, whatever the instance; rebuild on a
+/// different value; row replacement re-projects without rebuilding. And the
+/// run's one ranking:
 /// the rows and the records are filtered under the cache's ranking, never
 /// two. The panel-side routing is pinned separately by
 /// <c>WebModePanelFilteringTests</c>.
@@ -71,8 +72,47 @@ public class FilteredRowCacheTests
         Assert.Same(built, cache.BuiltSet);
     }
 
+    /// <summary>
+    /// The case the value key exists for: the host reads the filter in effect
+    /// from <c>FilterSetup.ConfigInEffectFor</c>, a new instance on every call,
+    /// so every render hands the cache a new reference to an unchanged filter.
+    /// </summary>
     [Fact]
-    public void Refilter_NewConfigReference_Rebuilds()
+    public void Refilter_EqualConfigNewInstance_ReusesBuiltSet()
+    {
+        var cache = NewCache();
+
+        cache.Refilter(AliceOnly());
+        var built = cache.BuiltSet;
+        cache.Refilter(AliceOnly());
+
+        Assert.Same(built, cache.BuiltSet);
+    }
+
+    /// <summary>
+    /// The key is the cache's own copy: mutating the instance handed in does
+    /// not move the key, so the next Refilter with that instance sees a
+    /// different value and rebuilds rather than keep a set built for a value
+    /// no longer asked for.
+    /// </summary>
+    [Fact]
+    public void Refilter_TheHandedInInstanceMutatedAfterwards_RebuildsForItsNewValue()
+    {
+        var cache = NewCache();
+        cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
+        var cfg = AliceOnly();
+        cache.Refilter(cfg);
+        var built = cache.BuiltSet;
+
+        cfg.Players = new List<string> { "Bob" };
+        cache.Refilter(cfg);
+
+        Assert.NotSame(built, cache.BuiltSet);
+        Assert.Equal("Bob", Assert.Single(cache.FilteredRows).Player);
+    }
+
+    [Fact]
+    public void Refilter_DifferentValue_Rebuilds()
     {
         var cache = NewCache();
         cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());

@@ -1,266 +1,332 @@
+using BgUiPrimitives_Razor;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client.Components.Pages;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.JSInterop;
 using XgFilter_Lib.Filtering;
 using XgFilter_Razor;
 using XgFilter_Razor.Components;
+using XgFilter_Razor.TestSupport;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins Home's degradation when <c>localStorage</c> is unavailable
-/// (halheinrich/backgammon#91) — a disabled-storage or hostile-privacy setting,
-/// where every call raises a <c>SecurityError</c> that reaches Blazor as a
-/// <see cref="JSException"/>.
+/// Pins this app's one storage condition as Home shows it
+/// (halheinrich/backgammon#374, Arc 2; SPEC-notices.md §1–§2): every refusal
+/// — Home's own settings, either mode panel's, or the filter surface's — is
+/// one occurrence, held by the app-scoped <see cref="BrowserStorageCondition"/>
+/// with its dismissal, and Home shows it however and whenever it arose.
 /// <para>
-/// What makes this worth a test class rather than a comment: since the mount
-/// gate went in (halheinrich/backgammon#85) the failure was <em>structural</em>, not cosmetic. A
-/// throwing read faulted <c>OnAfterRenderAsync</c> before
-/// <c>_restoreComplete</c> was reached, so <c>FilterSurface</c> never mounted
-/// and the page had no filtering at all — and silently, because this app
-/// registers no <c>#blazor-error-ui</c>. The guard makes a dead store read as
-/// "nothing is stored", a state every read site already answers with its own
-/// documented default, so the flag is set over facts rather than over reads
-/// that never landed. (Setting it in a <c>finally</c> instead was rejected for
-/// halheinrich/backgammon#85 and stays rejected: that publishes a <c>Source</c> minted from
-/// half-arrived facts.)
+/// <b>Observed, not polled.</b> A panel's refusal re-renders the panel, not
+/// Home, and a commit's refusal can land after the click that made it has
+/// rendered — or after Home has gone. Home attaches to the condition, so the
+/// notice appears on the refusal itself; the cases below that would pass
+/// without the attachment are said so.
 /// </para>
 /// <para>
-/// <b>Scope — the failure modelled here is per key, not per browser.</b> A real
-/// storage-disabled browser throws for <em>every</em> caller, and Home's
-/// siblings are still unguarded: <c>WebModePanel</c> and <c>LocalModePanel</c>
-/// read their own keys raw, and the producer's <c>FilterPanel</c> restores its
-/// selection the same way — a library-side change this repo may not make
-/// locally. bUnit rethrows those lifecycle exceptions, so a whole-browser
-/// model cannot pass until they are dealt with; that is booked as
-/// halheinrich/backgammon#102. These tests therefore fail only the keys Home
-/// itself owns, which is exactly the subject of halheinrich/backgammon#91.
+/// <b>No latch.</b> A refusal records that something happened; it never stops
+/// a call. Every visit makes its reads, refused or not, and a write after a
+/// refusal is attempted (and may succeed) — which changes nothing about the
+/// occurrence or its dismissal.
+/// </para>
+/// <para>
+/// Storage is the subject, so it is planned (<see cref="BrowserStoragePlan"/>),
+/// the surface's calls through <see cref="FilterSurfaceStorage"/>. Every
+/// caller is guarded now — Home, both panels, the surface — so a browser that
+/// refuses <em>everything</em> can be modelled whole.
 /// </para>
 /// </summary>
 public class HomeStorageUnavailableTests : BunitContext
 {
-    /// <summary>
-    /// The <c>localStorage</c> keys Home reads and writes itself. Everything
-    /// else on a Home render belongs to a mode panel or to the producer's
-    /// filter panel, and is left working — see the scope note above.
-    /// </summary>
-    private static readonly string[] HomeKeys =
-    [
-        "xg_folderPath", "xg_outputFormat", "xg_xgpAnonymize",
-        "xg_xgpLastNumber", "xg_xgpPattern", "xg_xgpPrefix",
-        "xg_xgpSuffixLength",
-    ];
-
-    private const string RestoredFolder = @"D:\xg\matches";
+    private const string StorageNotice = "storageUnavailableNotice";
 
     /// <summary>
-    /// What a browser with storage refused actually raises: the JS-side
-    /// <c>SecurityError</c>, surfaced through the interop boundary.
+    /// Hal's ruled wording for the notice (halheinrich/backgammon#374, comment
+    /// 6093027780) — an independent literal, because the ruling is what the
+    /// copy is held to. The earlier text said settings start from their
+    /// defaults and changes will not be saved, which is untrue once reads can
+    /// succeed while writes are refused.
     /// </summary>
-    private static JSException StorageRefused() =>
-        new("SecurityError: The operation is insecure.");
+    private const string RuledWording =
+        "This page had trouble using your browser's storage. You can keep using it, "
+        + "but some settings may not be restored or saved.";
+
+    private readonly BrowserStoragePlan _storage;
 
     public HomeStorageUnavailableTests()
     {
-        JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
-        Services.AddSingleton(new HttpClient(new StubAppModeHandler("Local"))
-        {
-            BaseAddress = new Uri("http://localhost/"),
-        });
-        Services.AddScoped<AppliedFilter>();
-        Services.AddScoped<FilterRestoreNotice>();
-        // The seam under test, registered at the scope Program.cs gives it.
-        Services.AddScoped<BrowserStorage>();
+        this.AddHomeServices("Local");
+        _storage = BrowserStoragePlan.On(JSInterop);
     }
 
-    private AppliedFilter Holder => Services.GetRequiredService<AppliedFilter>();
+    private BrowserStorageCondition Condition => Services.GetRequiredService<BrowserStorageCondition>();
 
-    private static bool IsHomeKey(JSRuntimeInvocation invocation) =>
-        invocation.Arguments is [string key, ..] && HomeKeys.Contains(key);
+    public static TheoryData<NoticeDismissGesture> BothGestures =>
+        new(Enum.GetValues<NoticeDismissGesture>());
 
-    /// <summary>Every read of a Home-owned key throws, as a dead store does.</summary>
-    private void WithReadsRefused() =>
-        JSInterop.Setup<string?>("localStorage.getItem", IsHomeKey)
-                 .SetException(StorageRefused());
-
-    /// <summary>Every write of a Home-owned key throws.</summary>
-    private void WithWritesRefused() =>
-        JSInterop.SetupVoid("localStorage.setItem", IsHomeKey)
-                 .SetException(StorageRefused());
-
-    private IRenderedComponent<Home> RenderHome()
+    private void ExpectAllRefusedBoot()
     {
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<FilterSurface>().Any(), TimeSpan.FromSeconds(5));
-        return cut;
+        _storage.ExpectFilterRestore(FilterRestoration.Refused);
+        _storage.ExpectHomeVisitRefused("Local");
     }
 
-    // ── The structural failure this exists for ──────────────────────────────
+    private void ExpectWorkingBoot()
+    {
+        _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
+        _storage.ExpectHomeVisit("Local");
+    }
+
+    private static NoticeBox TheNotice(IRenderedComponent<Home> cut) =>
+        NoticeBox.ById(cut, StorageNotice).ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: true, "id", "style");
+
+    // ── A browser that refuses everything ───────────────────────────────────
 
     [Fact]
-    public void StorageRefused_TheFilterSurfaceStillMounts()
+    public void StorageRefused_ThePageWorks_AndTheNoticeSaysSo()
     {
-        WithReadsRefused();
+        ExpectAllRefusedBoot();
 
-        // Unguarded, the restore faults before _restoreComplete and this wait
-        // never comes true — the page renders its shell forever, with no
-        // filtering and nothing on screen to say why.
-        var cut = RenderHome();
+        var cut = this.RenderHome();
 
+        // Every caller degraded instead of throwing: the surface is up and
+        // working, and the condition is announced.
         Assert.Single(cut.FindComponents<FilterSurface>());
         Assert.Contains(cut.FindAll("button"), b => b.TextContent.Trim() == "Apply Filter");
+        var box = TheNotice(cut);
+        Assert.Equal("max-width:800px", box.Element.GetAttribute("style"));
+        Assert.True(Condition.HasOccurred);
+        _storage.Verify();
     }
 
     [Fact]
-    public void StorageRefused_AnnouncesItself()
+    public void TheNotice_SaysTheRuledWording()
     {
-        WithReadsRefused();
+        ExpectAllRefusedBoot();
 
-        var cut = RenderHome();
+        var cut = this.RenderHome();
 
-        // The degradation is otherwise invisible: defaults look like a first
-        // run, and every later boot forgets the folder again for no stated
-        // reason.
-        Assert.Single(cut.FindAll("#storageUnavailableNotice"));
+        Assert.Equal(RuledWording, Normalize(TheNotice(cut).Content.TextContent));
+        _storage.Verify();
+    }
+
+    [Fact]
+    public async Task StorageRefused_EveryOptionLandsOnItsDocumentedDefault()
+    {
+        ExpectAllRefusedBoot();
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
+            BrowserStorageWriteAnswer.Refused);
+
+        var cut = this.RenderHome();
+
+        // The two facts the source is minted from, and the format the app
+        // opens on.
+        Assert.True(cut.Find("#fmtCsv").HasAttribute("checked"));
+        Assert.Equal(string.Empty, cut.Find("#folderPath").GetAttribute("value"));
+        Assert.Equal(string.Empty, cut.Find("#outputPath").GetAttribute("value"));
+
+        // The XGP options are behind the format switch — whose write is
+        // refused too, and the switch still takes effect.
+        await cut.Find("#fmtXgp").ChangeAsync(new ChangeEventArgs { Value = true });
+
+        Assert.Single(cut.FindAll("#xgpOptions"));
+        Assert.Equal(XgpExportOptions.DefaultNamePattern, cut.Find("#xgpPattern").GetAttribute("value"));
+        Assert.Equal("1", cut.Find("#xgpNextNumber").GetAttribute("value"));
+        Assert.Equal("3", cut.Find("#xgpSuffixLength").GetAttribute("value"));
+        Assert.False(cut.Find("#xgpAnonymize").HasAttribute("checked"));
+        _storage.Verify();
     }
 
     [Fact]
     public void StorageWorking_ShowsNoNotice()
     {
-        // The control for the two above: Loose mode answers every read with
-        // null — nothing stored, which is not a failure — so the page must say
-        // nothing about storage.
-        var cut = RenderHome();
+        // The control: answered reads — nothing stored, which is not a
+        // failure — say nothing about storage.
+        ExpectWorkingBoot();
 
-        Assert.Empty(cut.FindAll("#storageUnavailableNotice"));
+        var cut = this.RenderHome();
+
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
+        Assert.False(Condition.HasOccurred);
+        _storage.Verify();
     }
 
-    // ── What the page restores instead ──────────────────────────────────────
+    // ── The three reporters ─────────────────────────────────────────────────
 
+    /// <summary>
+    /// A panel-only refusal after Home has settled: Home's own reads were
+    /// answered, and the Local panel's output-path write is refused. The
+    /// keystroke re-renders the panel, not Home; the notice appears because
+    /// Home observes the condition.
+    /// </summary>
     [Fact]
-    public async Task StorageRefused_EveryOptionLandsOnItsDocumentedDefault()
+    public async Task APanelOnlyRefusal_AfterHomeHasSettled_ShowsTheNotice()
     {
-        WithReadsRefused();
+        ExpectWorkingBoot();
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputPathKey, @"D:\xg\out.csv",
+            BrowserStorageWriteAnswer.Refused);
+        var cut = this.RenderHome();
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
 
-        var cut = RenderHome();
+        await cut.SetOutputPathAsync(@"D:\xg\out.csv");
 
-        // The two facts Source is minted from, and the format the app opens on.
-        Assert.True(cut.Find("#fmtCsv").HasAttribute("checked"));
-        Assert.Equal(string.Empty, cut.Find("#folderPath").GetAttribute("value"));
+        TheNotice(cut);
+        // The typed value stands: only its saving failed.
+        Assert.Equal(@"D:\xg\out.csv", cut.Find("#outputPath").GetAttribute("value"));
+        _storage.Verify();
+    }
 
-        // The XGP options are behind the format switch — which also exercises
-        // the write guard, since committing the format persists it.
+    /// <summary>
+    /// A producer refusal: the filter surface's commit write is refused. The
+    /// write is held, so the click's own render has happened before the
+    /// browser answers; the notice appears on the refusal, through the
+    /// registered sink.
+    /// </summary>
+    [Fact]
+    public async Task AProducerRefusal_ShowsTheNotice()
+    {
+        ExpectWorkingBoot();
+        var (cut, apply, commit) = await ApplyWithTheCommitHeldAsync();
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
+
+        commit.Release(BrowserStorageWriteAnswer.Refused);
+        await apply.WaitAsync(DefaultWaitTimeout);
+
+        TheNotice(cut);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// A producer refusal while Home is absent: the commit's write is answered
+    /// after the page has gone. The refusal still reaches the condition, and
+    /// the next visit shows it with no further failure.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalWhileHomeIsAbsent_IsThereOnReturn()
+    {
+        ExpectWorkingBoot();
+        var (_, apply, commit) = await ApplyWithTheCommitHeldAsync();
+
+        await DisposeComponentsAsync();
+        commit.Release(BrowserStorageWriteAnswer.Refused);
+        await apply.WaitAsync(DefaultWaitTimeout);
+        Assert.True(Condition.HasOccurred);
+
+        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.FolderPathKey] = Folder });
+        var back = this.RenderHome();
+
+        TheNotice(back);
+        _storage.Verify();
+    }
+
+    private const string Folder = @"D:\xg\matches";
+
+    /// <summary>
+    /// A folder committed, a filter edited, and Apply clicked with the
+    /// commit's write held: the owner has published the applied state — and
+    /// Home re-rendered for it — before the browser answers.
+    /// </summary>
+    private async Task<(IRenderedComponent<Home> Page, Task Apply, BrowserStorageHeldWrite Commit)>
+        ApplyWithTheCommitHeldAsync()
+    {
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.FolderPathKey, Folder,
+            BrowserStorageWriteAnswer.Succeeded);
+        var commit = _storage.ExpectHeldFilterCommit(new FilterConfig { ErrorMin = 0.5 });
+
+        var cut = this.RenderHome();
+        await cut.CommitFolderAsync(Folder);
+        await cut.EditMinAsync("0.5");
+        var apply = cut.ApplyFiltersAsync();
+        Assert.True(commit.IsReached);
+        return (cut, apply, commit);
+    }
+
+    /// <summary>
+    /// Readable storage with refused writes — the full-quota shape — followed
+    /// by a successful operation. The reads restore; the refused write begins
+    /// the occurrence; a later write that lands begins nothing and ends
+    /// nothing: the notice stands, and once dismissed, a further refusal does
+    /// not bring it back.
+    /// </summary>
+    [Fact]
+    public async Task RefusedWrites_ThenASuccess_IsStillOneOccurrence()
+    {
+        _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
+        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.DiagramJson) });
+        var refusedXgp = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey,
+            nameof(OutputFormat.Xgp), BrowserStorageWriteAnswer.Refused);
+        var landedCsv = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey,
+            nameof(OutputFormat.Csv), BrowserStorageWriteAnswer.Succeeded);
+        var refusedPdf = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey,
+            nameof(OutputFormat.Pdf), BrowserStorageWriteAnswer.Refused);
+        _storage.RequireOrder(refusedXgp, landedCsv, refusedPdf);
+
+        var cut = this.RenderHome();
+        // The read was served: the stored format is restored, and nothing is
+        // said.
+        Assert.True(cut.Find("#fmtDiagram").HasAttribute("checked"));
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
+
         await cut.Find("#fmtXgp").ChangeAsync(new ChangeEventArgs { Value = true });
+        TheNotice(cut);
 
-        Assert.Equal(
-            XgpExportOptions.DefaultNamePattern, cut.Find("#xgpPattern").GetAttribute("value"));
-        Assert.Equal("1", cut.Find("#xgpNextNumber").GetAttribute("value"));
-        Assert.Equal("3", cut.Find("#xgpSuffixLength").GetAttribute("value"));
-        Assert.False(cut.Find("#xgpAnonymize").HasAttribute("checked"));
+        await cut.Find("#fmtCsv").ChangeAsync(new ChangeEventArgs { Value = true });
+        // A success begins nothing and ends nothing.
+        TheNotice(cut);
+
+        TheNotice(cut).Dismiss(NoticeDismissGesture.CloseButton);
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
+
+        // A further refusal in the same visit is the same occurrence: the
+        // dismissal stands.
+        await cut.Find("#fmtPdf").ChangeAsync(new ChangeEventArgs { Value = true });
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
+        Assert.True(Condition.IsNoticeDismissed);
+        _storage.Verify();
     }
 
-    [Fact]
-    public void StorageRefused_RestoresNoSource_SoTheSurvivingHolderIsDropped()
-    {
-        WithReadsRefused();
-        // A previous visit's apply, on the DI-scoped holder that outlives the
-        // page. No folder can be restored now, so this visit has no source —
-        // and the restore's reconcile must retire it rather than leave it to be
-        // re-adopted the moment that path is typed again.
-        Holder.Set(
-            new FilterConfig { ErrorMin = 0.75 }, FilterSourceToken.FromPath(RestoredFolder));
-
-        var cut = RenderHome();
-
-        Assert.Null(Holder.ConfigFor(FilterSourceToken.FromPath(RestoredFolder)));
-        // And the gate the composite mounted with is the truthful one: nothing
-        // applied, so Apply is armed rather than reporting a filter in effect.
-        var apply = cut.FindAll("button").First(b => b.TextContent.Trim() == "Apply Filter");
-        Assert.False(apply.HasAttribute("disabled"));
-    }
-
-    // ── Writes fail the same way, and the notice has to keep up ─────────────
-
-    [Fact]
-    public async Task StorageLostAfterBoot_TheNoticeCatchesUp()
-    {
-        // Reads succeed, so the page boots clean and says nothing.
-        WithWritesRefused();
-
-        var cut = RenderHome();
-        Assert.Empty(cut.FindAll("#storageUnavailableNotice"));
-
-        // The first persisted gesture is where the loss shows up. Unguarded
-        // this throws out of the event handler; guarded it degrades and the
-        // notice starts telling the truth for the rest of the session.
-        await cut.Find("#fmtXgp").ChangeAsync(new ChangeEventArgs { Value = true });
-
-        Assert.Single(cut.FindAll("#storageUnavailableNotice"));
-        // The gesture itself still took effect — only its persistence was lost.
-        Assert.Single(cut.FindAll("#xgpOptions"));
-    }
-
-    // ── The notice itself: a condition notice, dismissible per occurrence ───
-    //
-    // halheinrich/backgammon#248, SPEC-notices.md §1–§2. The occurrence is the
-    // app's — storage does not come back mid-session — so its owner is the
-    // app-scoped BrowserStorage, and these pin the three rows of the model's
-    // dismissal table through the page (the reload row is a fresh owner, which
-    // only BrowserStorageTests can stage).
-
-    private const string StorageNotice = "#storageUnavailableNotice";
-
-    [Fact]
-    public void TheNotice_IsAnAssertiveDismissibleNotice_WithItsIdAndStyleOnTheBox()
-    {
-        WithReadsRefused();
-
-        var box = RenderHome().Find(StorageNotice);
-
-        NoticeAssert.IsNoticeBox(box, "alert-warning", "id", "style");
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsDismissible(box);
-        Assert.Equal("max-width:800px", box.GetAttribute("style"));
-    }
+    // ── The dismissal ───────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(StorageNotice)]                          // the whole box
-    [InlineData(StorageNotice + " > button.btn-close")]  // the close button
-    public void TheNotice_DismissesByTheBoxAndByTheCloseButton(string target)
+    [MemberData(nameof(BothGestures))]
+    public void TheNotice_DismissesByEitherGesture_AndTheConditionStands(NoticeDismissGesture gesture)
     {
-        WithReadsRefused();
-        var cut = RenderHome();
+        ExpectAllRefusedBoot();
+        var cut = this.RenderHome();
 
-        cut.Find(target).Click();
+        TheNotice(cut).Dismiss(gesture);
 
-        Assert.Empty(cut.FindAll(StorageNotice));
-        // The condition is untouched — only its notice was closed.
-        Assert.True(Services.GetRequiredService<BrowserStorage>().IsUnavailable);
+        Assert.Empty(cut.FindAll("#" + StorageNotice));
+        Assert.True(Condition.HasOccurred);
+        _storage.Verify();
     }
 
+    /// <summary>
+    /// Dismissed stays dismissed across a navigate-back — the page is new, the
+    /// app-scoped holder is not, and the same occurrence is not shown again.
+    /// And storage is still attempted: the second visit makes every read the
+    /// first made, refused again. Nothing remembers to stop calling.
+    /// </summary>
     [Fact]
-    public async Task Dismissed_StaysDismissedAcrossANavigateBack_AndStorageIsNotRetried()
+    public async Task Dismissed_StaysDismissedAcrossANavigateBack_AndStorageIsStillAttempted()
     {
-        WithReadsRefused();
-        var firstVisit = RenderHome();
-        firstVisit.Find(StorageNotice + " > button.btn-close").Click();
-        var refusedReads = JSInterop.Invocations.Count(IsHomeKey);
+        ExpectAllRefusedBoot();
+        var firstVisit = this.RenderHome();
+        TheNotice(firstVisit).Dismiss(NoticeDismissGesture.CloseButton);
 
-        // Navigating away and back: the page is new, the app-scoped owner is
-        // not. The same condition is not a new occurrence, so nothing is
-        // re-discovered and nothing is said again.
         await DisposeComponentsAsync();
-        var secondVisit = RenderHome();
+        _storage.ExpectHomeVisitRefused("Local");
+        var secondVisit = this.RenderHome();
 
-        Assert.Empty(secondVisit.FindAll(StorageNotice));
-        Assert.Equal(refusedReads, JSInterop.Invocations.Count(IsHomeKey));
+        Assert.Empty(secondVisit.FindAll("#" + StorageNotice));
+        // Every read of the second visit was made — and refused — or Verify
+        // names the one that was not.
+        _storage.Verify();
     }
 
     [Fact]
@@ -268,12 +334,19 @@ public class HomeStorageUnavailableTests : BunitContext
     {
         // The control for the one above: the second visit's silence there is
         // the dismissal's doing, not the remount's.
-        WithReadsRefused();
-        RenderHome();
+        ExpectAllRefusedBoot();
+        this.RenderHome();
 
         await DisposeComponentsAsync();
-        var secondVisit = RenderHome();
+        _storage.ExpectHomeVisitRefused("Local");
+        var secondVisit = this.RenderHome();
 
-        Assert.Single(secondVisit.FindAll(StorageNotice));
+        TheNotice(secondVisit);
+        _storage.Verify();
     }
+
+    // Collapses the markup's line breaks and indentation into the single
+    // spaces a reader sees.
+    private static string Normalize(string text) =>
+        string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

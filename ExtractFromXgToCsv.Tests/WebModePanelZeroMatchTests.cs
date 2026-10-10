@@ -1,4 +1,5 @@
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -28,7 +29,7 @@ public class WebModePanelZeroMatchTests : BunitContext
     public WebModePanelZeroMatchTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     [Fact]
@@ -36,8 +37,7 @@ public class WebModePanelZeroMatchTests : BunitContext
     {
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false));
+            .Add(c => c.FilterInEffect, (FilterConfig?)null));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
         cut.FindComponents<InputFile>()[0].UploadFiles(
@@ -46,9 +46,8 @@ public class WebModePanelZeroMatchTests : BunitContext
         // A filter naming a player who never appears rejects every row: the
         // built set is non-empty, _rows.Count > 0, _filteredRows.Count == 0.
         cut.Render(p => p
-            .Add(c => c.FilterConfig,
-                new FilterConfig { Players = new List<string> { "__no_such_player__" } })
-            .Add(c => c.FilterApplied, true));
+            .Add(c => c.FilterInEffect,
+                new FilterConfig { Players = new List<string> { "__no_such_player__" } }));
 
         Assert.True(cut.Instance.RowCache.Rows.Count > 0, "fixture should load rows");
         Assert.Empty(cut.Instance.RowCache.FilteredRows);
@@ -62,15 +61,14 @@ public class WebModePanelZeroMatchTests : BunitContext
     {
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false));
+            .Add(c => c.FilterInEffect, (FilterConfig?)null));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
         cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
 
         // An empty (inactive) filter passes every row → filtered == loaded > 0.
-        cut.Render(p => p.Add(c => c.FilterApplied, true));
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
 
         Assert.True(cut.Instance.RowCache.FilteredRows.Count > 0,
             "empty filter should pass every loaded row");

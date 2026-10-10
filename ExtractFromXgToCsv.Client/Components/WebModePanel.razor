@@ -3,7 +3,9 @@
 @using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
+@using XgFilter_Razor
 @inject XgProcessingService Processor
+@inject SettingsStorage Settings
 @inject IJSRuntime JS
 
 @* Panel root. It exists to carry the busy marker: everything the user can
@@ -114,7 +116,7 @@
     @if (_rowCache.Rows.Count > 0)
     {
         <div class="mb-4" style="max-width:800px">
-            @if (FilterApplied)
+            @if (FilterInEffect is not null)
             {
                 @if (_rowCache.FilteredRows.Count == 0)
                 {
@@ -154,10 +156,10 @@
 
             <button class="btn btn-primary"
                     @onclick="DownloadAsync"
-                    disabled="@(_busy || !FilterApplied || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
+                    disabled="@(_busy || FilterInEffect is null || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
                 @(_busy ? "Building…" : DownloadButtonLabel)
             </button>
-            @if (!FilterApplied)
+            @if (FilterInEffect is null)
             {
                 <small class="text-muted ms-2">Apply filters first</small>
             }
@@ -172,7 +174,7 @@
         </div>
     }
 
-    @if (FilterApplied && _rowCache.FilteredRows.Count > 0)
+    @if (FilterInEffect is not null && _rowCache.FilteredRows.Count > 0)
     {
         <h5>Preview (first @(Math.Min(20, _rowCache.FilteredRows.Count)) of @_rowCache.FilteredRows.Count filtered rows, @_rowCache.Rows.Count total)</h5>
         <div style="overflow-x:auto">
@@ -220,24 +222,22 @@
     private const long WebModeLimitBytes = 50L * 1024 * 1024;
 
     [Parameter] public OutputFormat OutputFormat { get; set; }
-    [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
 
     /// <summary>
-    /// Whether a filter is in effect for the current source — the host's one
-    /// filter fact (<c>Home.FilterInEffect is not null</c>). It gates the
-    /// Download button, the preview, the match-count line, and this panel's
-    /// single filtering decision in <c>OnParametersSet</c>.
+    /// The filter in effect for this panel's selection, or
+    /// <see langword="null"/> when none is — the host's one filter fact
+    /// (<c>Home.FilterInEffect</c>). It gates the Download button, the
+    /// preview and the match-count line, and is what the rows are filtered
+    /// by. The empty selection is in effect without Apply
+    /// (halheinrich/backgammon#266).
     /// </summary>
     /// <remarks>
-    /// It means <i>applied and settled</i>, not merely applied: the composite
-    /// clears the shared holder the moment the filter panel's buffers stop
-    /// equalling a commit, so an edit closes this on its own. A second
-    /// <c>FilterDirty</c> parameter used to ride beside it and every gate here
-    /// read the conjunction — one fact with two owners, deleted by the
-    /// filtering spec's §6.1 (halheinrich/backgammon#101). Do not reintroduce a
-    /// dirtiness input: there is no state this cannot express.
+    /// One fact, so one parameter: a config beside a separate "applied" flag
+    /// could disagree with it. The host hands a new instance on each render
+    /// (the owner's <c>ConfigInEffectFor</c> does), so the row cache compares
+    /// it by value.
     /// </remarks>
-    [Parameter, EditorRequired] public bool FilterApplied { get; set; }
+    [Parameter, EditorRequired] public FilterConfig? FilterInEffect { get; set; }
 
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
@@ -246,15 +246,32 @@
     /// <summary>
     /// Raised once per file-selection gesture — every
     /// <see cref="HandleFileSelectionAsync"/> invocation, because every one
-    /// replaces (or clears) the retained selection before anything else runs.
-    /// The host bumps its selection generation off this, changing the filter
-    /// source token so the hosted FilterSurface ends the setup (halheinrich/backgammon#78): the
-    /// selection is Web mode's filter <em>source</em>, and a new selection
-    /// must re-gate exactly as a new Local folder does. EditorRequired for the
-    /// same reason as the panel's other gate wiring — a silently splatted
-    /// binding here is a re-gate that never fires.
+    /// replaces (or clears) the retained selection before anything else runs —
+    /// with the new selection's token, or <see langword="null"/> when the
+    /// gesture left nothing selected (a dismissed picker, a selection over the
+    /// size limit). The selection is Web mode's filter <em>source</em>; the
+    /// host reports the token to the filter setup, so a new selection ends
+    /// the setup exactly as a new Local folder does. EditorRequired: a
+    /// silently splatted binding here is a source change nobody hears of.
     /// </summary>
-    [Parameter, EditorRequired] public EventCallback OnSelectionChanged { get; set; }
+    [Parameter, EditorRequired] public EventCallback<FilterSourceToken?> OnSelectionChanged { get; set; }
+
+    // ── The selection's identity ────────────────────────────────────────────
+    //
+    // The selection — its bytes (_fileBytes) and rows (_rowCache) — is this
+    // panel's, so its token is too: minted when a gesture selects files, held
+    // beside them, and gone with them (a clearing gesture, or this panel's
+    // disposal, which takes the bytes with it). Two selections never share a
+    // token, also across panel instances: the filter setup outlives every
+    // page, so a page-lived counter would mint the same token again after a
+    // navigation, and a new pick would inherit an old pick's consent. The
+    // counter is therefore process-wide — one per loaded app under
+    // WebAssembly — and only ever moves forward.
+    private static int s_lastSelectionNumber;
+    private FilterSourceToken? _selection;
+
+    private static FilterSourceToken MintSelectionToken() =>
+        FilterSourceToken.FromGeneration(Interlocked.Increment(ref s_lastSelectionNumber));
 
     private string _csvFileName = "decisions.csv";
     private string _lastFolderHint = string.Empty;
@@ -281,7 +298,7 @@
 
     // Live-preview row state — the loaded rows, the materialized filter, and
     // the filtered projections all live in the cache; the panel only decides
-    // *when* the filter is in effect (the FilterApplied gate) and renders from
+    // *when* a filter is in effect (FilterInEffect) and renders from
     // the cache's properties. Exposed internally so wire tests can pin the
     // panel→cache routing without reflection. The cache is the run's, built
     // for the application's one ranking; extraction reads the ranking back
@@ -314,18 +331,18 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _csvFileName = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_csvFileName") ?? "decisions.csv";
-        _lastFolderHint = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_lastFolderHint") ?? string.Empty;
+        _csvFileName = await Settings.ReadAsync("xg_csvFileName") ?? "decisions.csv";
+        _lastFolderHint = await Settings.ReadAsync("xg_lastFolderHint") ?? string.Empty;
         StateHasChanged();
     }
 
     protected override void OnParametersSet()
     {
-        // Re-filter when the filter config or applied state changes. Whether a
-        // filter is in effect is the panel's one filtering decision;
-        // materialization and projection live in the cache.
-        if (FilterApplied)
-            _rowCache.Refilter(FilterConfig);
+        // Re-filter by the filter in effect. Whether one is in effect is the
+        // panel's one filtering decision; materialization (cached by config
+        // value) and projection live in the cache.
+        if (FilterInEffect is { } filter)
+            _rowCache.Refilter(filter);
 
         // Update filename extension when output format changes
         if (!string.IsNullOrWhiteSpace(_csvFileName))
@@ -339,7 +356,7 @@
             if (!_csvFileName.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
             {
                 _csvFileName = Path.ChangeExtension(_csvFileName, expectedExt);
-                _ = JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+                _ = Settings.WriteAsync("xg_csvFileName", _csvFileName);
             }
         }
     }
@@ -350,30 +367,35 @@
         _rowCache.Clear();
         _fileBytes.Clear();
 
-        // The old selection is gone as of the clears above, on every path out
-        // of this handler — success, over-limit refusal, and the dismissed
-        // picker's empty selection alike — so the source-change announcement
-        // is unconditional and fires before any outcome is known.
-        await OnSelectionChanged.InvokeAsync();
-
         var files = e.GetMultipleFiles(500).ToList();
         _totalSelectedBytes = files.Sum(f => f.Size);
 
-        // Over the limit nothing is read. The reason is on screen already, by
-        // the picker, rendered from _totalSelectedBytes itself — a gate reason
-        // that stands until the selection changes. It used to be written into
-        // the run error as well: one fact in two boxes, and the second copy
-        // would now be a dismissible statement of a gate reason
-        // (SPEC-notices.md §1). One fact, one owner, one box.
-        if (_totalSelectedBytes > WebModeLimitBytes) return;
+        // Over the limit nothing is read, and a dismissed picker selects
+        // nothing: either way the gesture leaves no selection. Otherwise the
+        // files are the new selection, with a token of its own.
+        var selecting = files.Count > 0 && _totalSelectedBytes <= WebModeLimitBytes;
+        _selection = selecting ? MintSelectionToken() : null;
 
-        // A dismissed picker selects nothing: the clear above is the whole
-        // effect, and raising busy for it would flash a notice over no work
-        // (the wrapper's yield guarantees the flash would actually paint).
-        if (files.Count == 0) return;
+        // The old selection is gone as of the clears above, on every path out
+        // of this handler, so the source change is announced unconditionally —
+        // once, with the outcome's token — before anything is read.
+        await OnSelectionChanged.InvokeAsync(_selection);
 
+        // Over the limit: the reason is on screen already, by the picker,
+        // rendered from _totalSelectedBytes itself — a gate reason that stands
+        // until the selection changes. It used to be written into the run
+        // error as well: one fact in two boxes, and the second copy would now
+        // be a dismissible statement of a gate reason (SPEC-notices.md §1).
+        // One fact, one owner, one box. And for a dismissed picker the clear
+        // above is the whole effect: raising busy for it would flash a notice
+        // over no work (the wrapper's yield guarantees the flash would paint).
+        if (!selecting) return;
+
+        // The hint is a convenience: a refused write is reported to the
+        // storage condition and returns, and the upload goes on. At no point
+        // may persisting it stand between the user and their files.
         _lastFolderHint = $"{files.Count} file(s) — first: {files[0].Name}";
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_lastFolderHint", _lastFolderHint);
+        await Settings.WriteAsync("xg_lastFolderHint", _lastFolderHint);
 
         await RunBusyAsync(
             $"Reading {files.Count} file(s) and extracting decisions…",
@@ -516,7 +538,7 @@
     private async Task OnCsvFileNameChanged(ChangeEventArgs e)
     {
         _csvFileName = e.Value?.ToString() ?? string.Empty;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_csvFileName", _csvFileName);
+        await Settings.WriteAsync("xg_csvFileName", _csvFileName);
     }
 
     // Xgp needs matching decisions and valid naming options before the
@@ -547,6 +569,10 @@
 
     private async Task DownloadCoreAsync()
     {
+        // The gate guarantees a filter in effect; a stale click past it has
+        // nothing to build.
+        if (FilterInEffect is not { } filter) return;
+
         _runError = null;
         try
         {
@@ -560,7 +586,7 @@
                     _fileBytes,
                     _rowCache.FilteredRows,
                     XgpOptions,
-                    FilterConfig,
+                    filter,
                     anonymize: XgpAnonymize);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.zip" : _csvFileName;
                 mimeType = "application/zip";

@@ -1,4 +1,5 @@
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -11,19 +12,18 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Pins the <em>panel-layer</em> projection rule: rows handed to the cache
-/// while <c>FilterApplied</c> is (still) true are
-/// projected through the set in effect by <see cref="FilteredRowCache"/>'s
-/// <c>ReplaceRows</c> — no rebuild, no second Apply at this layer.
+/// while a filter is (still) in effect are projected through the set in
+/// effect by <see cref="FilteredRowCache"/>'s <c>ReplaceRows</c> — no rebuild,
+/// no second Apply at this layer.
 /// <para>
-/// <b>The end-to-end user contract this once pinned is superseded</b> (halheinrich/backgammon#78):
-/// in the real app a file selection bumps Home's selection generation, the
-/// hosted <c>FilterSurface</c> ends the setup, and the panel receives
-/// <c>FilterApplied = false</c> — so a post-Apply selection now blanks the
-/// preview until re-Apply (pinned at Home level by
-/// <see cref="HomeWiringTests"/>). These tests drive the panel directly with
-/// the applied parameters held true, which is exactly what isolates the
-/// cache-routing half: if a host ever keeps the applied state across a
-/// selection again, this is the projection it gets.
+/// In the real app a new selection carries a new source token, so the filter
+/// setup ends: an applied selection is dropped and the preview waits for
+/// Apply, while the empty selection stays in effect without one
+/// (halheinrich/backgammon#266) — both pinned at Home level by
+/// <see cref="HomeWiringTests"/>. These tests drive the panel directly with a
+/// filter held in effect, which is exactly what isolates the cache-routing
+/// half: whatever the host keeps in effect across a selection, this is the
+/// projection it gets.
 /// </para>
 /// </summary>
 public class WebModePanelRefilterOnLoadTests : BunitContext
@@ -34,14 +34,13 @@ public class WebModePanelRefilterOnLoadTests : BunitContext
     public WebModePanelRefilterOnLoadTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     private IRenderedComponent<WebModePanel> Panel() =>
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false));
+            .Add(c => c.FilterInEffect, (FilterConfig?)null));
 
     private static void Upload(IRenderedComponent<WebModePanel> cut, string fixture) =>
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
@@ -65,8 +64,7 @@ public class WebModePanelRefilterOnLoadTests : BunitContext
         var cut = Panel();
         Upload(cut, FixtureA);
         cut.Render(p => p
-            .Add(c => c.FilterConfig, cfg)
-            .Add(c => c.FilterApplied, true));
+            .Add(c => c.FilterInEffect, cfg));
 
         // Select B while the filter is applied — no second Apply follows.
         Upload(cut, FixtureB);
@@ -96,8 +94,7 @@ public class WebModePanelRefilterOnLoadTests : BunitContext
         var cut = Panel();
         Upload(cut, FixtureA);
         cut.Render(p => p
-            .Add(c => c.FilterConfig, cfg)
-            .Add(c => c.FilterApplied, true));
+            .Add(c => c.FilterInEffect, cfg));
         Assert.Empty(cut.FindAll(".zero-match-notice"));
 
         // Select B while A's player filter is applied: every new row fails,

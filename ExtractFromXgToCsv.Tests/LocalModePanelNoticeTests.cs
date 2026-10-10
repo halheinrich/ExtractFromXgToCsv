@@ -1,6 +1,7 @@
 using System.Net;
 using AngleSharp.Dom;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,25 +49,24 @@ public class LocalModePanelNoticeTests : BunitContext
     public LocalModePanelNoticeTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
+        Services.AddClientServices();
         Services.AddSingleton(new HttpClient(new FailingStartHandler())
         {
             BaseAddress = new Uri("http://localhost/"),
         });
     }
 
-    private IRenderedComponent<LocalModePanel> RenderPanel(FilterConfig? filters = null) =>
+    private IRenderedComponent<LocalModePanel> RenderPanel() =>
         Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, filters ?? new FilterConfig())
-            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.FolderPath, @"D:\xg")
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 
-    private IRenderedComponent<LocalModePanel> RenderWith(
-        ProcessingProgress snapshot, FilterConfig? filters = null)
+    private IRenderedComponent<LocalModePanel> RenderWith(ProcessingProgress snapshot)
     {
-        var cut = RenderPanel(filters);
+        var cut = RenderPanel();
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", snapshot);
         cut.Render();
         return cut;
@@ -75,11 +75,20 @@ public class LocalModePanelNoticeTests : BunitContext
     // ── The two gate reasons ────────────────────────────────────────────────
 
     [Fact]
-    public void ZeroMatchNotice_IsAnAssertiveNonDismissibleGateReason()
+    public async Task ZeroMatchNotice_IsAnAssertiveNonDismissibleGateReason()
     {
-        var cut = RenderWith(
-            new ProcessingProgress { Complete = true, TotalRows = 0 },
-            new FilterConfig { Players = ["Alice"] });
+        // A real run against a server that writes zero rows: the notice reads
+        // the filter the run recorded, so a seeded snapshot cannot show it.
+        await using var ctx = new BunitContext();
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.Services.AddClientServices();
+        ctx.Services.AddSingleton(new HttpClient(
+            new CapturingProcessHandler("{\"complete\":true,\"totalRows\":0}"))
+        {
+            BaseAddress = new Uri("http://localhost/"),
+        });
+        var cut = ctx.RenderReadyLocalPanel(new FilterConfig { Players = ["Alice"] });
+        await cut.RunToCompletionAsync();
 
         var box = cut.Find(".zero-match-notice");
 

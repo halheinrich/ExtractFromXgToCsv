@@ -1,4 +1,5 @@
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,14 +21,14 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
     public LocalModePanelBusyAffordanceTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
+        Services.AddClientServices();
         Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
     }
 
     private IRenderedComponent<LocalModePanel> RenderPanel() =>
         Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Pptx)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 

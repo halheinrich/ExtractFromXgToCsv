@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -25,7 +26,7 @@ public class WebModePanelXgpExportTests : BunitContext
     public WebModePanelXgpExportTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     [Fact]
@@ -42,11 +43,10 @@ public class WebModePanelXgpExportTests : BunitContext
         };
 
         // Established flow: select files first, then Apply — filtering runs
-        // in OnParametersSet on the FilterApplied parameter change.
+        // in OnParametersSet when FilterInEffect changes.
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
+            .Add(c => c.FilterInEffect, (FilterConfig?)null)
             .Add(c => c.XgpOptions, options)
             .Add(c => c.OnXgpExported, (int n) => exportedCount = n));
 
@@ -55,7 +55,7 @@ public class WebModePanelXgpExportTests : BunitContext
         cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(fixtureBytes, XgFixture));
 
-        cut.Render(p => p.Add(c => c.FilterApplied, true));
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
 
         var expectedCount = cut.Instance.RowCache.FilteredRows.Count;
         Assert.True(expectedCount > 0, "fixture should yield filtered decisions");
@@ -90,15 +90,14 @@ public class WebModePanelXgpExportTests : BunitContext
 
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
+            .Add(c => c.FilterInEffect, (FilterConfig?)null)
             .Add(c => c.XgpOptions, options)
             .Add(c => c.XgpAnonymize, true));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
         cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
-        cut.Render(p => p.Add(c => c.FilterApplied, true));
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
 
         var expectedCount = cut.Instance.RowCache.FilteredRows.Count;
         Assert.True(expectedCount > 0, "fixture should yield filtered decisions");
@@ -122,14 +121,13 @@ public class WebModePanelXgpExportTests : BunitContext
     {
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
+            .Add(c => c.FilterInEffect, (FilterConfig?)null)
             .Add(c => c.XgpOptions, new XgpExportOptions { NamePattern = "a/b" }));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
         cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
-        cut.Render(p => p.Add(c => c.FilterApplied, true));
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
 
         Assert.True(cut.Find("button.btn-primary").HasAttribute("disabled"));
 

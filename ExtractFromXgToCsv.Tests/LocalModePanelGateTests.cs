@@ -1,58 +1,73 @@
 using AngleSharp.Html.Dom;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
+using XgFilter_Razor;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the Run button's filter gate. The bug pattern that produced the
-/// original regression was a permanently-disabled Run button because
-/// <c>FilterApplied</c> never flipped to true; this class fails closed if the
-/// gating logic is altered such that the parameter stops affecting the
-/// button's <c>disabled</c> attribute.
+/// Pins the Run button's filter gate, and what a run's result describes.
 /// <para>
-/// One parameter, two rows. Until the §6.1 collapse
-/// (halheinrich/backgammon#101) this theory had a third — applied-but-dirty —
-/// which is no longer a representable state: <c>FilterApplied</c> means
-/// applied <i>and</i> settled, because the composite clears the shared holder
-/// the moment the filter panel's buffers stop equalling a commit. A row
-/// asserting it would have had to invent an input the host cannot produce.
+/// <b>The gate.</b> The bug pattern that produced the original regression was
+/// a permanently-disabled Run button because the filter fact never became
+/// true; the theory fails closed if <c>FilterInEffect</c> stops deciding the
+/// button's <c>disabled</c> attribute. One parameter, two rows: a filter is in
+/// effect or it is not, and an edit that moves the selection off what is in
+/// effect reaches this panel as null.
+/// </para>
+/// <para>
+/// <b>The result.</b> A result describes the inputs it was computed from — the
+/// source and the filter <em>values</em> — not merely whether some filter is
+/// in effect. Watching "a filter is in effect" fall is not enough now that the
+/// empty selection stays in effect across a source replacement
+/// (halheinrich/backgammon#266): a folder change never makes it fall, while the
+/// folder the result was computed from has gone. And a run that completes
+/// after its inputs were superseded must not land its result as the new
+/// inputs' (halheinrich/backgammon#374, Arc 2). Each case runs a real run
+/// through <see cref="CapturingProcessHandler"/>, because the run is where the
+/// panel records what it was computed from.
 /// </para>
 /// </summary>
 public class LocalModePanelGateTests : BunitContext
 {
+    private const string FolderA = @"D:\xg\a";
+    private const string FolderB = @"D:\xg\b";
+
+    private readonly CapturingProcessHandler _server = new();
+
     public LocalModePanelGateTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        Services.AddClientServices();
+        Services.AddSingleton(new HttpClient(_server) { BaseAddress = new Uri("http://localhost/") });
     }
 
     [Theory]
     [InlineData(false, true)]   // no filter in effect → disabled
     [InlineData(true,  false)]  // filter in effect, paths set → enabled
-    public void RunButton_DisabledGatesOnFilterApplied(
-        bool filterApplied, bool expectDisabled)
+    public void RunButton_DisabledGatesOnFilterInEffect(bool inEffect, bool expectDisabled)
     {
         // The folder path is a Home-owned parameter since the source hoist;
-        // only the output path is still panel state (normally hydrated from
-        // localStorage in OnAfterRenderAsync), so only it needs the
-        // reflection seed. Both are set so FilterApplied is the deciding
-        // factor.
+        // only the output path is still panel state (normally restored from
+        // browser storage in OnAfterRenderAsync), so only it needs the
+        // reflection seed. Both are set so the filter is the deciding factor.
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, filterApplied)
-            .Add(c => c.FolderPath, "D:\\xg"));
+            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
+            .Add(c => c.FilterInEffect, inEffect ? new FilterConfig() : null)
+            .Add(c => c.FolderPath, FolderA));
 
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\out.csv");
+        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", @"D:\xg\out.csv");
         cut.Render();
 
-        var runButton = (IHtmlButtonElement)cut.FindAll("button.btn-primary").Single();
-        Assert.Equal(expectDisabled, runButton.IsDisabled);
+        Assert.Equal(expectDisabled, RunButton(cut).IsDisabled);
     }
 
     /// <summary>
@@ -68,129 +83,167 @@ public class LocalModePanelGateTests : BunitContext
     {
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true));
+            .Add(c => c.FilterInEffect, new FilterConfig()));
 
-        var instance = cut.Instance;
-        instance.GetType()
-            .GetField("_progress", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .SetValue(instance, new ProcessingProgress
-            {
-                Complete = true,
-                ErrorMessage = "boom",
-            });
+        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", new ProcessingProgress
+        {
+            Complete = true,
+            ErrorMessage = "boom",
+        });
         cut.Render();
 
         var errorSpan = cut.Find("span.text-danger");
         Assert.Contains("boom", errorSpan.TextContent);
     }
 
-    // ── The post-run status block's lifetime ────────────────────────────────
+    // ── What a result describes ─────────────────────────────────────────────
 
-    /// <summary>
-    /// The post-run status block is dropped when the filter stops being in
-    /// effect: "Done — N rows" must not go on describing a filter set that is
-    /// no longer active.
-    /// <para>
-    /// The panel watches the <i>falling edge</i> of <c>FilterApplied</c>, which
-    /// is what the §6.1 collapse (halheinrich/backgammon#101) turned the old
-    /// rising edge of <c>FilterDirty</c> into — one fact, so one edge. This
-    /// test and its <c>FilterStayingInEffect</c> sibling pin the two ordinary
-    /// directions and deliberately do <i>not</i> distinguish the edge from a
-    /// plain level check; <see cref="EditDuringARun_DoesNotDropTheResultThatRunProduces"/>
-    /// is the case that does.
-    /// </para>
-    /// </summary>
     [Fact]
-    public void FilterLeavingEffect_DropsThePostRunStatusBlock()
+    public async Task UnrelatedRerender_KeepsTheResult()
     {
-        var cut = RenderWithCompletedRun();
-        Assert.Contains("Done", cut.Markup);
+        var cut = await RenderWithCompletedRunAsync(new FilterConfig { ErrorMin = 0.05 });
 
-        // The shape an edit (or a source change) arrives in: the holder is
-        // cleared, so the host hands down FilterApplied = false.
-        cut.Render(p => p.Add(c => c.FilterApplied, false));
+        // A re-render that changes neither input — what every host render is:
+        // a new config instance of the same value, and an unrelated parameter.
+        // A result compared by reference, or dropped on any re-render, would
+        // vanish here on an unrelated keystroke elsewhere on the page.
+        cut.Render(p => p
+            .Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 0.05 })
+            .Add(c => c.OutputFormat, OutputFormat.DiagramJson));
+
+        Assert.Contains("Done", cut.Markup);
+    }
+
+    [Fact]
+    public async Task FilterLeavingEffect_DropsTheResult()
+    {
+        var cut = await RenderWithCompletedRunAsync(new FilterConfig { ErrorMin = 0.05 });
+
+        // The shape an edit arrives in: the selection on screen no longer
+        // equals what is in effect, so the host hands down null.
+        cut.Render(p => p.Add(c => c.FilterInEffect, (FilterConfig?)null));
 
         Assert.DoesNotContain("Done", cut.Markup);
     }
 
     [Fact]
-    public void FilterStayingInEffect_KeepsThePostRunStatusBlock()
+    public async Task FilterValuesChanging_DropsTheResult()
     {
-        var cut = RenderWithCompletedRun();
-        Assert.Contains("Done", cut.Markup);
+        var cut = await RenderWithCompletedRunAsync(new FilterConfig { ErrorMin = 0.05 });
 
-        // A re-render that does not move the filter out of effect — the
-        // counterpart half. An unguarded drop would clear the block here too,
-        // and the user would watch their result vanish on an unrelated
-        // keystroke elsewhere on the page.
-        cut.Render(p => p.Add(c => c.OutputFormat, OutputFormat.DiagramJson));
+        // A different filter in effect for the same folder — an edit applied —
+        // is not what the result was computed from.
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 0.10 }));
 
-        Assert.Contains("Done", cut.Markup);
+        Assert.DoesNotContain("Done", cut.Markup);
     }
 
     /// <summary>
-    /// Editing the filter <i>while a run is in flight</i> must not cost the
-    /// user the result that run then produces. This is the case that makes the
-    /// falling edge load-bearing rather than a stylistic choice, and the reason
-    /// the <c>!_busy</c> guard cannot simply be paired with a level check.
-    /// <para>
-    /// The sequence: the edit lands while <c>_busy</c>, so the drop is
-    /// suppressed and the edge is spent — and by the time the run completes,
-    /// the filter has <i>already</i> been out of effect for a while. A level
-    /// check (<c>!FilterApplied &amp;&amp; !_busy</c>) would fire on the very
-    /// next render and wipe the freshly-arrived "Done — N rows"; the edge does
-    /// not, because nothing fell.
-    /// </para>
+    /// Changing folders while the empty filter stays ready: "a filter is in
+    /// effect" never falls — the empty selection is in effect for the new
+    /// folder without Apply — yet the result was computed from the old folder,
+    /// so it goes. Run stays open over the new folder.
     /// </summary>
     [Fact]
-    public void EditDuringARun_DoesNotDropTheResultThatRunProduces()
+    public async Task FolderChanging_WhileTheEmptyFilterStaysReady_DropsTheResult()
     {
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true));
+        var cut = await RenderWithCompletedRunAsync(new FilterConfig());
 
-        // A run is under way…
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_busy", true);
+        cut.Render(p => p
+            .Add(c => c.Source, FilterSourceToken.FromPath(FolderB))
+            .Add(c => c.FilterInEffect, new FilterConfig())
+            .Add(c => c.FolderPath, FolderB));
 
-        // …and the user edits the filter mid-run: the holder clears, so
-        // FilterApplied falls. The drop is suppressed by the busy guard, and
-        // the edge is consumed here.
-        cut.Render(p => p.Add(c => c.FilterApplied, false));
-
-        // The run finishes and lands its result.
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_busy", false);
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", new ProcessingProgress
-        {
-            Complete = true,
-            TotalRows = 3,
-        });
-        cut.Render(p => p.Add(c => c.OutputFormat, OutputFormat.DiagramJson));
-
-        // It describes the run that actually happened, so it stays.
-        Assert.Contains("Done", cut.Markup);
+        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.False(RunButton(cut).IsDisabled);
     }
 
     /// <summary>
-    /// A panel with a filter in effect and a completed run on screen, seeded
-    /// the way <see cref="Progress_WithErrorMessage_RendersErrorBranch"/> seeds
-    /// it — <c>_progress</c> is written by the polling loop, which needs a live
-    /// server, so the reflection seed stands in for a run that has finished.
+    /// A run that completes after its inputs were superseded. While it runs,
+    /// its progress and Stop stay with it; when it lands, its result is not
+    /// shown as the new inputs' — the folder on screen is not the one it read.
     /// </summary>
-    private IRenderedComponent<LocalModePanel> RenderWithCompletedRun()
+    [Fact]
+    public async Task RunCompletingAfterItsInputsWereSuperseded_DoesNotShowItsResult()
+    {
+        var cut = RenderReadyPanel(new FilterConfig());
+        _server.HoldStatus();
+
+        var run = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        // The folder changes under the running job, the empty filter staying
+        // ready for the new one.
+        cut.Render(p => p
+            .Add(c => c.Source, FilterSourceToken.FromPath(FolderB))
+            .Add(c => c.FilterInEffect, new FilterConfig())
+            .Add(c => c.FolderPath, FolderB));
+
+        // The running job keeps its own progress and its Stop.
+        Assert.Single(cut.FindAll("#startingNotice"));
+        Assert.Contains(cut.FindAll("button"), b => b.TextContent.Trim() == "Stop");
+
+        _server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.Empty(cut.FindAll("#startingNotice"));
+        Assert.False(RunButton(cut).IsDisabled);
+    }
+
+    /// <summary>
+    /// The control for the case above: the same held run, released with its
+    /// inputs unchanged, lands its result. The silence above is the
+    /// supersession's doing, not the hold's.
+    /// </summary>
+    [Fact]
+    public async Task RunCompletingWithItsInputsUnchanged_ShowsItsResult()
+    {
+        var cut = RenderReadyPanel(new FilterConfig());
+        _server.HoldStatus();
+
+        var run = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
+
+        _server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Contains("Done", cut.Markup);
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A panel over folder A with <paramref name="filter"/> in effect and an
+    /// output path typed — Run is open.
+    /// </summary>
+    private IRenderedComponent<LocalModePanel> RenderReadyPanel(FilterConfig filter)
     {
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true));
-
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", new ProcessingProgress
-        {
-            Complete = true,
-            TotalRows = 3,
-        });
-        cut.Render();
+            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
+            .Add(c => c.FilterInEffect, filter)
+            .Add(c => c.FolderPath, FolderA)
+            .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.XgpAnonymize, false));
+        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
+        Assert.False(RunButton(cut).IsDisabled);
         return cut;
     }
+
+    /// <summary>A ready panel whose run has completed, its result on screen.</summary>
+    private async Task<IRenderedComponent<LocalModePanel>> RenderWithCompletedRunAsync(FilterConfig filter)
+    {
+        var cut = RenderReadyPanel(filter);
+        await RunButtonElement(cut).ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
+        Assert.Contains("Done", cut.Markup);
+        return cut;
+    }
+
+    private static AngleSharp.Dom.IElement RunButtonElement(IRenderedComponent<LocalModePanel> cut) =>
+        cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run");
+
+    private static IHtmlButtonElement RunButton(IRenderedComponent<LocalModePanel> cut) =>
+        (IHtmlButtonElement)RunButtonElement(cut);
 }

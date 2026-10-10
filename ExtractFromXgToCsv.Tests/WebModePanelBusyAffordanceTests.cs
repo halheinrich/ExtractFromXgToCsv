@@ -1,4 +1,5 @@
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -31,15 +32,14 @@ public class WebModePanelBusyAffordanceTests : BunitContext
     public WebModePanelBusyAffordanceTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     private IRenderedComponent<WebModePanel> RenderPanel(
-        OutputFormat format = OutputFormat.Csv, bool filterApplied = false) =>
+        OutputFormat format = OutputFormat.Csv, bool filterInEffect = false) =>
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, format)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, filterApplied)
+            .Add(c => c.FilterInEffect, filterInEffect ? new FilterConfig() : null)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 
@@ -141,7 +141,7 @@ public class WebModePanelBusyAffordanceTests : BunitContext
     [InlineData(OutputFormat.DiagramJson, "Building JSON")]
     public void Download_RunsThroughTheBusyWrapper(OutputFormat format, string expectedMessage)
     {
-        var cut = RenderPanel(format, filterApplied: true);
+        var cut = RenderPanel(format, filterInEffect: true);
         cut.FindComponents<InputFile>()[0].UploadFiles(
             InputFileContent.CreateFromBinary(Fixture, "MTCH4064.xg"));
 

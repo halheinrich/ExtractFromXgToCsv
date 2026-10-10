@@ -1,5 +1,6 @@
 using BgDataTypes_Lib;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -26,14 +27,13 @@ public class WebModePanelOpeningBookTests : BunitContext
     public WebModePanelOpeningBookTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     private IRenderedComponent<WebModePanel> Panel() =>
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false));
+            .Add(c => c.FilterInEffect, (FilterConfig?)null));
 
     private static IReadOnlyList<DecisionRow> Rows(IRenderedComponent<WebModePanel> cut) =>
         cut.Instance.RowCache.Rows;

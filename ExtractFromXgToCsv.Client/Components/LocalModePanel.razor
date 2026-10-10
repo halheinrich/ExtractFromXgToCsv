@@ -1,7 +1,9 @@
 @using BgDataTypes_Lib
 @using XgFilter_Lib.Filtering
+@using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
-@inject IJSRuntime JS
+@using XgFilter_Razor
+@inject SettingsStorage Settings
 @inject HttpClient Http
 
 @* Panel root. It exists to carry the busy marker: everything the user can
@@ -57,8 +59,8 @@
     @* The run error — dismissible (SPEC-notices.md, Fork A), and assertive: a
        gesture the user made failed. One occurrence is one failed run, and
        _runError is non-null exactly while one stands, so closing the box ends
-       the occurrence — the field is cleared, as the next Run and the filter's
-       falling edge already clear it — and there is no dismissed bit anywhere,
+       the occurrence — the field is cleared, as the next Run, and inputs that
+       no longer match the run's, already clear it — and there is no dismissed bit anywhere,
        here or in the Notice (the binding makes it caller-held, so it keeps
        none). A second failure assigns the field again and shows fresh although
        its text may be identical: the text was never the occurrence. No @if
@@ -73,7 +75,7 @@
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || !FilterApplied || XgpRunBlocked)">
+                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || FilterInEffect is null || XgpRunBlocked)">
             Run
         </button>
         @if (_busy)
@@ -85,7 +87,12 @@
         <button class="btn btn-outline-secondary" @onclick="ExitAsync">
             Exit
         </button>
-        @if (!FilterApplied)
+        @* Only with a source: without a folder nothing can be in effect, the
+           empty filter included, and the blank folder box already says why
+           Run is dark. With one, a filter not in effect is a selection that
+           needs Apply — the empty selection is in effect without it
+           (halheinrich/backgammon#266). *@
+        @if (Source is not null && FilterInEffect is null)
         {
             <small class="text-muted">Apply filters first</small>
         }
@@ -152,9 +159,9 @@
                     {
                         <span class="text-success fw-bold">
                             ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec) → @_outputPath
+                            (@_progress.FilesPerSec files/sec) → @_run?.OutputPath
                         </span>
-                        @if (_progress.TotalRows == 0 && _builtSet is { IsEmpty: false }
+                        @if (_progress.TotalRows == 0 && _run is { FilterRestrictsNothing: false }
                              && _progress.Skipped.Count == 0)
                         {
                             // A successful run wrote zero rows through a non-empty
@@ -164,7 +171,9 @@
                             // filtered-to-zero result rather than letting the bland
                             // "Done — 0 rows" line read as a silent success. Sibling
                             // of WebModePanel's zero-match notice; folder wording for
-                            // Local mode. IsEmpty is the seam — no FilterConfig peek.
+                            // Local mode. IsEmpty is the seam — no FilterConfig peek
+                            // — and it is the run's own filter's, never the one now
+                            // on screen: this box describes the run.
                             //
                             // Only when nothing was skipped: that inference assumes
                             // every file was read. With skips the zero may be theirs,
@@ -234,30 +243,36 @@
 
 @code {
     [Parameter] public OutputFormat OutputFormat { get; set; }
-    [Parameter, EditorRequired] public FilterConfig FilterConfig { get; set; } = default!;
 
     /// <summary>
-    /// Whether a filter is in effect for the current source — the host's one
-    /// filter fact (<c>Home.FilterInEffect is not null</c>), and the whole
-    /// filter half of this panel's gate.
+    /// The current source's token, as Home reports it to the filter setup —
+    /// the latched folder, or <see langword="null"/> while none is latched.
+    /// Half of what a run's result describes (see <see cref="RunInputs"/>).
+    /// </summary>
+    [Parameter, EditorRequired] public FilterSourceToken? Source { get; set; }
+
+    /// <summary>
+    /// The filter in effect for <see cref="Source"/>, or
+    /// <see langword="null"/> when none is — the host's one filter fact
+    /// (<c>Home.FilterInEffect</c>), the whole filter half of this panel's
+    /// gate, and the filter a run sends. The empty selection is in effect
+    /// without Apply (halheinrich/backgammon#266); an edit that moves the
+    /// selection off what is in effect makes this null on its own.
     /// </summary>
     /// <remarks>
-    /// It means <i>applied and settled</i>, not merely applied: the composite
-    /// clears the shared holder the moment the filter panel's buffers stop
-    /// equalling a commit, so an edit closes this on its own. A second
-    /// <c>FilterDirty</c> parameter used to ride beside it and every gate here
-    /// read the conjunction — one fact with two owners, deleted by the
-    /// filtering spec's §6.1 (halheinrich/backgammon#101). Do not reintroduce a
-    /// dirtiness input: there is no state this cannot express.
+    /// One fact, so one parameter: a config beside a separate "applied" flag
+    /// could disagree with it. The host hands a new instance on each render
+    /// (the owner's <c>ConfigInEffectFor</c> does), so compare it by value
+    /// (<see cref="FilterConfig.Equals(FilterConfig)"/>), never by reference.
     /// </remarks>
-    [Parameter, EditorRequired] public bool FilterApplied { get; set; }
+    [Parameter, EditorRequired] public FilterConfig? FilterInEffect { get; set; }
 
     // The folder input's controlled-component surface. Home owns the value
     // (it is Local mode's filter-source identity, latched host-side at the
     // change boundary); this panel renders it and forwards both event
-    // boundaries verbatim. All three are load-bearing for the halheinrich/backgammon#78 re-gate, so
-    // all three are EditorRequired — a silently splatted binding here would be
-    // a gate that never re-opens.
+    // boundaries verbatim. All three are load-bearing for reporting the
+    // source, so all three are EditorRequired — a silently splatted binding
+    // here would be a source change nobody hears of.
     [Parameter, EditorRequired] public string FolderPath { get; set; } = string.Empty;
     [Parameter, EditorRequired] public EventCallback<string> FolderPathChanged { get; set; }
     [Parameter, EditorRequired] public EventCallback<string> OnFolderPathCommitted { get; set; }
@@ -290,34 +305,32 @@
     // follow one.
     private string? _runError;
 
-    // Previous render's FilterApplied, for the falling edge the post-run status
-    // block is dropped on (see OnParametersSet). Starts false — nothing is in
-    // effect before the host's first parameters-set — so that first set can
-    // never read as a fall, whichever value it carries. Nothing would be
-    // dropped either way (there is no run to describe yet); starting false is
-    // simply the truthful value.
-    private bool _lastFilterApplied = false;
+    /// <summary>
+    /// What a run was computed from: the source it read, the filter values it
+    /// applied, and the output path it wrote to — plus whether that filter
+    /// restricted nothing, the zero-match box's premise. Captured when the
+    /// run starts, so the result on screen is read against its own run, never
+    /// against whatever is on screen now.
+    /// </summary>
+    private sealed record RunInputs(
+        FilterSourceToken? Source, FilterConfig Filter, bool FilterRestrictsNothing, string OutputPath);
+
+    // The run whose progress, result or error is on screen; null when none is.
+    // A result stands only while its run's source and filter values are still
+    // the current ones (see OnParametersSet and RunLocalAsync's finally).
+    private RunInputs? _run;
 
     // Server-side opening-book load state, fetched once on first render so the
     // status line can tell the user which analysis-depth stamps to expect. Null
     // until fetched (or if the fetch fails) — the line renders only when known.
     private OpeningBookStatus? _bookStatus;
 
-    // Cached materialization of FilterConfig — mirrors WebModePanel's
-    // reference-identity cache (the filter panel mints a new FilterConfig on every
-    // Apply, so ref inequality signals "rebuild"). Local mode POSTs the
-    // unbuilt config to the server for the actual run; this local build exists
-    // solely so the post-run notice can consult DecisionFilterSet.IsEmpty — the
-    // SSOT for "filters active" — rather than re-inspecting FilterConfig fields.
-    private DecisionFilterSet? _builtSet;
-    private FilterConfig? _lastBuiltConfig;
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
         // The folder path is restored by Home (its owner since the source
         // hoist); only the output path — not a source — is still panel-owned.
-        _outputPath = await JS.InvokeAsync<string?>("localStorage.getItem", "xg_outputPath") ?? string.Empty;
+        _outputPath = await Settings.ReadAsync("xg_outputPath") ?? string.Empty;
 
         // Server-side book status (Local mode only). A failure leaves the line
         // hidden rather than asserting a state we don't know.
@@ -330,21 +343,11 @@
     private async Task OnOutputPathChanged(ChangeEventArgs e)
     {
         _outputPath = e.Value?.ToString() ?? string.Empty;
-        await JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
+        await Settings.WriteAsync("xg_outputPath", _outputPath);
     }
 
     protected override void OnParametersSet()
     {
-        // Rebuild the cached filter set when the applied FilterConfig changes,
-        // by reference identity. Only used to gate the zero-match notice via
-        // DecisionFilterSet.IsEmpty; the run itself POSTs the unbuilt config.
-        if (FilterApplied
-            && !ReferenceEquals(_lastBuiltConfig, FilterConfig))
-        {
-            _builtSet = FilterConfig.Build();
-            _lastBuiltConfig = FilterConfig;
-        }
-
         // Update output path extension when output format changes.
         // Xgp is excluded: its output path is a folder, so no extension is
         // forced onto (or stripped from) whatever the user typed.
@@ -360,27 +363,33 @@
             if (!_outputPath.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
             {
                 _outputPath = Path.ChangeExtension(_outputPath, expectedExt);
-                _ = JS.InvokeVoidAsync("localStorage.setItem", "xg_outputPath", _outputPath);
+                _ = Settings.WriteAsync("xg_outputPath", _outputPath);
             }
         }
 
-        // Drop the post-run status block the moment the filter stops being in
-        // effect — otherwise "Done — N rows" keeps describing a filter set
-        // that's no longer active. Gated on !_busy so an in-flight job's
-        // progress isn't dropped if the user pre-edits for the next run.
-        //
-        // The falling edge of FilterApplied, which is precisely the rising edge
-        // of the deleted FilterDirty this used to watch (§6.1's collapse —
-        // one fact, so one edge). It still fires on both the gestures it always
-        // covered: an edit that moves the buffers off the commit, and a source
-        // change, which reaches here as the composite's forget-commit clearing
-        // the holder.
-        if (!FilterApplied && _lastFilterApplied && !_busy)
-        {
-            _progress = null;
-            _runError = null;
-        }
-        _lastFilterApplied = FilterApplied;
+        // Drop the run's result the moment it stops describing the current
+        // inputs — otherwise "Done — N rows" keeps describing a folder or a
+        // filter that is no longer the one on screen. Compared, not edged: an
+        // empty filter stays in effect across a folder change, so "a filter is
+        // in effect" never falls there, while the source the result was
+        // computed from has gone. Not while busy: a running job's progress and
+        // Stop stay with their own job, and its completion is judged when it
+        // lands (RunLocalAsync's finally).
+        if (!_busy && _run is { } run && !DescribesCurrentInputs(run))
+            DropResult();
+    }
+
+    // Whether the current source and filter values are still the ones the run
+    // was computed from. Values, not references: the host hands a new config
+    // on every render.
+    private bool DescribesCurrentInputs(RunInputs run) =>
+        run.Source == Source && FilterInEffect is { } current && current.Equals(run.Filter);
+
+    private void DropResult()
+    {
+        _run = null;
+        _progress = null;
+        _runError = null;
     }
 
     // The skip notice's headline: only the non-zero counts, read from the
@@ -412,6 +421,12 @@
 
     private async Task RunLocalAsync()
     {
+        // The gate guarantees a filter in effect; a stale click past it has
+        // nothing to run.
+        if (FilterInEffect is not { } filter) return;
+
+        var run = new RunInputs(Source, filter, filter.Build().IsEmpty, _outputPath);
+        _run = run;
         _busy = true; _runError = null;
         _progress = null; _currentJobId = null;
         StateHasChanged();
@@ -421,8 +436,8 @@
             var request = new ProcessRequest
             {
                 FolderPath = FolderPath,
-                OutputPath = _outputPath,
-                Filters = FilterConfig,
+                OutputPath = run.OutputPath,
+                Filters = run.Filter,
                 OutputFormat = OutputFormat,
                 XgpOptions = XgpOptions,
                 Anonymize = XgpAnonymize
@@ -477,6 +492,13 @@
         {
             _busy = false;
             _currentJobId = null;
+
+            // A run that completes after its inputs were superseded — the
+            // folder changed, or the filter, while it ran — describes inputs no
+            // longer on screen, so its result is not shown as theirs.
+            if (!DescribesCurrentInputs(run))
+                DropResult();
+
             StateHasChanged();
         }
     }

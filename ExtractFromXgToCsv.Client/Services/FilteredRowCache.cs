@@ -25,13 +25,16 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// producer's; the cache only carries the one it was given.
 /// </para>
 /// <para>
-/// <b>Materialization is cached by <see cref="FilterConfig"/> reference
-/// identity.</b> The filter panel inside XgFilter_Razor's <c>FilterSurface</c>
-/// mints a new <see cref="FilterConfig"/> instance on every Apply, so reference
-/// inequality reliably signals "rebuild". <see cref="Refilter"/> calls
-/// <see cref="FilterConfig.Build"/> only when handed a config instance it has
-/// not built yet, keeping the build out of the per-row
-/// <see cref="DecisionFilterSet.Matches"/> hot path.
+/// <b>Materialization is cached by <see cref="FilterConfig"/> value.</b> The
+/// host reads the filter in effect from XgFilter_Razor's <c>FilterSetup</c>,
+/// whose <c>ConfigInEffectFor</c> returns a new instance on every call, so a
+/// reference would differ on every render while the filter had not changed.
+/// <see cref="Refilter"/> calls <see cref="FilterConfig.Build"/> only when
+/// handed a config whose value differs from the one it last built
+/// (<see cref="FilterConfig.Equals(FilterConfig)"/>), keeping the build out of
+/// the per-row <see cref="DecisionFilterSet.Matches"/> hot path. The key is a
+/// copy the cache owns, so a caller mutating the instance it handed in cannot
+/// move the key out from under the built set.
 /// </para>
 /// <para>
 /// <b>The projections always reflect the current rows.</b>
@@ -39,8 +42,8 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// already-materialized set immediately (without rebuilding it), so rows that
 /// arrive while a filter is in effect never sit unfiltered waiting for the
 /// next Apply. Until the first <see cref="Refilter"/> there is no set and the
-/// projections stay empty — the panel shows nothing filtered before the first
-/// Apply.
+/// projections stay empty — the panel shows nothing filtered before a filter
+/// is first in effect.
 /// </para>
 /// <para>
 /// Every collection the cache hands out is immutable, and each replacement is
@@ -62,7 +65,7 @@ internal sealed class FilteredRowCache
     private ImmutableArray<(BgDecisionData Record, IDecisionFilterData View)> _diagramRows = [];
 
     // Cached materialization of the last Refilter config — see the class
-    // remarks for the reference-identity rule these two implement.
+    // remarks for the value-equality rule these two implement.
     private DecisionFilterSet? _builtSet;
     private FilterConfig? _lastBuiltConfig;
 
@@ -96,9 +99,9 @@ internal sealed class FilteredRowCache
 
     /// <summary>
     /// The materialized filter currently in effect — null until the first
-    /// <see cref="Refilter"/>. Exposed so the identity-cache invariants
-    /// (build once per config instance, never on row replacement) are
-    /// observable without reflection.
+    /// <see cref="Refilter"/>. Exposed so the cache's invariants (build once
+    /// per config value, never on row replacement) are observable without
+    /// reflection.
     /// </summary>
     public DecisionFilterSet? BuiltSet => _builtSet;
 
@@ -119,7 +122,7 @@ internal sealed class FilteredRowCache
     /// Replaces the loaded rows and records and immediately re-projects them
     /// through the materialized filter, if one is in effect. Never builds — row
     /// arrival must not trigger <see cref="FilterConfig.Build"/> (that belongs
-    /// to <see cref="Refilter"/>, the Apply-driven path).
+    /// to <see cref="Refilter"/>, the filter-in-effect path).
     /// </summary>
     /// <exception cref="ArgumentException">
     /// A row in <paramref name="rows"/> was built for a ranking other than
@@ -149,17 +152,19 @@ internal sealed class FilteredRowCache
     /// <summary>
     /// Makes <paramref name="config"/> the filter in effect and recomputes
     /// both projections. Builds via <see cref="FilterConfig.Build"/> only when
-    /// <paramref name="config"/> is not the instance already materialized —
-    /// see the class remarks for why reference identity is the cache key.
+    /// <paramref name="config"/>'s value differs from the one already
+    /// materialized — see the class remarks for why value is the cache key.
     /// </summary>
     public void Refilter(FilterConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        if (!ReferenceEquals(_lastBuiltConfig, config))
+        if (_lastBuiltConfig is null || !_lastBuiltConfig.Equals(config))
         {
             _builtSet = config.Build();
-            _lastBuiltConfig = config;
+            // The canonical JSON round-trip is the copy: FilterConfig is
+            // mutable and has no other, and equality survives it.
+            _lastBuiltConfig = FilterConfig.FromJson(config.ToJson());
         }
         Materialize();
     }

@@ -1,4 +1,5 @@
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -37,7 +38,7 @@ public class BusyCursorTests : BunitContext
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
-        Services.AddSingleton<XgProcessingService>();
+        Services.AddClientServices();
     }
 
     // PPTX because the deck pathway is where the missing cursor was found: a
@@ -45,16 +46,14 @@ public class BusyCursorTests : BunitContext
     private IRenderedComponent<LocalModePanel> RenderLocal() =>
         Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Pptx)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 
     private IRenderedComponent<WebModePanel> RenderWeb() =>
         Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, false)
+            .Add(c => c.FilterInEffect, (FilterConfig?)null)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 

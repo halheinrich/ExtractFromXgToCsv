@@ -1,9 +1,11 @@
+using BgUiPrimitives_Razor;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
-using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
-using Microsoft.Extensions.DependencyInjection;
+using XgFilter_Razor;
+using XgFilter_Razor.TestSupport;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -12,36 +14,37 @@ namespace ExtractFromXgToCsv.Tests;
 /// bUnit tests for the Home-owned XGP name-pattern UI: the pattern textbox
 /// binding, the registry-driven insert-token dropdown, the live preview /
 /// inline error branch, the one-time <c>xg_xgpPrefix</c> →
-/// <c>xg_xgpPattern</c> localStorage migration, and the post-export
-/// persistence (write the pattern key, remove the legacy key). Naming
-/// mechanics themselves are owned by the engine suites — here only the
-/// wiring is pinned.
+/// <c>xg_xgpPattern</c> storage migration, and the post-export persistence
+/// (write the pattern key, remove the legacy key). Naming mechanics
+/// themselves are owned by the engine suites — here only the wiring is
+/// pinned.
+/// <para>
+/// Storage is planned (<see cref="BrowserStoragePlan"/>): the migration reads
+/// and the export's writes are the subject, and every other call the page
+/// makes is declared beside them — switching to XGP persists the format, and
+/// the Web panel's file name takes the <c>.zip</c> extension and persists it.
+/// </para>
 /// </summary>
 public class HomeXgpPatternTests : BunitContext
 {
+    private readonly BrowserStoragePlan _storage;
+
     public HomeXgpPatternTests()
     {
-        JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton<XgProcessingService>();
-        // Home injects the applied-filter holder and the restore-notice state
-        // since the FilterSurface adoption; these tests never touch either,
-        // but the page can't render without them registered.
-        Services.AddScoped<XgFilter_Razor.AppliedFilter>();
-        Services.AddScoped<XgFilter_Razor.FilterRestoreNotice>();
-        // Home's localStorage seam — every persistence pin below goes through it.
-        Services.AddScoped<BrowserStorage>();
-        Services.AddSingleton(new HttpClient(new StubAppModeHandler("Web"))
-        {
-            BaseAddress = new Uri("http://localhost/"),
-        });
+        this.AddHomeServices("Web");
+        _storage = BrowserStoragePlan.On(JSInterop);
+        _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
     }
 
-    private IRenderedComponent<Home> RenderHomeWithXgpSelected()
+    private IRenderedComponent<Home> RenderHomeWithXgpSelected(Dictionary<string, string>? stored = null)
     {
-        var cut = Render<Home>();
-        cut.WaitForState(
-            () => cut.FindComponents<WebModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        _storage.ExpectHomeVisit("Web", stored);
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
+            BrowserStorageWriteAnswer.Succeeded);
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.CsvFileNameKey, "decisions.zip",
+            BrowserStorageWriteAnswer.Succeeded);
+
+        var cut = this.RenderHome();
         cut.Find("#fmtXgp").Change(true);
         return cut;
     }
@@ -55,6 +58,7 @@ public class HomeXgpPatternTests : BunitContext
 
         var webPanel = cut.FindComponent<WebModePanel>();
         Assert.Equal("Move{dice}", webPanel.Instance.XgpOptions.NamePattern);
+        _storage.Verify();
     }
 
     [Fact]
@@ -76,6 +80,7 @@ public class HomeXgpPatternTests : BunitContext
         Assert.Equal("pos{n}{dice}",
             cut.FindComponent<WebModePanel>().Instance.XgpOptions.NamePattern);
         Assert.Equal("pos{n}{dice}", cut.Find("#xgpPattern").GetAttribute("value"));
+        _storage.Verify();
     }
 
     [Fact]
@@ -88,6 +93,7 @@ public class HomeXgpPatternTests : BunitContext
         Assert.Contains("pos001.xgp", preview);
         Assert.Contains("pos002.xgp", preview);
         Assert.Empty(cut.FindAll("#xgpOptions .text-danger"));
+        _storage.Verify();
     }
 
     [Fact]
@@ -100,6 +106,7 @@ public class HomeXgpPatternTests : BunitContext
         var preview = cut.Find("#xgpPreview").TextContent;
         Assert.Contains("quiz.xgp", preview);
         Assert.Contains("quiz (2).xgp", preview);
+        _storage.Verify();
     }
 
     [Fact]
@@ -111,6 +118,7 @@ public class HomeXgpPatternTests : BunitContext
 
         Assert.Empty(cut.FindAll("#xgpPreview"));
         Assert.Contains("{bogus}", cut.Find("#xgpOptions .text-danger").TextContent);
+        _storage.Verify();
     }
 
     [Fact]
@@ -119,15 +127,17 @@ public class HomeXgpPatternTests : BunitContext
         // Pre-pattern persistence: prefix "quiz", last exported number 42,
         // no xg_xgpPattern key. The migrated pattern must be "quiz{n}" AND
         // count as the persisted pattern, so the counter continues at 43.
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_xgpPrefix").SetResult("quiz");
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_xgpLastNumber").SetResult("42");
-
-        var cut = RenderHomeWithXgpSelected();
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.XgpPrefixKey] = "quiz",
+            [HomeStoragePlan.XgpLastNumberKey] = "42",
+        });
 
         Assert.Equal("quiz{n}", cut.Find("#xgpPattern").GetAttribute("value"));
         var options = cut.FindComponent<WebModePanel>().Instance.XgpOptions;
         Assert.Equal("quiz{n}", options.NamePattern);
         Assert.Equal(43, options.StartNumber);
+        _storage.Verify();
     }
 
     [Fact]
@@ -136,16 +146,18 @@ public class HomeXgpPatternTests : BunitContext
         // Legacy prefixes could contain braces, which the pattern grammar
         // reserves — the migration must fall back rather than produce a
         // permanently invalid pattern.
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_xgpPrefix").SetResult("qu{iz");
-        JSInterop.Setup<string?>("localStorage.getItem", "xg_xgpLastNumber").SetResult("42");
-
-        var cut = RenderHomeWithXgpSelected();
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.XgpPrefixKey] = "qu{iz",
+            [HomeStoragePlan.XgpLastNumberKey] = "42",
+        });
 
         var options = cut.FindComponent<WebModePanel>().Instance.XgpOptions;
         Assert.Equal(XgpExportOptions.DefaultNamePattern, options.NamePattern);
         // The fallback counts as the persisted pattern too — the counter
         // still continues rather than resetting underneath the user.
         Assert.Equal(43, options.StartNumber);
+        _storage.Verify();
     }
 
     [Fact]
@@ -153,19 +165,18 @@ public class HomeXgpPatternTests : BunitContext
     {
         var cut = RenderHomeWithXgpSelected();
         var webPanel = cut.FindComponent<WebModePanel>();
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, "pos{n}",
+            BrowserStorageWriteAnswer.Succeeded);
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpLastNumberKey, "5",
+            BrowserStorageWriteAnswer.Succeeded);
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "3",
+            BrowserStorageWriteAnswer.Succeeded);
+        _storage.ExpectRemove(BrowserStorageArea.Local, HomeStoragePlan.XgpPrefixKey,
+            BrowserStorageWriteAnswer.Succeeded);
 
         await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(5));
 
-        Assert.Contains(JSInterop.Invocations, i =>
-            i.Identifier == "localStorage.setItem"
-            && (string?)i.Arguments[0] == "xg_xgpPattern"
-            && (string?)i.Arguments[1] == "pos{n}");
-        Assert.Contains(JSInterop.Invocations, i =>
-            i.Identifier == "localStorage.setItem"
-            && (string?)i.Arguments[0] == "xg_xgpLastNumber"
-            && (string?)i.Arguments[1] == "5");
-        Assert.Contains(JSInterop.Invocations, i =>
-            i.Identifier == "localStorage.removeItem"
-            && (string?)i.Arguments[0] == "xg_xgpPrefix");
+        Assert.Equal(6, webPanel.Instance.XgpOptions.StartNumber);
+        _storage.Verify();
     }
 }

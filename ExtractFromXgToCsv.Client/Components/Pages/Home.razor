@@ -5,42 +5,42 @@
 @using ExtractFromXgToCsv.Client.Shared
 @page "/"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@implements IDisposable
 @inject HttpClient Http
-@inject AppliedFilter AppliedFilter
-@inject FilterRestoreNotice FilterRestoreNotice
-@inject BrowserStorage BrowserStorage
+@inject FilterSetup FilterSetup
+@inject BrowserStorageCondition StorageCondition
+@inject SettingsStorage Settings
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
 
 <h1>Extract XG Decisions to CSV</h1>
 
-@* A condition notice, dismissible per occurrence (SPEC-notices.md §1, §4).
-   Storage is dead for the session once it has failed once, so the occurrence
-   is the app's, not this page's: it survives a navigate-back and ends only
-   with a reload. Its owner is therefore the app-scoped BrowserStorage, which
-   holds the latch and the dismissal both — this page keeps neither bit, and a
-   remount over a notice already dismissed says nothing again. Dismissing it
-   hides nothing the screen needs: the defaults it explains are visible on
-   every control below, which is what makes it a condition and not a gate
-   reason.
+@* A condition notice, dismissible per occurrence (SPEC-notices.md §1, §2).
+   The occurrence is the app's, not this page's: the browser refused a storage
+   call this visit, whoever made it — this page's settings, either mode
+   panel's, or the filter surface's own. Its owner is the app-scoped
+   BrowserStorageCondition, which holds the occurrence and the dismissal both;
+   this page keeps neither bit, so a remount over a dismissed notice says
+   nothing again, and a refusal made while this page was absent is shown on
+   return.
 
-   Host-owned on purpose — XgFilter_Razor's FilterRestoreNotice states
-   something else entirely (a restored filter selection is not yet applied)
-   and is armed and spent by members internal to that library.
+   Refusals arrive from calls this page never awaits — a panel's restore after
+   this page has rendered, a filter commit answered after a navigation — so
+   this block is carried by the condition's notification (see OnInitialized),
+   not by the render that follows this page's own gestures.
 
-   Every gesture that can flip the latch is one of this page's own awaited
-   storage calls, from the restore or from an event handler, and each is
-   followed by a render — which is what carries a flip to this block. *@
-@if (BrowserStorage.IsUnavailable)
+   Dismissing it hides nothing the screen needs: every control below shows
+   the value it holds, restored or not, which is what makes it a condition and
+   not a gate reason. The wording claims only what is true when reads succeed
+   and writes are refused (Hal's ruling, halheinrich/backgammon#374). *@
+@if (StorageCondition.HasOccurred)
 {
     <Notice id="storageUnavailableNotice" style="max-width:800px"
             Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive"
             Dismissible="true"
-            @bind-Dismissed:get="BrowserStorage.IsUnavailableNoticeDismissed"
-            @bind-Dismissed:set="_ => BrowserStorage.DismissUnavailableNotice()">
-        Browser storage is unavailable, so this page cannot remember your
-        settings. The output format, folder path and XGP numbering options
-        start from their defaults and changes to them will not be saved.
+            @bind-Dismissed:get="StorageCondition.IsNoticeDismissed"
+            @bind-Dismissed:set="_ => StorageCondition.DismissNotice()">
+        This page had trouble using your browser's storage. You can keep using it, but some settings may not be restored or saved.
     </Notice>
 }
 
@@ -144,7 +144,7 @@
             // Throwaway allocator over a synthetic sample decision, rendered
             // twice: shows the {n} advance for counter patterns and the
             // " (2)" uniquifier for patterns without {n}.
-            var preview = XgpNameAllocator.Create(_xgpOptions, _filterConfig);
+            var preview = XgpNameAllocator.Create(_xgpOptions, FilterInEffect ?? new FilterConfig());
             <small class="text-muted" id="xgpPreview">
                 Files are named @preview.Next(XgpNamePreview.SampleRow), @preview.Next(XgpNamePreview.SampleRow), …
                 one per exported decision (preview values come from a sample decision).
@@ -158,96 +158,80 @@
 }
 
 @* The whole filter surface — the filter panel, and in Local mode the
-   saved-filters section with its degrade notices — is one producer composite:
-   FilterSurface owns the panels and every interaction between them, including
-   the source-change rule (halheinrich/backgammon#78). This host binds facts and side effects only:
-   the holder, the restore-notice state, the current source's token, the
-   storage seam, and the two re-raised panel events. Source and Storage are
-   per-mode — see the @code members.
+   saved-filters section with its degrade notices — is one producer composite
+   over the app-scoped FilterSetup. This host binds only what is its own to
+   say here: the saved-filters storage seam (per mode — see Storage). The
+   source is reported to the owner, not bound (see ReportSource), and the
+   filter in effect is read from it (see FilterInEffect); storage refusals
+   reach BrowserStorageCondition, this app's registered sink.
 
-   RestoreNotice is the app-scoped instance registered in Program.cs, bound and
-   nothing more: the producer's panel owns arming and dismissal, and every
-   member that moves it is internal to it, so this host cannot make the notice
-   behave differently from any other host's.
+   Mounted from the first render. The owner outlives this page, so a remount
+   shows the existing setup as it stands; nothing here waits on this page's
+   restore, because nothing is told a source until this page knows it. *@
+<FilterSurface Storage="Storage" />
 
-   Held back until the restore has run (halheinrich/backgammon#85): mounting it earlier would bind a
-   Source this page cannot yet know, and the composite's source-change rule
-   would read the correction as a real change. See _restoreComplete. *@
-@if (_restoreComplete)
+@* No mode panel until the restore has resolved the mode: the panels are where
+   a source is latched (a folder committed, files picked), and the mode decides
+   which source there is. Rendering Web's panel while the answer is not yet in
+   would let a pick land in a Local app, and would read and write the Web
+   panel's settings on every Local visit. *@
+@if (_sourceResolved)
 {
-    <FilterSurface AppliedFilter="AppliedFilter"
-                   RestoreNotice="FilterRestoreNotice"
-                   Source="Source"
-                   Storage="Storage"
-                   OnFilterConfigChanged="OnFilterConfigChanged"
-                   OnAppliedStateChanged="OnAppliedStateChanged" />
-}
-
-@if (_appMode == "Local")
-{
-    <LocalModePanel OutputFormat="_outputFormat"
-                    FilterConfig="_filterConfig"
-                    FilterApplied="FilterInEffect is not null"
-                    FolderPath="@_folderPathText"
-                    FolderPathChanged="OnFolderPathEdited"
-                    OnFolderPathCommitted="OnFolderPathCommitted"
-                    XgpOptions="_xgpOptions"
-                    XgpAnonymize="_xgpAnonymize"
-                    OnXgpExported="OnXgpExported" />
-}
-else
-{
-    <WebModePanel OutputFormat="_outputFormat"
-                  FilterConfig="_filterConfig"
-                  FilterApplied="FilterInEffect is not null"
-                  OnSelectionChanged="OnWebSelectionChanged"
-                  XgpOptions="_xgpOptions"
-                  XgpAnonymize="_xgpAnonymize"
-                  OnXgpExported="OnXgpExported" />
+    if (_appMode == "Local")
+    {
+        <LocalModePanel OutputFormat="_outputFormat"
+                        Source="Source"
+                        FilterInEffect="FilterInEffect"
+                        FolderPath="@_folderPathText"
+                        FolderPathChanged="OnFolderPathEdited"
+                        OnFolderPathCommitted="OnFolderPathCommitted"
+                        XgpOptions="_xgpOptions"
+                        XgpAnonymize="_xgpAnonymize"
+                        OnXgpExported="OnXgpExported" />
+    }
+    else
+    {
+        <WebModePanel OutputFormat="_outputFormat"
+                      FilterInEffect="FilterInEffect"
+                      OnSelectionChanged="OnWebSelectionChanged"
+                      XgpOptions="_xgpOptions"
+                      XgpAnonymize="_xgpAnonymize"
+                      OnXgpExported="OnXgpExported" />
+    }
 }
 
 @code {
     private string _appMode = "Web";
     private OutputFormat _outputFormat = OutputFormat.Csv;
-    private FilterConfig _filterConfig = new();
 
-    // ── The composite's mount gate (halheinrich/backgammon#85) ──────────────────────────────────
+    // ── Source identity ─────────────────────────────────────────────────────
     //
-    // False until the first-render restore below has run. Everything the
-    // Source token is minted from — the app mode and the latched folder —
-    // arrives in that restore, so before it this page's answer to "what is the
-    // current source?" is not "none", it is "not yet known". Binding that
-    // non-answer would publish null and then correct it, and the composite's
-    // source-change rule (halheinrich/backgammon#78) reads a corrected null→token as a genuine
-    // source change: holder cleared, Apply re-armed, run gate closed. On every
-    // return to this page. Blazor renders children before parents on the
-    // after-render pass, so no ordering trick inside this component avoids it;
-    // the composite simply must not exist until the restore is done.
-    //
-    // Gated on the restore, NOT on Source being non-null — the tempting
-    // shape, and the wrong one here. A null Source is a legitimate steady
-    // state in this host (a blank folder path, no Web selection yet), handled
-    // in place by the source-change rule; unmounting on it would destroy the
-    // composite's store and panel state every time the user clears the folder
-    // and would defeat halheinrich/backgammon#78. Post-restore a null Source is truthful, and the
-    // composite handles it exactly as designed.
-    private bool _restoreComplete;
+    // The facts the source is minted from arrive asynchronously: the folder
+    // path from storage, and the mode from /api/appmode, both in the
+    // first-render restore below. Until both have arrived this page's answer
+    // to "what is the current source?" is not "none" — it is "not yet known".
+    // FilterSetup.ReportSource(null) is a real answer and ends an existing
+    // setup, so the source is reported only once it is known: _sourceResolved
+    // is false until the restore has resolved the mode and the folder, and
+    // ReportSource does nothing before then. No mode panel renders before then
+    // either, so no gesture can latch a source the page cannot yet place. A
+    // return to this page over an unchanged folder therefore reports the same
+    // token once, which ends nothing — the setup, its baseline and its
+    // generation stand.
+    private bool _sourceResolved;
 
-    // ── Source identity (the halheinrich/backgammon#78 re-gate's input) ─────────────────────────
-    // Local mode's source is the input folder path, hoisted here so one owner
-    // holds the live text, its persistence, and the change-boundary latch the
-    // token is minted from. Two fields on purpose: _folderPathText follows
-    // every keystroke (LocalModePanel is a controlled input; persistence
-    // stays per-keystroke), while _localSourcePath moves only at the
-    // @onchange boundary — the token must never re-gate per keystroke.
+    // Local mode's source is the input folder path. Two fields on purpose:
+    // _folderPathText follows every keystroke (LocalModePanel is a controlled
+    // input; persistence stays per-keystroke), while _localSourcePath moves
+    // only at the @onchange boundary — the source must never change per
+    // keystroke.
     private string _folderPathText = string.Empty;
     private string? _localSourcePath;
 
-    // Web mode's source is the file selection, identified by a generation
-    // counter bumped once per selection gesture (every HandleFileSelectionAsync
-    // invocation — ruled: one re-gate rule everywhere). 0 = nothing selected
-    // yet, i.e. no source.
-    private int _webSelectionGeneration;
+    // Web mode's source is the file selection, whose bytes and rows belong to
+    // WebModePanel; the panel mints the selection's token and hands it here
+    // (OnWebSelectionChanged). Null while nothing is selected.
+    private FilterSourceToken? _webSelection;
 
     // The saved-filters storage seam, created once over a delegate reading the
     // latched folder: FilterSurface rebuilds its store when the bound Storage
@@ -256,63 +240,41 @@ else
     // with this page.
     private HttpDocumentStorage? _documentStorage;
 
+    private IDisposable? _filterSetupAttachment;
+    private IDisposable? _storageConditionAttachment;
+
     /// <summary>
-    /// The current source's token, minted per the umbrella-ratified semantics:
-    /// Local = the latched folder path, Web = the selection generation. Null
-    /// while no source exists (blank path, nothing selected), so applies made
-    /// against nothing are deliberately not recorded — the first real source
-    /// then runs the composite's end-setup, re-arming Apply. The output path is
-    /// not a source and never appears here.
+    /// The current source's token — the one property both the reports and the
+    /// reads use. Local = the latched folder path; Web = the token of the
+    /// selection WebModePanel holds. Null while no source exists (blank path,
+    /// nothing selected). The output path is not a source and never appears
+    /// here.
     ///
     /// <para>
     /// The path goes to <see cref="FilterSourceToken.FromPath"/> in the
     /// spelling this page holds: what counts as the same folder is a property
-    /// of paths, so the factory owns it (halheinrich/backgammon#94). This host
-    /// pre-folded a copy of that rule until the factory took it over, and the
-    /// copy was subtly weaker — it trimmed with
-    /// <c>Path.TrimEndingDirectorySeparator</c>, which under WebAssembly's Unix
-    /// path semantics recognizes only <c>/</c> and so left the trailing
-    /// <c>\</c> these Windows-shaped paths actually carry. The latched path
-    /// itself keeps the user's spelling, for IO and display.
+    /// of paths, so the factory owns it (halheinrich/backgammon#94). The
+    /// latched path itself keeps the user's spelling, for IO and display.
     /// </para>
     /// </summary>
     private FilterSourceToken? Source => _appMode == "Local"
         ? _localSourcePath is { } path
             ? FilterSourceToken.FromPath(path)
             : null
-        : _webSelectionGeneration > 0
-            ? FilterSourceToken.FromGeneration(_webSelectionGeneration)
-            : null;
+        : _webSelection;
 
     /// <summary>
     /// The filter in effect for the source on screen right now, or
-    /// <see langword="null"/> when none is — <b>the</b> filter fact this page
-    /// publishes, and the only one. Both mode panels' <c>FilterApplied</c> read
-    /// it, and so does the restore reconcile below, so the gate and the
-    /// recovery cannot disagree about what "applied" means here.
-    ///
-    /// <para>
-    /// Source-relative by construction: the holder is asked only
-    /// <see cref="AppliedFilter.ConfigFor"/>, against this page's live token,
-    /// so a config committed against a folder or selection this page no longer
-    /// has reads as nothing applied without anyone comparing histories. A null
-    /// <see cref="Source"/> — blank path, no Web selection — is likewise no
-    /// filter in effect, correctly: an apply made against nothing was never
-    /// recorded, so there is nothing to be in effect.
-    /// </para>
-    ///
-    /// <para>
-    /// It is also the <em>settled</em> half, not just the applied half — the
-    /// distinction a separate <c>FilterDirty</c> parameter used to draw
-    /// (halheinrich/backgammon#101, the filtering spec's §6.1). The composite
-    /// clears the holder on any report that the panel's buffers no longer
-    /// equal a commit, so "a filter is in effect" already means "and the
-    /// buffers still equal it". Nothing reads a conjunction any more, and
-    /// there is no second fact that can go stale against this one.
-    /// </para>
+    /// <see langword="null"/> when none is — the one filter fact this page
+    /// hands the mode panels, read from the owner on each ask
+    /// (<see cref="FilterSetupSnapshot.ConfigInEffectFor"/>, a new instance
+    /// each call). Source-relative by construction: a setup whose source is not
+    /// this page's current one reads as nothing in effect. The ready empty
+    /// selection is in effect without Apply (halheinrich/backgammon#266); this
+    /// page adds no exception of its own.
     /// </summary>
     private FilterConfig? FilterInEffect =>
-        Source is { } source ? AppliedFilter.ConfigFor(source) : null;
+        Source is { } source ? FilterSetup.Current.ConfigInEffectFor(source) : null;
 
     /// <summary>
     /// The composite's storage seam: the HTTP adapter while Local mode has a
@@ -323,8 +285,26 @@ else
     private IDocumentStorage? Storage =>
         _appMode == "Local" && _localSourcePath is not null ? _documentStorage : null;
 
-    protected override void OnInitialized() =>
+    protected override void OnInitialized()
+    {
         _documentStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
+
+        // Both owners outlive this page and change while no gesture of this
+        // page is running — a commit on the filter surface, a refusal from a
+        // panel's restore or from the surface's own storage — so this page
+        // re-renders off their notifications. It keeps no copy of either
+        // owner's state — it reads both at render — so a remount shows what
+        // happened while it was absent, a refusal included, with no further
+        // failure.
+        _filterSetupAttachment = FilterSetup.Attach(_ => StateHasChanged());
+        _storageConditionAttachment = StorageCondition.Attach(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        _filterSetupAttachment?.Dispose();
+        _storageConditionAttachment?.Dispose();
+    }
 
     // XGP export options. Home owns the option state (and its persistence);
     // the panels receive an immutable XgpExportOptions snapshot and report
@@ -345,12 +325,18 @@ else
     {
         if (!firstRender) return;
 
+        // Every read below answers the stored value, or null for "nothing
+        // stored" and for a refusal alike — SettingsStorage has reported a
+        // refusal to the condition before it returns — so each key lands on
+        // its stored value or its own documented default, and the restore
+        // always runs to the end.
+
         // The inverse of what persists it below (fmt.ToString()): resolve the
         // stored token by searching the declared formats, never by parsing.
         // Enum.TryParse would also accept a numeric ordinal, tying a durable
         // localStorage entry to member numbering (halheinrich/backgammon#164);
         // an unrecognized token leaves the default standing, as before.
-        var savedFormat = await BrowserStorage.TryGetItemAsync("xg_outputFormat");
+        var savedFormat = await Settings.ReadAsync("xg_outputFormat");
         foreach (var candidate in Enum.GetValues<OutputFormat>())
         {
             if (string.Equals(savedFormat, candidate.ToString(), StringComparison.Ordinal))
@@ -360,14 +346,13 @@ else
             }
         }
 
-        // Restore the Local-mode folder path (owned here since the source
-        // hoist) and latch it: a restored path is a committed value — the
-        // saved-filters context loads for it, and the first Apply records
-        // against it — not a keystroke in flight.
-        _folderPathText = await BrowserStorage.TryGetItemAsync("xg_folderPath") ?? string.Empty;
+        // Restore the Local-mode folder path and latch it: a restored path is
+        // a committed value — the saved-filters context loads for it, and the
+        // source is minted from it — not a keystroke in flight.
+        _folderPathText = await Settings.ReadAsync("xg_folderPath") ?? string.Empty;
         LatchSourceFolder(_folderPathText);
 
-        _xgpPersistedPattern = await BrowserStorage.TryGetItemAsync("xg_xgpPattern");
+        _xgpPersistedPattern = await Settings.ReadAsync("xg_xgpPattern");
         if (_xgpPersistedPattern is null)
         {
             // One-time migration from the pre-pattern persistence shape: the
@@ -378,7 +363,7 @@ else
             // contain braces) falls back to the default. xg_xgpPrefix is
             // read-once legacy: never written again, and removed on the next
             // successful export.
-            var legacyPrefix = await BrowserStorage.TryGetItemAsync("xg_xgpPrefix");
+            var legacyPrefix = await Settings.ReadAsync("xg_xgpPrefix");
             if (legacyPrefix is not null)
             {
                 var migrated = legacyPrefix + "{n}";
@@ -387,8 +372,8 @@ else
                     : XgpExportOptions.DefaultNamePattern;
             }
         }
-        var savedLast = await BrowserStorage.TryGetItemAsync("xg_xgpLastNumber");
-        var savedLength = await BrowserStorage.TryGetItemAsync("xg_xgpSuffixLength");
+        var savedLast = await Settings.ReadAsync("xg_xgpLastNumber");
+        var savedLength = await Settings.ReadAsync("xg_xgpSuffixLength");
 
         _xgpPattern = _xgpPersistedPattern ?? XgpExportOptions.DefaultNamePattern;
         if (int.TryParse(savedLast, out var last) && last >= 0)
@@ -396,7 +381,7 @@ else
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         if (int.TryParse(savedLength, out var len) && len is >= 1 and <= 9)
             _xgpSuffixLength = len;
-        var savedAnonymize = await BrowserStorage.TryGetItemAsync("xg_xgpAnonymize");
+        var savedAnonymize = await Settings.ReadAsync("xg_xgpAnonymize");
         _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
 
@@ -411,112 +396,45 @@ else
             && _appMode != "Local")
             _outputFormat = OutputFormat.Csv;
 
-        // ── Reconcile the surviving holder against the restored source ──────
-        //
-        // AppliedFilter is DI-scoped, so it outlives this page: a fresh mount
-        // can open onto an apply the previous visit made — against this
-        // visit's source, or against one it no longer has. The composite's
-        // first-mount reconcile (halheinrich/backgammon#82) recovers the *panel's* committed config
-        // from the holder; this is the host's half of the same recovery, and
-        // Home must do it itself because that reconcile is silent by contract
-        // — it raises no event, and OnFilterConfigChanged is otherwise the
-        // only writer of _filterConfig.
-        //
-        // A filter in effect for the restored source: recover _filterConfig,
-        // the last-committed config the panels POST and refilter with and the
-        // XGP preview reads. Without it the run gate would reopen over a
-        // *default* config and the applied filter would be silently ignored.
-        //
-        // Anything else — a config applied against another source, or no
-        // source restored at all — is not this visit's applied state, and
-        // FilterInEffect already reads it as nothing. The Clear is what stops
-        // it being *anything ever again*: this host mints its Local tokens
-        // from the folder path, so re-entering the same path yields an equal
-        // token and a surviving config would be re-adopted the moment that
-        // path came back. That equality is the ownership semantics — it is
-        // exactly what lets the branch above adopt a config across a
-        // navigate-back — but it means nothing expires by construction here
-        // the way a generation counter expires it in BgQuiz. The eager clears
-        // are the whole expiry mechanism in this host: this one, and the
-        // composite's in-place source-change rule (halheinrich/backgammon#78). Do not weaken either
-        // in the belief that the keying covers it.
-        //
-        // Nothing survives the Clear: the applied config and its key are one
-        // pair with one lifetime, and the composite isn't mounted yet, so
-        // there is no panel commitment to forget alongside it either.
-        if (FilterInEffect is { } appliedConfig)
-        {
-            _filterConfig = appliedConfig;
-        }
-        else
-        {
-            AppliedFilter.Clear();
-        }
-
-        // Last, after every fact Source is derived from: the composite may now
-        // mount, and its first parameters-set will see the real token rather
-        // than a placeholder it would later have to be corrected out of.
-        //
-        // Reached even when storage is unavailable, and legitimately so: the
-        // BrowserStorage seam answers a dead localStorage with each key's documented
-        // default, so what Source is minted from here is known, not merely
-        // not-yet-arrived. No folder restored means Source is null, which the
-        // composite handles in place as a steady state. This is not the
-        // try/finally that was rejected for halheinrich/backgammon#85 — that one set the flag over
-        // reads that never landed and published a token derived from them;
-        // this sets it over facts.
-        _restoreComplete = true;
+        // Last, after every fact Source is minted from: the source is known
+        // now, so report it. An unchanged source — a return over the same
+        // folder — ends nothing; a different one, or none, ends the setup.
+        _sourceResolved = true;
+        ReportSource();
 
         StateHasChanged();
     }
 
-    // The composite's re-raise of the panel's Apply / Clear-filters commit. By
-    // the time this fires, FilterSurface has already recorded the applied
-    // state on the shared AppliedFilter holder, keyed to Source (or left the
-    // holder untouched while no source exists) — so this handler keeps only
-    // what the composite can't know: the last-committed config the mode
-    // panels POST / refilter with and the XGP preview reads.
-    private void OnFilterConfigChanged(FilterConfig fc) => _filterConfig = fc;
+    // ── Source reporting ────────────────────────────────────────────────────
 
-    // ── The applied-state report: subscribed, and deliberately empty ────────
-    //
-    // The composite re-raises the panel's applied-state report after every
-    // buffer-affecting gesture, carrying the committed config its buffers now
-    // equal — or null when they equal none. There is nothing to assign: it has
-    // already mediated that payload onto the shared holder before raising, and
-    // FilterInEffect reads the holder live, so the one filter fact this page
-    // publishes is up to date by the time this runs. Recording the payload
-    // beside it is exactly the duplicate the §6.1 collapse deleted.
-    //
-    // The subscription is still load-bearing, so do not mistake the empty body
-    // for a dead binding and remove it. Blazor re-renders this component after
-    // invoking a callback it owns, and that re-render is what re-reads the
-    // holder and moves both panels' gate. Without it the gate would sit stale
-    // until some unrelated event happened to render the page — an edit would
-    // leave Run live over a filter no longer in effect.
-    //
-    // Nor can it be dropped from the markup: the producer marks it
-    // [EditorRequired] precisely because it is the only channel telling a host
-    // its gate went stale.
-    private void OnAppliedStateChanged(FilterConfig? applied) { }
-
-    // ── Source-identity plumbing (see the Source member) ──────────────────
+    // Tells the owner the current source at each moment this page latches
+    // one: the restore resolving the mode and folder, a Local folder commit,
+    // a Web selection change. Nothing before the restore has resolved the
+    // source (see _sourceResolved) — the markup already renders no panel to
+    // latch one before then; the guard keeps the rule here, where the report
+    // is made.
+    private void ReportSource()
+    {
+        if (_sourceResolved)
+            FilterSetup.ReportSource(Source);
+    }
 
     // Per-keystroke half of the Local folder input: follow the text and
-    // persist it — never latch, never mint. The token moving per keystroke was
-    // rejected outright (a half-typed path is not a source change).
+    // persist it — never latch, never report. A half-typed path is not a
+    // source change.
     private async Task OnFolderPathEdited(string path)
     {
         _folderPathText = path;
-        await BrowserStorage.TrySetItemAsync("xg_folderPath", path);
+        await Settings.WriteAsync("xg_folderPath", path);
     }
 
-    // Change-boundary half: latch the committed path. If the latched value
-    // actually moves, the recomputed Source token changes and FilterSurface
-    // runs its end-setup — holder cleared, Apply re-armed, saved-filters
-    // context reloaded from the new folder. A blur that commits the same
-    // value latches the same path → same token → no re-gate.
-    private void OnFolderPathCommitted(string path) => LatchSourceFolder(path);
+    // Change-boundary half: latch the committed path and report it. A blur
+    // that commits the same folder reports the same token and ends nothing.
+    private void OnFolderPathCommitted(string path)
+    {
+        LatchSourceFolder(path);
+        ReportSource();
+    }
 
     private void LatchSourceFolder(string path)
     {
@@ -524,16 +442,19 @@ else
         _localSourcePath = trimmed.Length == 0 ? null : trimmed;
     }
 
-    // A Web-mode selection gesture replaced (or cleared) the loaded files:
-    // bump the generation so the token changes and the composite ends the
-    // setup. Ruled UX delta: a re-selection therefore blanks the preview until
-    // re-Apply — the one source-change rule, both modes.
-    private void OnWebSelectionChanged() => _webSelectionGeneration++;
+    // A Web-mode selection gesture replaced or cleared the selection: hold its
+    // token and report it. A new selection carries a new token, so the setup
+    // ends; a cleared one reports no source.
+    private void OnWebSelectionChanged(FilterSourceToken? selection)
+    {
+        _webSelection = selection;
+        ReportSource();
+    }
 
     private async Task SetOutputFormat(OutputFormat fmt)
     {
         _outputFormat = fmt;
-        await BrowserStorage.TrySetItemAsync("xg_outputFormat", fmt.ToString());
+        await Settings.WriteAsync("xg_outputFormat", fmt.ToString());
         StateHasChanged();
     }
 
@@ -597,7 +518,7 @@ else
     private async Task OnXgpAnonymizeChanged(ChangeEventArgs e)
     {
         _xgpAnonymize = e.Value is bool b && b;
-        await BrowserStorage.TrySetItemAsync("xg_xgpAnonymize", _xgpAnonymize.ToString());
+        await Settings.WriteAsync("xg_xgpAnonymize", _xgpAnonymize.ToString());
     }
 
     /// <summary>
@@ -614,12 +535,12 @@ else
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         RebuildXgpOptions();
 
-        await BrowserStorage.TrySetItemAsync("xg_xgpPattern", _xgpPersistedPattern);
-        await BrowserStorage.TrySetItemAsync("xg_xgpLastNumber", _xgpPersistedLastNumber.ToString());
-        await BrowserStorage.TrySetItemAsync("xg_xgpSuffixLength", _xgpOptions.SuffixLength.ToString());
+        await Settings.WriteAsync("xg_xgpPattern", _xgpPersistedPattern);
+        await Settings.WriteAsync("xg_xgpLastNumber", _xgpPersistedLastNumber.ToString());
+        await Settings.WriteAsync("xg_xgpSuffixLength", _xgpOptions.SuffixLength.ToString());
         // The legacy prefix key is read-once (migration input only) — clear
         // it so it can never shadow the persisted pattern again.
-        await BrowserStorage.TryRemoveItemAsync("xg_xgpPrefix");
+        await Settings.RemoveAsync("xg_xgpPrefix");
         StateHasChanged();
     }
 }

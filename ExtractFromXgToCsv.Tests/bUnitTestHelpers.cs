@@ -2,15 +2,21 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Bunit;
+using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+using XgFilter_Lib.Filtering;
+using XgFilter_Razor;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Shared helpers for bUnit-based component tests. Kept narrow on purpose:
 /// reflection accessors for private state (used to pin the name allocator's
-/// bookkeeping, and to seed panel fields normally hydrated from localStorage,
-/// without exposing either as a permanent seam) and the minimal
+/// bookkeeping, and to seed panel fields normally restored from browser
+/// storage, without exposing either as a permanent seam) and the minimal
 /// HttpMessageHandlers the panels' own endpoints need.
 /// </summary>
 internal static class bUnitTestHelpers
@@ -38,11 +44,32 @@ internal static class bUnitTestHelpers
 /// <see cref="ExtractFromXgToCsv.Controllers.FilterDocumentController"/>'s
 /// 200/204 contract) — Home hosts a <c>FilterSurface</c> whose store reads
 /// the document at mount and on every source change, so a Local-mode Home
-/// test without these routes would degrade to LoadFailed. Returns 404 for
-/// everything else so a stray request fails loudly rather than hanging.
+/// test without these routes would degrade to LoadFailed. Anything else goes
+/// to <see cref="Processing"/> when a test supplies one, and otherwise 404s so
+/// a stray request fails loudly rather than hanging.
 /// </summary>
 internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 {
+    private TaskCompletionSource? _appModeGate;
+
+    /// <summary>
+    /// The Local processing endpoints, for a test that runs a job through
+    /// Home; <see langword="null"/> leaves them 404.
+    /// </summary>
+    public CapturingProcessHandler? Processing { get; init; }
+
+    /// <summary>
+    /// Hold every <c>/api/appmode</c> request from now on pending until
+    /// <see cref="ReleaseAppMode"/> — the seam that makes Home's
+    /// mode-unresolved window observable instead of a race.
+    /// </summary>
+    public void HoldAppMode() =>
+        _appModeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Let the held <c>/api/appmode</c> responses through.</summary>
+    public void ReleaseAppMode() =>
+        (_appModeGate ?? throw new InvalidOperationException("The app mode is not held.")).TrySetResult();
+
     /// <summary>
     /// The in-memory documents served and updated by the filterdocument
     /// routes, keyed by (folder, name) exactly as the query names them.
@@ -63,6 +90,8 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 
         if (path == "/api/appmode")
         {
+            if (_appModeGate is { } gate)
+                await gate.Task.WaitAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
@@ -97,6 +126,12 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
             }
         }
 
+        if (Processing is { } processing)
+        {
+            using var invoker = new HttpMessageInvoker(processing, disposeHandler: false);
+            return await invoker.SendAsync(request, cancellationToken);
+        }
+
         return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
 
@@ -113,10 +148,12 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 /// Fakes the Local-mode processing endpoints so <c>LocalModePanel.RunLocalAsync</c>
 /// runs its real request-building and polling loop against an in-memory server:
 /// captures the <see cref="ProcessRequest"/> POSTed to <c>/api/process/start</c>
-/// and answers the first status poll with a terminal snapshot so the click
-/// resolves in one iteration. Everything else 404s, so a stray request fails
-/// loudly rather than hanging.
+/// and answers the first status poll with a terminal snapshot
+/// (<paramref name="terminalStatusJson"/>; three rows written by default) so
+/// the click resolves in one iteration. Everything else 404s, so a stray
+/// request fails loudly rather than hanging.
 /// </summary>
+/// <param name="terminalStatusJson">The terminal snapshot the first status poll answers.</param>
 /// <remarks>
 /// Binds with <see cref="JsonSerializerDefaults.Web"/> — what a bare
 /// <c>AddControllers()</c> actually gives <c>ProcessController.Start</c> on the
@@ -126,9 +163,37 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 /// the panel's own; the panel no longer has one, and mirroring the *server* is
 /// the point of a stand-in.)
 /// </remarks>
-internal sealed class CapturingProcessHandler : HttpMessageHandler
+internal sealed class CapturingProcessHandler(
+    string terminalStatusJson = "{\"complete\":true,\"totalRows\":3}") : HttpMessageHandler
 {
     private static readonly JsonSerializerOptions _opts = new(JsonSerializerDefaults.Web);
+
+    private readonly TaskCompletionSource _statusReached =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource? _statusGate;
+
+    /// <summary>
+    /// Hold the next status poll pending until <see cref="ReleaseStatus"/>, so
+    /// a test can act while a run is in flight. Call before the run starts.
+    /// </summary>
+    public void HoldStatus() =>
+        _statusGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Let a held status poll answer with the terminal snapshot.</summary>
+    public void ReleaseStatus() =>
+        (_statusGate ?? throw new InvalidOperationException("No status poll is held.")).TrySetResult();
+
+    /// <summary>Completes when the first status poll has arrived — the run is in flight.</summary>
+    public Task StatusReached => _statusReached.Task;
+
+    /// <summary>
+    /// The bound on waiting for a run through this server: the panel's
+    /// polling loop waits a whole second before its first status poll, so
+    /// bUnit's one-second <c>DefaultWaitTimeout</c> would fail a run that is
+    /// merely on schedule. The bound only guards against a run that never
+    /// completes; the completion itself is the evidence.
+    /// </summary>
+    public static TimeSpan RunTimeout { get; } = TimeSpan.FromSeconds(10);
 
     /// <summary>The last request POSTed to <c>/api/process/start</c>; null until one is.</summary>
     public ProcessRequest? Captured { get; private set; }
@@ -155,7 +220,12 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
         }
 
         if (request.Method == HttpMethod.Get && path == "/api/process/j1/status")
-            return Json("{\"complete\":true,\"totalRows\":3}");
+        {
+            _statusReached.TrySetResult();
+            if (_statusGate is { } gate)
+                await gate.Task.WaitAsync(cancellationToken);
+            return Json(terminalStatusJson);
+        }
 
         return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
@@ -165,4 +235,41 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+}
+
+/// <summary>
+/// A <see cref="LocalModePanel"/> one
+/// click from a run, and the run itself — for tests whose subject is what a
+/// completed run shows. The panel records what a run was computed from when
+/// the run starts, so a result is reached by running, never by seeding the
+/// progress it shows.
+/// </summary>
+internal static class LocalPanelRuns
+{
+    public const string Folder = @"D:\xg\matches";
+
+    /// <summary>
+    /// Renders the panel over <see cref="Folder"/> with
+    /// <paramref name="filter"/> in effect, and types an output path.
+    /// </summary>
+    public static IRenderedComponent<LocalModePanel> RenderReadyLocalPanel(
+        this BunitContext ctx, FilterConfig filter)
+    {
+        var cut = ctx.Render<LocalModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.Csv)
+            .Add(c => c.Source, FilterSourceToken.FromPath(Folder))
+            .Add(c => c.FilterInEffect, filter)
+            .Add(c => c.FolderPath, Folder)
+            .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.XgpAnonymize, false));
+        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
+        return cut;
+    }
+
+    /// <summary>Clicks Run and waits for the run to complete.</summary>
+    public static Task RunToCompletionAsync(
+        this IRenderedComponent<LocalModePanel> cut) =>
+        cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run")
+           .ClickAsync(new MouseEventArgs())
+           .WaitAsync(CapturingProcessHandler.RunTimeout);
 }

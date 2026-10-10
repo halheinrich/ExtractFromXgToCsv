@@ -29,18 +29,28 @@
   <ItemGroup>
     <ProjectReference Include="..\ExtractFromXgToCsv\ExtractFromXgToCsv.csproj" />
     <ProjectReference Include="..\ExtractFromXgToCsv.Client\ExtractFromXgToCsv.Client.csproj" />
-    <!-- XgFilter_Razor's test-support assembly (halheinrich/backgammon#93):
-         producer-owned seeding of the browser state its filter panel restores
-         from, so a host test can arrange "a previous visit left a stored
-         selection" without repeating the producer's storage key as a literal.
-         The key stays internal to that repo; a rename there now breaks this
-         build instead of silently leaving a stale literal that arranges
-         nothing and passes for the wrong reason.
+    <!-- BgUiPrimitives_Razor's test-support assembly
+         (halheinrich/backgammon#377): BrowserStoragePlan, which answers the
+         real BrowserStorage's interop calls from expectations stated in the
+         accessor's own terms (area, key, value, answer), and NoticeBox. So no
+         test here spells a storage interop identifier: the library owns that
+         representation, and a change there cannot leave a stale literal
+         behind in this suite.
 
-         Test projects only. The assembly is IsPackable=false and never ships
-         beside the component library — no app-graph project (server or
-         Client) may reference it. -->
-    <ProjectReference Include="..\..\XgFilter_Razor\XgFilter_Razor.Testing\XgFilter_Razor.Testing.csproj" />
+         Test projects only. The assembly declares itself unsupported on the
+         browser platform, so the Client could not use it even by mistake, and
+         no app-graph project references it. -->
+    <ProjectReference Include="..\..\BgUiPrimitives_Razor\BgUiPrimitives_Razor.TestSupport\BgUiPrimitives_Razor.TestSupport.csproj" />
+    <!-- XgFilter_Razor's test-support assembly (halheinrich/backgammon#374):
+         FilterSurfaceStorage states the filter surface's own storage calls on
+         a BrowserStoragePlan — this boot's restoration, each panel mount's
+         preference reads, each commit's write — without naming the surface's
+         keys, which stay internal to that repo. A rename there breaks this
+         build instead of leaving a stale literal that plans nothing.
+
+         Test projects only, like the reference above: IsPackable=false, and
+         no app-graph project (server or Client) may reference it. -->
+    <ProjectReference Include="..\..\XgFilter_Razor\XgFilter_Razor.TestSupport\XgFilter_Razor.TestSupport.csproj" />
     <!-- BgDataTypes_Lib's test-support assembly (halheinrich/backgammon#273):
          TestRecords, the producer's builders, so a test states only the facts
          it cares about and never restates a record's construction. Test

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BgDataTypes_Lib;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components.Web;
@@ -40,6 +41,7 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
     public LocalModePanelEnumTokenWireTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
+        Services.AddClientServices();
     }
 
     /// <summary>
@@ -170,8 +172,7 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
 
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.DiagramJson)
-            .Add(c => c.FilterConfig, config)
-            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterInEffect, config)
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false)
             .Add(c => c.FolderPath, "D:\\xg"));

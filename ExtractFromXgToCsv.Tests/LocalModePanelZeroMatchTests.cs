@@ -1,3 +1,4 @@
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,14 +19,22 @@ namespace ExtractFromXgToCsv.Tests;
 ///
 /// The notice hangs off the completed-success branch only: it must appear
 /// alongside the "✓ Done" line, never on error or cancelled terminations
-/// where it would mislead.
+/// where it would mislead. And the set it asks is the <em>run's</em> filter,
+/// never the one on screen now: the box describes the run. Each case runs a
+/// real run against a server that writes zero rows, because the run is where
+/// the panel records which filter it ran.
 /// </summary>
 public class LocalModePanelZeroMatchTests : BunitContext
 {
     public LocalModePanelZeroMatchTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        Services.AddClientServices();
+        Services.AddSingleton(new HttpClient(
+            new CapturingProcessHandler("{\"complete\":true,\"totalRows\":0}"))
+        {
+            BaseAddress = new Uri("http://localhost/"),
+        });
     }
 
     /// <summary>
@@ -33,20 +42,9 @@ public class LocalModePanelZeroMatchTests : BunitContext
     /// set renders the zero-match notice alongside the Done line.
     /// </summary>
     [Fact]
-    public void CompleteZeroRows_ActiveFilter_RendersNoticeAlongsideDone()
+    public async Task CompleteZeroRows_ActiveFilter_RendersNoticeAlongsideDone()
     {
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig { Players = new List<string> { "Alice" } })
-            .Add(c => c.FilterApplied, true));
-
-        SetProgress(cut.Instance, new ProcessingProgress
-        {
-            Complete = true,
-            TotalRows = 0,
-            ErrorMessage = null,
-        });
-        cut.Render();
+        var cut = await RunAsync(new FilterConfig { Players = ["Alice"] });
 
         // Notice renders...
         var notice = cut.Find("div.zero-match-notice");
@@ -63,20 +61,9 @@ public class LocalModePanelZeroMatchTests : BunitContext
     /// simply held zero decisions is not a filter miss.
     /// </summary>
     [Fact]
-    public void CompleteZeroRows_EmptyFilter_RendersDoneLineOnly()
+    public async Task CompleteZeroRows_EmptyFilter_RendersDoneLineOnly()
     {
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true));
-
-        SetProgress(cut.Instance, new ProcessingProgress
-        {
-            Complete = true,
-            TotalRows = 0,
-            ErrorMessage = null,
-        });
-        cut.Render();
+        var cut = await RunAsync(new FilterConfig());
 
         Assert.Empty(cut.FindAll("div.zero-match-notice"));
 
@@ -84,8 +71,28 @@ public class LocalModePanelZeroMatchTests : BunitContext
         Assert.Contains("Done", done.TextContent);
     }
 
-    private static void SetProgress(LocalModePanel instance, ProcessingProgress progress) =>
-        instance.GetType()
-            .GetField("_progress", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .SetValue(instance, progress);
+    /// <summary>
+    /// A run through the empty filter wrote zero rows — an empty folder, not a
+    /// filter miss. An active filter then comes into effect for the same
+    /// folder. The previous run's zero must not be read against the filter now
+    /// on screen: that would blame a filter the run never applied.
+    /// </summary>
+    [Fact]
+    public async Task ZeroRowsThroughTheEmptyFilter_ThenAnActiveFilter_BlamesNoFilter()
+    {
+        var cut = await RunAsync(new FilterConfig());
+
+        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { Players = ["Alice"] }));
+
+        Assert.Empty(cut.FindAll("div.zero-match-notice"));
+    }
+
+    // A panel over one folder with the filter in effect and an output path,
+    // whose Run has completed against the zero-row server.
+    private async Task<IRenderedComponent<LocalModePanel>> RunAsync(FilterConfig filter)
+    {
+        var cut = this.RenderReadyLocalPanel(filter);
+        await cut.RunToCompletionAsync();
+        return cut;
+    }
 }

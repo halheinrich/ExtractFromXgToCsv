@@ -1,5 +1,7 @@
+using System.Text.Json;
 using BgDataTypes_Lib;
 using Bunit;
+using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +24,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     public LocalModePanelSkippedNoticeTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
+        Services.AddClientServices();
         Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
     }
 
@@ -29,8 +32,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     {
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
-            .Add(c => c.FilterConfig, new FilterConfig())
-            .Add(c => c.FilterApplied, true)
+            .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", snapshot);
@@ -83,26 +85,33 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     }
 
     [Fact]
-    public void CompletedRunWithZeroRowsAndSkips_TheZeroMatchNoticeYieldsToTheSkips()
+    public async Task CompletedRunWithZeroRowsAndSkips_TheZeroMatchNoticeYieldsToTheSkips()
     {
         // Zero rows through an active filter would normally blame the filter,
         // but that inference assumes every file was read. With skips the zero
-        // may be theirs, so only the skip notice speaks.
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterConfig, new FilterConfig { Players = ["Alice"] })
-            .Add(c => c.FilterApplied, true)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", new ProcessingProgress
+        // may be theirs, so only the skip notice speaks. A real run, because
+        // the zero-match notice reads the filter the run recorded: a seeded
+        // snapshot with no run behind it could never show that notice, and
+        // its absence would prove nothing.
+        await using var ctx = new BunitContext();
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.Services.AddClientServices();
+        var terminal = new ProcessingProgress
         {
             Current = 1,
             Total = 1,
             Complete = true,
             TotalRows = 0,
             Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic.")],
+        };
+        ctx.Services.AddSingleton(new HttpClient(new CapturingProcessHandler(
+            JsonSerializer.Serialize(terminal, new JsonSerializerOptions(JsonSerializerDefaults.Web))))
+        {
+            BaseAddress = new Uri("http://localhost/"),
         });
-        cut.Render();
+
+        var cut = ctx.RenderReadyLocalPanel(new FilterConfig { Players = ["Alice"] });
+        await cut.RunToCompletionAsync();
 
         Assert.Contains("Done", cut.Find("span.text-success").TextContent);
         Assert.Empty(cut.FindAll("div.zero-match-notice"));
