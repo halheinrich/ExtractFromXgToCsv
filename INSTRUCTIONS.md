@@ -485,6 +485,14 @@ it, not a restatement.
   the applied filter without a re-Apply. There is no mount gate around the
   surface, no copy-back of a resumed selection and no clear at a pick:
   reporting the source is the whole of it.
+- **A disposed page reports nothing.** Home's async work is tied to its
+  lifetime — one `CancellationTokenSource`, cancelled in `Dispose()`. The
+  app-mode request is handed its token, so a navigation away cancels it;
+  each restore read completes (a refusal still reaches the condition) and
+  the restore stops after it; and `ReportSource()` publishes only while the
+  lifetime is live. Without it, a page disposed while its mode response was
+  pending would report its folder over a newer page's setup — advancing the
+  generation and dropping that setup's baseline.
 - **Readiness** (halheinrich/backgammon#266). With a source, a valid empty
   selection is in effect without Apply. Extract adds no empty-filter
   exception of its own, and no copy says Apply is needed for it: Local's
@@ -980,7 +988,12 @@ records what a run was computed from when the run starts.
   with the surface still mounted; a Web return reports no source, and a pick
   after it — of the same file — is a new token without the earlier pick's
   consent; and a Web clear (a dismissed picker) reports no source, the next
-  pick again inheriting nothing.
+  pick again inheriting nothing. And a disposed page: a Home whose mode
+  response is held while a newer Home establishes folder B and applies its
+  filter has its request cancelled, and reports nothing — B's source,
+  generation and baseline stand; and a disposed Home's in-flight read,
+  refused, still reaches the condition while its restore makes no further
+  call.
 - `HomeStorageUnavailableTests` — the storage condition as Home shows it,
   with storage planned. A browser that refuses **everything** — Home, both
   panels, the filter surface — leaves a working page and the notice, every
@@ -1553,7 +1566,11 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   outlives the page, so it shows the existing setup as it stands until the
   report arrives. Don't "simplify" this into a report from `OnInitialized`
   or `OnParametersSet`. `HomeSourceReportTests` holds `/api/appmode` open to
-  pin it.
+  pin it. **Nor after the page has gone**: the restore's awaits belong to the
+  page's lifetime (see "Filter setup"), so don't add an await to the restore
+  that is not handed the lifetime or checked against it, and don't swallow
+  an `OperationCanceledException` from the mode request into the `"Web"`
+  fallback — the catch is filtered on the lifetime for that reason.
 - **A Web selection's token must never repeat.** The owner outlives every
   page, and the panel holding the selection does not; a counter that
   restarts with the page or the panel would mint an earlier pick's token

@@ -3,6 +3,7 @@ using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
+using ExtractFromXgToCsv.Client.Services;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
 using XgFilter_Razor;
@@ -65,7 +66,7 @@ public class HomeSourceReportTests : BunitContext
         var server = this.AddHomeServices("Local");
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
         _storage.ExpectHomeVisit("Local", StoredFolder(FolderA));
-        server.HoldAppMode();
+        var appMode = server.HoldNextAppMode();
 
         var cut = Render<Home>();
 
@@ -78,7 +79,7 @@ public class HomeSourceReportTests : BunitContext
         Assert.Null(Setup.Current.Source);
         var generation = Setup.Current.Generation;
 
-        server.ReleaseAppMode();
+        appMode.Release();
         cut.WaitForModePanel();
 
         // One report, of the resolved folder.
@@ -106,7 +107,7 @@ public class HomeSourceReportTests : BunitContext
         _storage.ExpectHomeVisit("Local", StoredFolder(FolderA));
         _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputPathKey, @"D:\xg\out.csv",
             BrowserStorageWriteAnswer.Succeeded);
-        server.HoldAppMode();
+        var appMode = server.HoldNextAppMode();
 
         var cut = Render<Home>();
 
@@ -115,7 +116,7 @@ public class HomeSourceReportTests : BunitContext
         Assert.Equal(generation, Setup.Current.Generation);
         Assert.Equal(Applied, Setup.Current.ConfigInEffectFor(FilterSourceToken.FromPath(FolderA)));
 
-        server.ReleaseAppMode();
+        appMode.Release();
         cut.WaitForModePanel();
 
         // Released with the same folder: the setup, its generation and its
@@ -141,11 +142,11 @@ public class HomeSourceReportTests : BunitContext
 
         // Another tab committed a different folder meanwhile.
         _storage.ExpectHomeVisit("Local", StoredFolder(FolderB));
-        server.HoldAppMode();
+        var appMode = server.HoldNextAppMode();
         var cut = Render<Home>();
         Assert.Equal(generation, Setup.Current.Generation);
 
-        server.ReleaseAppMode();
+        appMode.Release();
         cut.WaitForModePanel();
 
         Assert.Equal(FilterSourceToken.FromPath(FolderB), Setup.Current.Source);
@@ -191,6 +192,94 @@ public class HomeSourceReportTests : BunitContext
         // A blank path renders no saved-filters section — and no load failure.
         Assert.Empty(cut.FindAll("#saveFilterName"));
         Assert.Empty(cut.FindAll("#savedFiltersLoadFailed"));
+        _storage.Verify();
+    }
+
+    // ── A disposed page ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A page's async work is tied to its lifetime. Home A reads folder A and
+    /// waits for its mode; the user navigates away and back; the new Home
+    /// settles, and the user establishes folder B and applies its filter.
+    /// Then A's response would arrive. A is gone, so its request was
+    /// cancelled when it was disposed — not merely ignored — and nothing it
+    /// read is reported: the owner's source, generation and baseline stay
+    /// B's.
+    /// </summary>
+    [Fact]
+    public async Task ADisposedPagesLateModeAnswer_ReportsNothing_AndTheNewSetupStands()
+    {
+        var server = this.AddHomeServices("Local");
+        _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
+        // Home A: its restore up to the mode request, and the surface's mount.
+        // Its mode is never answered, so no Local panel renders for it.
+        _storage.ExpectHomeRestore(StoredFolder(FolderA));
+        _storage.ExpectFilterPanelMount();
+        var modeForA = server.HoldNextAppMode();
+
+        Render<Home>();
+        await modeForA.Reached.WaitAsync(DefaultWaitTimeout);
+        await DisposeComponentsAsync();
+
+        // Home B, over folder B, with a filter applied.
+        _storage.ExpectHomeVisit("Local", StoredFolder(FolderB));
+        _storage.ExpectFilterCommit(Applied, BrowserStorageWriteAnswer.Succeeded);
+        var cut = this.RenderHome();
+        await cut.EditMinAsync("0.01");
+        await cut.ApplyFiltersAsync();
+        var folderB = FilterSourceToken.FromPath(FolderB);
+        Assert.Equal(folderB, Setup.Current.Source);
+        Assert.Equal(Applied, Setup.Current.ConfigInEffectFor(folderB));
+        var generation = Setup.Current.Generation;
+
+        // A's request ended when A was disposed, cancelled; releasing it now
+        // answers nothing.
+        modeForA.Release();
+        Assert.True(await modeForA.Cancelled.WaitAsync(DefaultWaitTimeout));
+        await cut.InvokeAsync(() => { });
+
+        Assert.Equal(folderB, Setup.Current.Source);
+        Assert.Equal(generation, Setup.Current.Generation);
+        Assert.Equal(Applied, Setup.Current.ConfigInEffectFor(folderB));
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// A storage call already in flight when the page goes is not abandoned:
+    /// its refusal still reaches the app-scoped condition. Only the page's
+    /// use of the answer stops — the restore makes no further read and no
+    /// mode request, and reports nothing.
+    /// </summary>
+    [Fact]
+    public async Task ADisposedPagesInFlightRead_StillReportsItsRefusal_AndTheRestoreStops()
+    {
+        this.AddHomeServices("Local");
+        _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
+        _storage.ExpectFilterPanelMount();
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, BrowserStorageReadAnswer.Absent);
+        var folderRead = _storage.ExpectHeldRead(BrowserStorageArea.Local, HomeStoragePlan.FolderPathKey);
+        var condition = Services.GetRequiredService<BrowserStorageCondition>();
+        var refusalReported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var observation = condition.Attach(() =>
+        {
+            if (condition.HasOccurred) refusalReported.TrySetResult();
+        });
+
+        var cut = Render<Home>();
+        Assert.True(folderRead.IsReached);
+        var generation = Setup.Current.Generation;
+        await DisposeComponentsAsync();
+
+        folderRead.Release(BrowserStorageReadAnswer.Refused);
+        await refusalReported.Task.WaitAsync(DefaultWaitTimeout);
+        // Queued behind the read's continuation on the renderer's context, so
+        // whatever that continuation went on to do has been done.
+        await cut.InvokeAsync(() => { });
+
+        Assert.True(condition.HasOccurred);
+        Assert.Null(Setup.Current.Source);
+        Assert.Equal(generation, Setup.Current.Generation);
+        // Verify names any read the restore made after the page had gone.
         _storage.Verify();
     }
 

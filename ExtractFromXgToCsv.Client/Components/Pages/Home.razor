@@ -243,6 +243,19 @@
     private IDisposable? _filterSetupAttachment;
     private IDisposable? _storageConditionAttachment;
 
+    // ── This page's lifetime ────────────────────────────────────────────────
+    //
+    // The one fact of whether this page is still the page: cancelled in
+    // Dispose. The owners it reports to outlive it, and its restore is async —
+    // a navigation can dispose this page while it waits on storage or on
+    // /api/appmode, and a newer page can establish another source meanwhile.
+    // Work this page no longer owns is cancelled (the app-mode request is
+    // handed the token; each restore step stops on it), and nothing is
+    // published once it is cancelled (ReportSource). A storage call already
+    // in flight is not abandoned: it completes, and a refusal still reaches
+    // the app-scoped condition — only this page's use of the answer stops.
+    private readonly CancellationTokenSource _lifetime = new();
+
     /// <summary>
     /// The current source's token — the one property both the reports and the
     /// reads use. Local = the latched folder path; Web = the token of the
@@ -302,6 +315,8 @@
 
     public void Dispose()
     {
+        _lifetime.Cancel();
+        _lifetime.Dispose();
         _filterSetupAttachment?.Dispose();
         _storageConditionAttachment?.Dispose();
     }
@@ -325,18 +340,42 @@
     {
         if (!firstRender) return;
 
+        // Read once, while this page is certainly live: the source is
+        // disposed with the page, and the token outlives it.
+        var lifetime = _lifetime.Token;
+        try
+        {
+            await RestoreAsync(lifetime);
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            // Disposed mid-restore: nothing read here is this page's to use,
+            // and nothing is reported.
+        }
+    }
+
+    private async Task RestoreAsync(CancellationToken lifetime)
+    {
         // Every read below answers the stored value, or null for "nothing
         // stored" and for a refusal alike — SettingsStorage has reported a
         // refusal to the condition before it returns — so each key lands on
         // its stored value or its own documented default, and the restore
-        // always runs to the end.
+        // runs to the end while this page lives. Each read completes whatever
+        // happens to the page (a refusal still reaches the condition); the
+        // restore stops after it if the page has gone.
+        async Task<string?> ReadSettingAsync(string key)
+        {
+            var value = await Settings.ReadAsync(key);
+            lifetime.ThrowIfCancellationRequested();
+            return value;
+        }
 
         // The inverse of what persists it below (fmt.ToString()): resolve the
         // stored token by searching the declared formats, never by parsing.
         // Enum.TryParse would also accept a numeric ordinal, tying a durable
         // localStorage entry to member numbering (halheinrich/backgammon#164);
         // an unrecognized token leaves the default standing, as before.
-        var savedFormat = await Settings.ReadAsync("xg_outputFormat");
+        var savedFormat = await ReadSettingAsync("xg_outputFormat");
         foreach (var candidate in Enum.GetValues<OutputFormat>())
         {
             if (string.Equals(savedFormat, candidate.ToString(), StringComparison.Ordinal))
@@ -349,10 +388,10 @@
         // Restore the Local-mode folder path and latch it: a restored path is
         // a committed value — the saved-filters context loads for it, and the
         // source is minted from it — not a keystroke in flight.
-        _folderPathText = await Settings.ReadAsync("xg_folderPath") ?? string.Empty;
+        _folderPathText = await ReadSettingAsync("xg_folderPath") ?? string.Empty;
         LatchSourceFolder(_folderPathText);
 
-        _xgpPersistedPattern = await Settings.ReadAsync("xg_xgpPattern");
+        _xgpPersistedPattern = await ReadSettingAsync("xg_xgpPattern");
         if (_xgpPersistedPattern is null)
         {
             // One-time migration from the pre-pattern persistence shape: the
@@ -363,7 +402,7 @@
             // contain braces) falls back to the default. xg_xgpPrefix is
             // read-once legacy: never written again, and removed on the next
             // successful export.
-            var legacyPrefix = await Settings.ReadAsync("xg_xgpPrefix");
+            var legacyPrefix = await ReadSettingAsync("xg_xgpPrefix");
             if (legacyPrefix is not null)
             {
                 var migrated = legacyPrefix + "{n}";
@@ -372,8 +411,8 @@
                     : XgpExportOptions.DefaultNamePattern;
             }
         }
-        var savedLast = await Settings.ReadAsync("xg_xgpLastNumber");
-        var savedLength = await Settings.ReadAsync("xg_xgpSuffixLength");
+        var savedLast = await ReadSettingAsync("xg_xgpLastNumber");
+        var savedLength = await ReadSettingAsync("xg_xgpSuffixLength");
 
         _xgpPattern = _xgpPersistedPattern ?? XgpExportOptions.DefaultNamePattern;
         if (int.TryParse(savedLast, out var last) && last >= 0)
@@ -381,16 +420,20 @@
         _xgpNextNumber = _xgpPersistedLastNumber + 1;
         if (int.TryParse(savedLength, out var len) && len is >= 1 and <= 9)
             _xgpSuffixLength = len;
-        var savedAnonymize = await Settings.ReadAsync("xg_xgpAnonymize");
+        var savedAnonymize = await ReadSettingAsync("xg_xgpAnonymize");
         _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
 
         try
         {
-            var response = await Http.GetFromJsonAsync<AppModeResponse>("/api/appmode");
+            var response = await Http.GetFromJsonAsync<AppModeResponse>("/api/appmode", lifetime);
             _appMode = response?.Mode ?? "Web";
         }
-        catch { _appMode = "Web"; }
+        catch (Exception) when (!lifetime.IsCancellationRequested)
+        {
+            _appMode = "Web";
+        }
+        lifetime.ThrowIfCancellationRequested();
 
         if ((_outputFormat == OutputFormat.Pptx || _outputFormat == OutputFormat.Pdf)
             && _appMode != "Local")
@@ -411,11 +454,12 @@
     // one: the restore resolving the mode and folder, a Local folder commit,
     // a Web selection change. Nothing before the restore has resolved the
     // source (see _sourceResolved) — the markup already renders no panel to
-    // latch one before then; the guard keeps the rule here, where the report
-    // is made.
+    // latch one before then — and nothing once this page's lifetime has
+    // ended: a disposed page's source is not the app's. Both rules are kept
+    // here, where the report is made.
     private void ReportSource()
     {
-        if (_sourceResolved)
+        if (_sourceResolved && !_lifetime.IsCancellationRequested)
             FilterSetup.ReportSource(Source);
     }
 

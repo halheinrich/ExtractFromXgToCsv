@@ -50,7 +50,7 @@ internal static class bUnitTestHelpers
 /// </summary>
 internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 {
-    private TaskCompletionSource? _appModeGate;
+    private readonly Queue<HeldAppMode> _appModeHolds = new();
 
     /// <summary>
     /// The Local processing endpoints, for a test that runs a job through
@@ -59,16 +59,56 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
     public CapturingProcessHandler? Processing { get; init; }
 
     /// <summary>
-    /// Hold every <c>/api/appmode</c> request from now on pending until
-    /// <see cref="ReleaseAppMode"/> — the seam that makes Home's
-    /// mode-unresolved window observable instead of a race.
+    /// Hold the next <c>/api/appmode</c> request pending until its
+    /// <see cref="HeldAppMode.Release"/> — the seam that makes Home's
+    /// mode-unresolved window observable instead of a race. Each call holds
+    /// one request, in order; later requests are answered at once.
     /// </summary>
-    public void HoldAppMode() =>
-        _appModeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    public HeldAppMode HoldNextAppMode()
+    {
+        var hold = new HeldAppMode();
+        lock (_appModeHolds) _appModeHolds.Enqueue(hold);
+        return hold;
+    }
 
-    /// <summary>Let the held <c>/api/appmode</c> responses through.</summary>
-    public void ReleaseAppMode() =>
-        (_appModeGate ?? throw new InvalidOperationException("The app mode is not held.")).TrySetResult();
+    /// <summary>One held <c>/api/appmode</c> request.</summary>
+    public sealed class HeldAppMode
+    {
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _reached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _ended =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when the request has arrived and is being held.</summary>
+        public Task Reached => _reached.Task;
+
+        /// <summary>
+        /// Completes when the request has ended: <see langword="true"/> if the
+        /// caller cancelled it while held, <see langword="false"/> if it was
+        /// answered.
+        /// </summary>
+        public Task<bool> Cancelled => _ended.Task;
+
+        /// <summary>Answer the request, unless it was cancelled first.</summary>
+        public void Release() => _release.TrySetResult();
+
+        internal async Task WaitAsync(CancellationToken cancellationToken)
+        {
+            _reached.TrySetResult();
+            try
+            {
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _ended.TrySetResult(true);
+                throw;
+            }
+            _ended.TrySetResult(false);
+        }
+    }
 
     /// <summary>
     /// The in-memory documents served and updated by the filterdocument
@@ -90,8 +130,10 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 
         if (path == "/api/appmode")
         {
-            if (_appModeGate is { } gate)
-                await gate.Task.WaitAsync(cancellationToken);
+            HeldAppMode? hold;
+            lock (_appModeHolds) _appModeHolds.TryDequeue(out hold);
+            if (hold is not null)
+                await hold.WaitAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
