@@ -1,11 +1,11 @@
-using AngleSharp.Dom;
+using BgUiPrimitives_Razor;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
-using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components.Forms;
-using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -15,8 +15,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Pins <see cref="WebModePanel"/>'s four boxes against the umbrella's notices
 /// model (<c>SPEC-notices.md</c>, halheinrich/backgammon#248): each renders
-/// through the shared <c>Notice</c>, what the box <em>is</em> decides whether
-/// it dismisses, and its announcement is read off the content wrapper.
+/// through the shared <c>Notice</c>, and what the box <em>is</em> decides
+/// whether it dismisses and how it is announced.
 /// <list type="bullet">
 /// <item>the busy notice — live indicator: polite, not dismissible;</item>
 /// <item>the selected-size limit — gate reason: assertive, not dismissible,
@@ -24,20 +24,23 @@ namespace ExtractFromXgToCsv.Tests;
 /// <item>the zero-match notice — gate reason: assertive, not dismissible;</item>
 /// <item>the run error — error: assertive, dismissible per failed gesture.</item>
 /// </list>
-/// Every gesture is a real DOM event through the real components. Why the
-/// announcement and dismissibility are pinned per box rather than trusted to
-/// the build: see <see cref="NoticeAssert"/>.
+/// Every gesture is a real DOM event through the real components, and every
+/// box is read through BgUiPrimitives' <see cref="NoticeBox"/>
+/// (halheinrich/backgammon#385). Every gesture's completion is awaited before
+/// its outcome is read (see <see cref="NoticeTesting"/>).
 /// </summary>
 public class WebModePanelNoticeTests : BunitContext
 {
     private const string XgFixture = "MTCH4064.xg";
-    private const string RunError = "div.alert-danger";
 
     public WebModePanelNoticeTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddClientServices();
     }
+
+    public static TheoryData<NoticeDismissGesture> BothGestures =>
+        new(Enum.GetValues<NoticeDismissGesture>());
 
     private IRenderedComponent<WebModePanel> RenderPanel() =>
         Render<WebModePanel>(p => p
@@ -47,6 +50,7 @@ public class WebModePanelNoticeTests : BunitContext
             .Add(c => c.XgpAnonymize, false));
 
     // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
+    // UploadFiles returns once the selection handler has finished.
     private static void SelectFiles(IRenderedComponent<WebModePanel> cut, params InputFileContent[] files) =>
         cut.FindComponents<InputFile>()[0].UploadFiles(files);
 
@@ -64,19 +68,18 @@ public class WebModePanelNoticeTests : BunitContext
         var observed = false;
         await cut.InvokeAsync(() => cut.Instance.RunBusyForTest("Working on it…", () =>
         {
-            var box = cut.Find(".busy-notice");
-
-            NoticeAssert.IsNoticeBox(box, "alert-info", "style");
-            NoticeAssert.Announces(box, "status");
-            NoticeAssert.IsNotDismissible(box);
-            Assert.Equal("max-width:800px", box.GetAttribute("style"));
+            // <Notice class="busy-notice" style="max-width:800px" Kind="Information"
+            //         Announcement="Polite">
+            var box = NoticeBox.ByMarkerClass(cut, "busy-notice").ShouldBe(
+                NoticeKind.Information, NoticeAnnouncement.Polite, dismissible: false, "class", "style");
+            Assert.Equal("max-width:800px", box.Element.GetAttribute("style"));
 
             // The spinner-and-text row is this panel's layout, on an element
-            // of its own inside the content wrapper. On the box the flex
-            // classes would lay out the component's children, and reach
-            // neither the spinner nor the text.
-            Assert.DoesNotContain("d-flex", box.ClassList);
-            var row = box.QuerySelector(":scope > div.bg-notice-content > div.d-flex.align-items-center.gap-2");
+            // of its own inside the content. On the box the flex classes would
+            // lay out the component's children, and reach neither the spinner
+            // nor the text.
+            Assert.Equal(["busy-notice"], box.CallerClasses);
+            var row = box.Content.QuerySelector(":scope > div.d-flex.align-items-center.gap-2");
             Assert.NotNull(row);
             Assert.NotNull(row.QuerySelector(":scope > span.spinner-border[aria-hidden=true]"));
             Assert.Equal("Working on it…", row.QuerySelector(":scope > span:not(.spinner-border)")!.TextContent);
@@ -99,21 +102,15 @@ public class WebModePanelNoticeTests : BunitContext
         // declared size before opening a stream.
         SelectFiles(cut, InputFileContent.CreateFromBinary(new byte[50 * 1024 * 1024 + 1], "big.xg"));
 
-        var box = cut.Find("section div.alert-warning");
-        Assert.Contains("limit is 50MB", box.TextContent);
-
-        NoticeAssert.IsNoticeBox(box, "alert-warning");
+        // One fact, one box: the refusal is a standing gate reason, and is not
+        // repeated as a (dismissible) run error — it is the only notice.
+        // <Notice class="mt-1 mb-1 py-1" Kind="Warning" Announcement="Assertive">
         // It carried no role at all before the adoption; it is now the only
         // thing telling the user their selection was refused.
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsNotDismissible(box);
-        Assert.Contains("mt-1", box.ClassList);
-        Assert.Contains("mb-1", box.ClassList);
-        Assert.Contains("py-1", box.ClassList);
-
-        // One fact, one box: the refusal is a standing gate reason, and is not
-        // repeated as a (dismissible) run error.
-        Assert.Empty(cut.FindAll(RunError));
+        var box = Assert.Single(NoticeBox.AllIn(cut)).ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class");
+        Assert.Equal(["mt-1", "mb-1", "py-1"], box.CallerClasses);
+        Assert.Contains("limit is 50MB", box.Content.TextContent);
     }
 
     // ── The zero-match notice — gate reason ─────────────────────────────────
@@ -127,14 +124,16 @@ public class WebModePanelNoticeTests : BunitContext
             .Add(c => c.FilterInEffect,
                 new FilterConfig { Players = new List<string> { "__no_such_player__" } }));
 
-        var box = cut.Find(".zero-match-notice");
-
-        NoticeAssert.IsNoticeBox(box, "alert-warning");
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsNotDismissible(box);
+        // <Notice class="zero-match-notice" Kind="Warning" Announcement="Assertive">
+        NoticeBox.ByMarkerClass(cut, "zero-match-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class");
     }
 
     // ── The run error — dismissible per failed gesture ──────────────────────
+
+    /// <summary>The run error boxes on screen: none, or the one.</summary>
+    private static IReadOnlyList<NoticeBox> RunErrors(IRenderedComponent<WebModePanel> cut) =>
+        NoticeBox.AllIn(cut).Where(b => b.Kind == NoticeKind.Error).ToList();
 
     /// <summary>
     /// A panel with rows loaded and a filter in effect, whose every download
@@ -153,45 +152,49 @@ public class WebModePanelNoticeTests : BunitContext
         return cut;
     }
 
-    private static IElement FailADownload(IRenderedComponent<WebModePanel> cut)
+    /// <summary>
+    /// Clicks Download and awaits the click's own completion — the whole busy
+    /// gesture, through its failure — then reads the one run error it left.
+    /// </summary>
+    private static async Task<NoticeBox> FailADownloadAsync(IRenderedComponent<WebModePanel> cut)
     {
-        cut.Find("button.btn-primary").Click();
-        cut.WaitForAssertion(() => Assert.Single(cut.FindAll(RunError)));
-        return cut.Find(RunError);
+        await cut.FindAll("button").Single(b => b.TextContent.Trim().StartsWith("Download", StringComparison.Ordinal))
+                 .ClickAsync(new MouseEventArgs())
+                 .WaitAsync(NoticeTesting.OperationBound);
+        return Assert.Single(RunErrors(cut));
     }
 
     [Fact]
-    public void RunError_IsAnAssertiveDismissibleNotice()
+    public async Task RunError_IsAnAssertiveDismissibleNotice()
     {
         var cut = RenderWithFailingDownload();
 
-        var box = FailADownload(cut);
+        var box = await FailADownloadAsync(cut);
 
-        Assert.Equal("Error: The download was blocked.", box.QuerySelector(".bg-notice-content")!.TextContent.Trim());
-        NoticeAssert.IsNoticeBox(box, "alert-danger");
+        // <Notice class="mt-2" Kind="Error" Announcement="Assertive" Dismissible="true" …>
         // It carried no role at all before the adoption: a failed gesture
         // nobody announced.
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsDismissible(box);
-        Assert.Contains("mt-2", box.ClassList);
+        box.ShouldBe(NoticeKind.Error, NoticeAnnouncement.Assertive, dismissible: true, "class");
+        Assert.Equal(["mt-2"], box.CallerClasses);
+        Assert.Equal("Error: The download was blocked.", box.Content.TextContent.Trim());
     }
 
     [Theory]
-    [InlineData(RunError)]                          // the whole box
-    [InlineData(RunError + " > button.btn-close")]  // the close button
-    public void RunError_DismissesByTheBoxAndByTheCloseButton_AndTheNextFailureShowsFresh(string target)
+    [MemberData(nameof(BothGestures))]
+    public async Task RunError_DismissesByEitherGesture_AndTheNextFailureShowsFresh(NoticeDismissGesture gesture)
     {
         var cut = RenderWithFailingDownload();
-        FailADownload(cut);
+        var first = await FailADownloadAsync(cut);
+        var dismissedText = first.Content.TextContent;
 
-        cut.Find(target).Click();
+        await first.DismissAndSettleAsync(cut, gesture);
 
-        Assert.Empty(cut.FindAll(RunError));
+        Assert.Empty(RunErrors(cut));
 
         // The next failure is a new occurrence, with no reset wiring — and it
         // shows although its text is identical to the dismissed one's.
-        var fresh = FailADownload(cut);
-        Assert.Contains("The download was blocked.", fresh.TextContent);
+        var fresh = await FailADownloadAsync(cut);
+        Assert.Equal(dismissedText, fresh.Content.TextContent);
     }
 
     [Fact]
@@ -199,6 +202,6 @@ public class WebModePanelNoticeTests : BunitContext
     {
         var cut = RenderPanel();
 
-        Assert.Empty(cut.FindAll(RunError));
+        Assert.Empty(RunErrors(cut));
     }
 }

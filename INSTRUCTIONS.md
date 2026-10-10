@@ -151,8 +151,9 @@ over real files. Records and rows a test states come from the producer's
 `TestRecords`. Shared support: `bUnitTestHelpers` (private-field access, stub
 HTTP handlers, and a Local run to completion), `HomeTesting` (Home's
 registration, render and gestures, and `HomeStoragePlan` — Home's storage
-stated on a `BrowserStoragePlan`), `NoticeAssert` (reads a rendered notice box back against
-the shared component's documented shape), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
+stated on a `BrowserStoragePlan`), `NoticeTesting` (a dismissal through
+BgUiPrimitives' `NoticeBox`, settled before its outcome is read, and the
+bound on awaiting an operation), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
 (the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
 linked into the build output rather than kept in this repo (see Test project,
 and the fixture pitfall).
@@ -1030,17 +1031,20 @@ records what a run was computed from when the run starts.
   value and is reported; and working storage restores, saves and reports
   nothing.
 - `WebModePanelNoticeTests` / `LocalModePanelNoticeTests` — what kind of box
-  each of a panel's notices is (see "Notices"), through real DOM events: every
-  box's announcement read off the content wrapper with no role on the box;
-  each gate reason and the live indicator rendering no close button and
-  answering a click with `MissingEventHandlerException`; the run error
-  dismissing by the box and by the close button and **showing fresh on the
-  next failure although its text is identical**; the busy notice's flex row
-  inside the content wrapper and not on the box; and the over-limit
-  selection stated once, with no run error beside it. All through
-  `NoticeAssert`, whose `IsNoticeBox` also fails on any attribute the call
-  site did not name — the splat trap (see Pitfalls). What the zero-match and
-  skipped notices *say*, and when, stays with their own classes.
+  each of a panel's notices is (see "Notices"), through real DOM events, every
+  box read through BgUiPrimitives' `NoticeBox` (halheinrich/backgammon#385):
+  `ShouldBe` states each call site's kind, announcement, dismissibility and
+  attributes — the splat trap included (see Pitfalls) — and the reader
+  enforces the box's structure. The run error dismissing by either gesture
+  and **showing fresh on the next failure although its text is identical**;
+  the busy notice's flex row inside the content and not on the box; and the
+  over-limit selection stated once, with no run error beside it. What the
+  zero-match and skipped notices *say*, and when, stays with their own
+  classes. **Deterministic by construction** (halheinrich/backgammon#374):
+  each gesture's own completion is awaited before its outcome is read — a
+  run or download by its click's task, a dismissal by a settle on the
+  renderer's dispatcher — never a render with a time budget (see the
+  synchronous-event pitfall).
 - `ScopedCssBundleLinkTests` — hosted (`WebApplicationFactory`): the root
   document links this host's scoped-CSS bundle, the bundle is served and
   `@import`s BgUiPrimitives_Razor's, and that one is served and carries the
@@ -1436,11 +1440,27 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   as a plain attribute, while the real parameter silently takes its default:
   polite, not dismissible. (Measured in the first adopter, 2026-09-21, and
   reproduced here at the adoption: `Anouncement=` built with no warning.)
-  Every box is therefore pinned off the rendered DOM for its announcement and
-  its dismissibility, and `NoticeAssert.IsNoticeBox` fails on any box attribute
-  the call site did not name. A new box needs the same pins; the compiler
-  will not ask for them. `Kind` and `ChildContent` are the exception — they
-  are `[EditorRequired]`, so omitting one is a build error.
+  Every box is therefore pinned off the rendered DOM through BgUiPrimitives'
+  `NoticeBox.ShouldBe`, which states the call site's kind, announcement and
+  dismissibility and fails on any box attribute the call site did not name.
+  A new box needs the same pins; the compiler will not ask for them. `Kind`
+  and `ChildContent` are the exception — they are `[EditorRequired]`, so
+  omitting one is a build error. Don't name `alert-*`, `btn-close`,
+  `bg-notice-content` or a role in a test: those are the component's.
+- **A synchronous bUnit event helper returns before a busy renderer runs the
+  event.** `Click()` and the rest hand the event to the renderer's
+  dispatcher; if earlier work still holds it — the tail of the gesture that
+  put a notice up, a posted continuation on a loaded machine — the event is
+  queued and the helper returns first. Diagnosed on
+  halheinrich/backgammon#374 by holding the dispatcher busy: a synchronous
+  dismissal returned with the box still on screen, and a synchronous
+  Download followed by `WaitForAssertion` failed with "Check count: 0" —
+  the check itself waits on the dispatcher, so a fixed budget measures the
+  machine, not the code. Await the operation's own task (`ClickAsync`) and
+  read the settled outcome. `NoticeBox.Dismiss` returns no task, so a
+  dismissal is settled by `NoticeTesting.DismissAndSettleAsync`: the
+  dispatcher runs work in order, and the dismissal is synchronous end to
+  end, so an empty item queued after it completes only once it has run.
 - **A gate reason is never also a run error.** A standing reason a control is
   dark renders from the state that makes it so (the selected-size limit from
   `_totalSelectedBytes`) and is not dismissible. Writing the same fact into

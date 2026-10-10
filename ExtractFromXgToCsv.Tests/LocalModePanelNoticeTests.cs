@@ -1,9 +1,11 @@
 using System.Net;
-using AngleSharp.Dom;
+using BgUiPrimitives_Razor;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -13,8 +15,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Pins <see cref="LocalModePanel"/>'s three boxes against the umbrella's
 /// notices model (<c>SPEC-notices.md</c>, halheinrich/backgammon#248): each
-/// renders through the shared <c>Notice</c>, what the box <em>is</em> decides
-/// whether it dismisses, and its announcement is read off the content wrapper.
+/// renders through the shared <c>Notice</c>, and what the box <em>is</em>
+/// decides whether it dismisses and how it is announced.
 /// <list type="bullet">
 /// <item>the zero-match notice and the skipped-files notice — gate reasons:
 /// assertive, not dismissible;</item>
@@ -23,13 +25,14 @@ namespace ExtractFromXgToCsv.Tests;
 /// What the two gate reasons <em>say</em>, and when, is pinned by
 /// <see cref="LocalModePanelZeroMatchTests"/> and
 /// <see cref="LocalModePanelSkippedNoticeTests"/>; this class pins only what
-/// kind of box each is. Why that is pinned per box rather than trusted to the
-/// build: see <see cref="NoticeAssert"/>.
+/// kind of box each is. Every box is read through BgUiPrimitives'
+/// <see cref="NoticeBox"/> (halheinrich/backgammon#385), whose
+/// <see cref="NoticeBox.ShouldBe"/> states the call site's whole intent, the
+/// splat trap included. Every gesture's completion is awaited before its
+/// outcome is read (see <see cref="NoticeTesting"/>).
 /// </summary>
 public class LocalModePanelNoticeTests : BunitContext
 {
-    private const string RunError = "div.alert-danger";
-
     /// <summary>
     /// A server whose every <c>/api/process/start</c> fails identically — so
     /// two consecutive failed runs carry the same text, which is the case that
@@ -55,6 +58,9 @@ public class LocalModePanelNoticeTests : BunitContext
             BaseAddress = new Uri("http://localhost/"),
         });
     }
+
+    public static TheoryData<NoticeDismissGesture> BothGestures =>
+        new(Enum.GetValues<NoticeDismissGesture>());
 
     private IRenderedComponent<LocalModePanel> RenderPanel() =>
         Render<LocalModePanel>(p => p
@@ -90,12 +96,10 @@ public class LocalModePanelNoticeTests : BunitContext
         var cut = ctx.RenderReadyLocalPanel(new FilterConfig { Players = ["Alice"] });
         await cut.RunToCompletionAsync();
 
-        var box = cut.Find(".zero-match-notice");
-
-        NoticeAssert.IsNoticeBox(box, "alert-warning");
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsNotDismissible(box);
-        Assert.Contains("mt-2", box.ClassList);
+        // <Notice class="zero-match-notice mt-2" Kind="Warning" Announcement="Assertive">
+        var box = NoticeBox.ByMarkerClass(cut, "zero-match-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class");
+        Assert.Equal(["zero-match-notice", "mt-2"], box.CallerClasses);
     }
 
     [Fact]
@@ -110,17 +114,19 @@ public class LocalModePanelNoticeTests : BunitContext
             Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic.")],
         });
 
-        var box = cut.Find(".skipped-notice");
-
-        NoticeAssert.IsNoticeBox(box, "alert-warning");
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsNotDismissible(box);
-        Assert.Contains("mt-2", box.ClassList);
-        // The record is the notice's content, inside the announced region.
-        Assert.NotNull(box.QuerySelector(":scope > div.bg-notice-content > ul > li"));
+        // <Notice class="skipped-notice mt-2" Kind="Warning" Announcement="Assertive">
+        var box = NoticeBox.ByMarkerClass(cut, "skipped-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class");
+        Assert.Equal(["skipped-notice", "mt-2"], box.CallerClasses);
+        // The record is the notice's content, inside what is announced.
+        Assert.NotNull(box.Content.QuerySelector(":scope > ul > li"));
     }
 
     // ── The run error — dismissible per failed run ──────────────────────────
+
+    /// <summary>The run error boxes on screen: none, or the one.</summary>
+    private static IReadOnlyList<NoticeBox> RunErrors(IRenderedComponent<LocalModePanel> cut) =>
+        NoticeBox.AllIn(cut).Where(b => b.Kind == NoticeKind.Error).ToList();
 
     /// <summary>A panel one click from a run: folder bound, output path typed.</summary>
     private IRenderedComponent<LocalModePanel> RenderReadyToRun()
@@ -130,45 +136,49 @@ public class LocalModePanelNoticeTests : BunitContext
         return cut;
     }
 
-    private static IElement FailARun(IRenderedComponent<LocalModePanel> cut)
+    /// <summary>
+    /// Clicks Run and awaits the click's own completion — the whole failed
+    /// run — then reads the one run error it left.
+    /// </summary>
+    private static async Task<NoticeBox> FailARunAsync(IRenderedComponent<LocalModePanel> cut)
     {
-        cut.Find("button.btn-primary").Click();
-        cut.WaitForAssertion(() => Assert.Single(cut.FindAll(RunError)));
-        return cut.Find(RunError);
+        await cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run")
+                 .ClickAsync(new MouseEventArgs())
+                 .WaitAsync(NoticeTesting.OperationBound);
+        return Assert.Single(RunErrors(cut));
     }
 
     [Fact]
-    public void RunError_IsAnAssertiveDismissibleNotice()
+    public async Task RunError_IsAnAssertiveDismissibleNotice()
     {
         var cut = RenderReadyToRun();
 
-        var box = FailARun(cut);
+        var box = await FailARunAsync(cut);
 
-        Assert.StartsWith("Error: ", box.QuerySelector(".bg-notice-content")!.TextContent.Trim());
-        NoticeAssert.IsNoticeBox(box, "alert-danger");
+        // <Notice class="mt-2" Kind="Error" Announcement="Assertive" Dismissible="true" …>
         // It carried no role at all before the adoption: a failed gesture
         // nobody announced.
-        NoticeAssert.Announces(box, "alert");
-        NoticeAssert.IsDismissible(box);
-        Assert.Contains("mt-2", box.ClassList);
+        box.ShouldBe(NoticeKind.Error, NoticeAnnouncement.Assertive, dismissible: true, "class");
+        Assert.Equal(["mt-2"], box.CallerClasses);
+        Assert.StartsWith("Error: ", box.Content.TextContent.Trim());
     }
 
     [Theory]
-    [InlineData(RunError)]                          // the whole box
-    [InlineData(RunError + " > button.btn-close")]  // the close button
-    public void RunError_DismissesByTheBoxAndByTheCloseButton_AndTheNextFailureShowsFresh(string target)
+    [MemberData(nameof(BothGestures))]
+    public async Task RunError_DismissesByEitherGesture_AndTheNextFailureShowsFresh(NoticeDismissGesture gesture)
     {
         var cut = RenderReadyToRun();
-        var dismissedText = FailARun(cut).TextContent;
+        var first = await FailARunAsync(cut);
+        var dismissedText = first.Content.TextContent;
 
-        cut.Find(target).Click();
+        await first.DismissAndSettleAsync(cut, gesture);
 
-        Assert.Empty(cut.FindAll(RunError));
+        Assert.Empty(RunErrors(cut));
 
         // The next failed run is a new occurrence, with no reset wiring — and
         // it shows although its text is identical to the dismissed one's.
-        var fresh = FailARun(cut);
-        Assert.Equal(dismissedText, fresh.TextContent);
+        var fresh = await FailARunAsync(cut);
+        Assert.Equal(dismissedText, fresh.Content.TextContent);
     }
 
     [Fact]
@@ -176,6 +186,6 @@ public class LocalModePanelNoticeTests : BunitContext
     {
         var cut = RenderPanel();
 
-        Assert.Empty(cut.FindAll(RunError));
+        Assert.Empty(RunErrors(cut));
     }
 }

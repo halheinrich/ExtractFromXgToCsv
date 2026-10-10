@@ -279,7 +279,7 @@ public class HomeStorageUnavailableTests : BunitContext
         // A success begins nothing and ends nothing.
         TheNotice(cut);
 
-        TheNotice(cut).Dismiss(NoticeDismissGesture.CloseButton);
+        await TheNotice(cut).DismissAndSettleAsync(cut, NoticeDismissGesture.CloseButton);
         Assert.Empty(cut.FindAll("#" + StorageNotice));
 
         // A further refusal in the same visit is the same occurrence: the
@@ -294,12 +294,12 @@ public class HomeStorageUnavailableTests : BunitContext
 
     [Theory]
     [MemberData(nameof(BothGestures))]
-    public void TheNotice_DismissesByEitherGesture_AndTheConditionStands(NoticeDismissGesture gesture)
+    public async Task TheNotice_DismissesByEitherGesture_AndTheConditionStands(NoticeDismissGesture gesture)
     {
         ExpectAllRefusedBoot();
         var cut = this.RenderHome();
 
-        TheNotice(cut).Dismiss(gesture);
+        await TheNotice(cut).DismissAndSettleAsync(cut, gesture);
 
         Assert.Empty(cut.FindAll("#" + StorageNotice));
         Assert.True(Condition.HasOccurred);
@@ -317,7 +317,7 @@ public class HomeStorageUnavailableTests : BunitContext
     {
         ExpectAllRefusedBoot();
         var firstVisit = this.RenderHome();
-        TheNotice(firstVisit).Dismiss(NoticeDismissGesture.CloseButton);
+        await TheNotice(firstVisit).DismissAndSettleAsync(firstVisit, NoticeDismissGesture.CloseButton);
 
         await DisposeComponentsAsync();
         _storage.ExpectHomeVisitRefused("Local");
