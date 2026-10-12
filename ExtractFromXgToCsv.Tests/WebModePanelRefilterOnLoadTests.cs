@@ -52,8 +52,7 @@ public class WebModePanelRefilterOnLoadTests : BunitContext
     {
         // The expected outcome comes from outside the panel: fixture B's rows
         // put through a genuinely selective filter (B's first player only).
-        var svc = new XgProcessingService();
-        var rowsB = svc.ExtractDecisions(FixtureHelper.ReadFixture(FixtureB), FixtureB, AppRanking.Ranking);
+        var rowsB = WebSources.Rows(WebSources.Decode(FixtureB));
         var player = rowsB[0].Player!;
         var cfg = new FilterConfig { Players = new List<string> { player } };
         var built = cfg.Build();
@@ -84,9 +83,8 @@ public class WebModePanelRefilterOnLoadTests : BunitContext
         // A filter naming a player from fixture A rejects everything in
         // fixture B — first proven, not assumed, so a future fixture change
         // fails loudly here rather than silently weakening the test.
-        var svc = new XgProcessingService();
-        var rowsA = svc.ExtractDecisions(FixtureHelper.ReadFixture(FixtureA), FixtureA, AppRanking.Ranking);
-        var rowsB = svc.ExtractDecisions(FixtureHelper.ReadFixture(FixtureB), FixtureB, AppRanking.Ranking);
+        var rowsA = WebSources.Rows(WebSources.Decode(FixtureA));
+        var rowsB = WebSources.Rows(WebSources.Decode(FixtureB));
         var playerA = rowsA[0].Player!;
         Assert.DoesNotContain(rowsB, r => r.Player == playerA);
         var cfg = new FilterConfig { Players = new List<string> { playerA } };

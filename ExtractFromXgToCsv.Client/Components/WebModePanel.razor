@@ -4,7 +4,9 @@
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
 @using XgFilter_Razor
+@implements IDisposable
 @inject XgProcessingService Processor
+@inject ISourceConverter Converter
 @inject SettingsStorage Settings
 @inject IJSRuntime JS
 
@@ -14,7 +16,7 @@
    cursor that is). *@
 <div class="@BusyCssClass">
 
-    @if (_busy)
+    @if (IsBusy)
     {
         // The panel's one busy surface. Every slow gesture here runs synchronously
         // on the WASM thread, so this is the only thing the user can see while it
@@ -61,7 +63,7 @@
                 </Notice>
             }
             <InputFile OnChange="HandleFileSelectionAsync" multiple
-                       accept=".xg,.xgp" class="form-control mb-3" disabled="@_busy" />
+                       accept=".xg,.xgp" class="form-control mb-3" disabled="@IsBusy" />
         </div>
     </section>
 
@@ -71,15 +73,15 @@
                 Opening book (.ob) <span class="text-muted">— optional</span>
             </label>
             <InputFile OnChange="HandleOpeningBookSelectionAsync"
-                       accept=".ob" class="form-control mb-1" disabled="@_busy" />
+                       accept=".ob" class="form-control mb-1" disabled="@IsBusy" />
             <div class="small" id="bookStatus">
-                @if (_bookEntryCount is int entries)
+                @if (_session.Book is { } book)
                 {
                     <span class="text-success">
-                        ✓ Book loaded (@entries entries) — book decisions show their enriched depth.
+                        ✓ Book loaded (@book.EntryCount entries) — book decisions show their enriched depth.
                     </span>
                 }
-                else if (_bookLoadFailed)
+                else if (_session.BookLoadFailed)
                 {
                     <span class="text-danger">
                         ✗ That file isn't a valid opening book — book decisions will show as level Unknown.
@@ -96,16 +98,29 @@
         </div>
     </section>
 
+    @* "This selection" (SPEC-notices.md §7.3, projection A): what the current
+       output loses from this selection — the files that could not be read,
+       and the completed conversion skips of the selected output's
+       representation. It belongs to the selection, so a pick, a book change, a
+       format switch or a conversion completing changes it; refiltering never
+       does. Through the one rendering both modes share. *@
+    <div style="max-width:800px">
+        <SkipListNotice class="mb-3 selection-skips" Record="_session.SelectionSkips(SelectedRepresentation)"
+                        Label="This selection" />
+    </div>
+
     @* The run error — dismissible (SPEC-notices.md, Fork A), and assertive: a
        gesture the user made failed. One occurrence is one failed gesture (a
-       file read or a download build), and _runError is non-null exactly while
-       one stands, so closing the box ends the occurrence — the field is
-       cleared, as the next selection and the next download already clear it —
-       and there is no dismissed bit anywhere, here or in the Notice (the
-       binding makes it caller-held, so it keeps none). A second failure
-       assigns the field again and shows fresh although its text may be
-       identical: the text was never the occurrence. No @if around it — one
-       fact, read once. *@
+       selection that could not be taken, or a download that could not be
+       built or handed over), and _runError is non-null exactly while one
+       stands, so closing the box ends the occurrence — the field is cleared,
+       as the next selection and the next download already clear it — and
+       there is no dismissed bit anywhere, here or in the Notice (the binding
+       makes it caller-held, so it keeps none). A second failure assigns the
+       field again and shows fresh although its text may be identical: the
+       text was never the occurrence. A file that could not be read is not a
+       run error: it is the selection's read skip, above. No @if around it —
+       one fact, read once. *@
     <Notice class="mt-2" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
             Dismissible="true"
             @bind-Dismissed:get="_runError is null"
@@ -113,18 +128,31 @@
         @_runError
     </Notice>
 
-    @if (_rowCache.Rows.Count > 0)
+    @if (_session.Selection is { Decoded.IsEmpty: false })
     {
         <div class="mb-4" style="max-width:800px">
-            @if (FilterInEffect is not null)
+            @* Readiness and counts belong to the selected output's
+               representation (SPEC-notices.md §7.3): the line, the zero-match
+               notice and Download read the selected key's state, and a key
+               not converted yet shows no count at all — never zero matches. *@
+            @if (SelectedConverted is int converted && converted > 0)
             {
-                @if (_rowCache.FilteredRows.Count == 0)
+                @if (FilterInEffect is null)
                 {
-                    // Rows loaded but the applied filter set excluded every one of
-                    // them. Because an empty (inactive) set passes every row, a zero
-                    // count here means the filters are genuinely active — so we can
-                    // say so without re-inspecting FilterConfig. Replaces the bland
-                    // "0 of N rows match" line that read as a silent success.
+                    // The unfiltered row total: the rows whose conversion
+                    // succeeded, never taken as evidence about the records.
+                    <div class="mb-2 text-muted">
+                        @Projections.Rows.Count rows loaded — set filters and click Apply Filter
+                    </div>
+                }
+                else if (SelectedMatched == 0)
+                {
+                    // Items converted but the applied filter set excluded every
+                    // one of them. Because an empty (inactive) set passes
+                    // everything, a zero count here means the filters are
+                    // genuinely active — so we can say so without re-inspecting
+                    // FilterConfig. Replaces the bland "0 of N match" line that
+                    // read as a silent success.
                     //
                     // A gate reason — it is the filter's result — so not
                     // dismissible (SPEC-notices.md, Fork C).
@@ -136,16 +164,10 @@
                 }
                 else
                 {
-                    <div class="mb-2 text-muted">
-                        @_rowCache.FilteredRows.Count of @_rowCache.Rows.Count rows match current filters
+                    <div class="mb-2 text-muted" id="matchCount">
+                        @SelectedMatched of @converted @SelectedNoun match current filters
                     </div>
                 }
-            }
-            else
-            {
-                <div class="mb-2 text-muted">
-                    @_rowCache.Rows.Count rows loaded — set filters and click Apply Filter
-                </div>
             }
 
             <label class="form-label">Filename</label>
@@ -156,8 +178,8 @@
 
             <button class="btn btn-primary"
                     @onclick="DownloadAsync"
-                    disabled="@(_busy || FilterInEffect is null || _totalSelectedBytes > WebModeLimitBytes || XgpDownloadBlocked)">
-                @(_busy ? "Building…" : DownloadButtonLabel)
+                    disabled="@(!DownloadReady)">
+                @(IsBusy ? "Building…" : DownloadButtonLabel)
             </button>
             @if (FilterInEffect is null)
             {
@@ -166,7 +188,7 @@
             else if (XgpDownloadBlocked)
             {
                 <small class="text-muted ms-2">
-                    @(_rowCache.FilteredRows.Count == 0
+                    @(SelectedMatched == 0
                         ? "No decisions match the filters"
                         : "Fix the XGP export options first")
                 </small>
@@ -174,9 +196,23 @@
         </div>
     }
 
-    @if (FilterInEffect is not null && _rowCache.FilteredRows.Count > 0)
+    @* "The last download" (SPEC-notices.md §7.3, projection B, ruled F1 and F2
+       in §7.4): the decisions the last attempt skipped because their payload
+       could not be prepared, labelled as that attempt and with how it ended,
+       so it never reads as a verdict on a different output. The next
+       attempt's start replaces it, and a new pick clears it. *@
+    @if (_session.LastDownload is { } lastDownload)
     {
-        <h5>Preview (first @(Math.Min(20, _rowCache.FilteredRows.Count)) of @_rowCache.FilteredRows.Count filtered rows, @_rowCache.Rows.Count total)</h5>
+        <div style="max-width:800px">
+            <SkipListNotice class="mb-3 download-skips" Record="lastDownload.ExportSkips"
+                            Label="@LastDownloadLabel(lastDownload)" />
+        </div>
+    }
+
+    @if (FilterInEffect is not null && _session.StateOf(Representation.Rows) == ConversionState.Completed
+         && Projections.FilteredRows.Count > 0)
+    {
+        <h5>Preview (first @(Math.Min(20, Projections.FilteredRows.Count)) of @Projections.FilteredRows.Count filtered rows, @Projections.Rows.Count total)</h5>
         <div style="overflow-x:auto">
             <table class="table table-sm table-striped table-bordered">
                 <thead class="table-dark">
@@ -195,7 +231,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var r in _rowCache.FilteredRows.Take(20))
+                    @foreach (var r in Projections.FilteredRows.Take(20))
                     {
                         <tr>
                             <td><code style="font-size:.75em">@r.Xgid</code></td>
@@ -227,8 +263,8 @@
     /// The filter in effect for this panel's selection, or
     /// <see langword="null"/> when none is — the host's one filter fact
     /// (<c>Home.FilterInEffect</c>). It gates the Download button, the
-    /// preview and the match-count line, and is what the rows are filtered
-    /// by. The empty selection is in effect without Apply
+    /// preview and the match-count line, and is what the retained rows and
+    /// records are filtered by. The empty selection is in effect without Apply
     /// (halheinrich/backgammon#266).
     /// </summary>
     /// <remarks>
@@ -254,29 +290,28 @@
     /// <summary>
     /// Raised once per file-selection gesture — every
     /// <see cref="HandleFileSelectionAsync"/> invocation, because every one
-    /// replaces (or clears) the retained selection before anything else runs —
-    /// with the new selection's token, or <see langword="null"/> when the
-    /// gesture left nothing selected (a dismissed picker, a selection over the
-    /// size limit). The selection is Web mode's filter <em>source</em>; the
-    /// host reports the token to the filter setup, so a new selection ends
-    /// the setup exactly as a new Local folder does. EditorRequired: a
-    /// silently splatted binding here is a source change nobody hears of.
+    /// replaces (or clears) the selection before anything else runs — with the
+    /// new selection's token, or <see langword="null"/> when the gesture left
+    /// nothing selected (a dismissed picker, a selection over the size limit).
+    /// The selection is Web mode's filter <em>source</em>; the host reports the
+    /// token to the filter setup, so a new selection ends the setup exactly as
+    /// a new Local folder does. EditorRequired: a silently splatted binding
+    /// here is a source change nobody hears of.
     /// </summary>
     [Parameter, EditorRequired] public EventCallback<FilterSourceToken?> OnSelectionChanged { get; set; }
 
     // ── The selection's identity ────────────────────────────────────────────
     //
-    // The selection — its bytes (_fileBytes) and rows (_rowCache) — is this
-    // panel's, so its token is too: minted when a gesture selects files, held
-    // beside them, and gone with them (a clearing gesture, or this panel's
-    // disposal, which takes the bytes with it). Two selections never share a
-    // token, also across panel instances: the filter setup outlives every
-    // page, so a page-lived counter would mint the same token again after a
-    // navigation, and a new pick would inherit an old pick's consent. The
-    // counter is therefore process-wide — one per loaded app under
-    // WebAssembly — and only ever moves forward.
+    // The selection — its decoded files, their conversions and the
+    // projections, all in _session — is this panel's, so its token is too:
+    // minted when a gesture selects files, held by the selection, and gone
+    // with it (a clearing gesture, or this panel's disposal). Two selections
+    // never share a token, also across panel instances: the filter setup
+    // outlives every page, so a page-lived counter would mint the same token
+    // again after a navigation, and a new pick would inherit an old pick's
+    // consent. The counter is therefore process-wide — one per loaded app
+    // under WebAssembly — and only ever moves forward.
     private static int s_lastSelectionNumber;
-    private FilterSourceToken? _selection;
 
     private static FilterSourceToken MintSelectionToken() =>
         FilterSourceToken.FromGeneration(Interlocked.Increment(ref s_lastSelectionNumber));
@@ -286,16 +321,20 @@
     private long _totalSelectedBytes = 0;
 
     // Busy state for every slow gesture on this panel — raised only through
-    // RunBusyAsync, which owns the paint discipline that makes it visible.
-    private bool _busy = false;
+    // RunBusyAsync, which owns the paint discipline that makes it visible. A
+    // count, not a flag: a gesture can begin while another's await is
+    // pending (a newer pick supersedes an older one), and the panel is busy
+    // until the last of them ends.
+    private int _busyDepth;
+    private bool IsBusy => _busyDepth > 0;
     private string _busyMessage = string.Empty;
 
-    // Busy marker for the panel root. It rides _busy — the state the panel
-    // already keeps, unchanged — so every window RunBusyAsync opens gets the
-    // cursor, including any gesture routed through the wrapper later. The
-    // class carries no cursor of its own; app.css holds the single rule, the
-    // same one LocalModePanel's root uses (issue halheinrich/backgammon#77).
-    private string? BusyCssClass => _busy ? "is-busy" : null;
+    // Busy marker for the panel root. It rides IsBusy — the state the panel
+    // already keeps — so every window RunBusyAsync opens gets the cursor,
+    // including any gesture routed through the wrapper later. The class
+    // carries no cursor of its own; app.css holds the single rule, the same
+    // one LocalModePanel's root uses (issue halheinrich/backgammon#77).
+    private string? BusyCssClass => IsBusy ? "is-busy" : null;
 
     // The failed gesture standing on screen, as its message; null when none
     // is. The run error notice's whole state — presence, text and dismissal
@@ -304,15 +343,28 @@
     // gate reason with its own owner, _totalSelectedBytes.
     private string? _runError;
 
-    // Live-preview row state — the loaded rows, the materialized filter, and
-    // the filtered projections all live in the cache; the panel only decides
-    // *when* a filter is in effect (FilterInEffect) and renders from
-    // the cache's properties. Exposed internally so wire tests can pin the
-    // panel→cache routing without reflection. The cache is the run's, built
-    // for the application's one ranking; extraction reads the ranking back
-    // from it, so the rows and the records it filters are one ranking's.
-    private readonly FilteredRowCache _rowCache = new(AppRanking.Ranking);
-    internal FilteredRowCache RowCache => _rowCache;
+    // Web mode's state, owned by this panel and dying with it: the selection,
+    // its conversion cache, the book in force, the projections and the last
+    // download (SPEC-notices.md §7.3). The ranking is the application's one
+    // ranking, so every row is built for it and every record filtered under it.
+    private WebSession _session = default!;
+
+    // This panel's lifetime: an operation it started that is still running
+    // when the panel goes is cancelled, and publishes nothing — the selection
+    // it belonged to died with the panel.
+    private readonly CancellationTokenSource _lifetime = new();
+
+    /// <summary>
+    /// The projections — retained rows and records and their filtered views —
+    /// exposed so wire tests can pin the panel→cache routing without
+    /// reflection.
+    /// </summary>
+    internal FilteredRowCache RowCache => _session.Projections;
+
+    /// <summary>The panel's Web-mode state, exposed as a test seam beside <see cref="RowCache"/>.</summary>
+    internal WebSession Session => _session;
+
+    private FilteredRowCache Projections => _session.Projections;
 
     // OpeningBookV2.ob is ~13.6 MB; the InputFile stream default cap (500 KB)
     // would reject it, so the book stream is read with this larger ceiling. The
@@ -320,21 +372,14 @@
     // WebModeLimitBytes.
     private const long OpeningBookMaxBytes = 64L * 1024 * 1024;
 
-    // Raw bytes of each selected file, keyed by bare filename — retained so
-    // the .xgp slice export can re-parse its sources at download time. Raw
-    // (zlib-compressed) bytes are kept rather than parsed XgFiles: they are
-    // smaller and already bounded by WebModeLimitBytes.
-    private readonly Dictionary<string, byte[]> _fileBytes = new();
+    protected override void OnInitialized() =>
+        _session = new WebSession(Converter, AppRanking.Ranking);
 
-    // Optional opening book, loaded client-side from an uploaded .ob file. When
-    // present it enriches book-analysed decisions (matching Local mode's
-    // server-loaded book); when absent they degrade to level Unknown. A book
-    // chosen after the .xg files triggers re-extraction so ordering doesn't
-    // matter. _bookEntryCount is the loaded-and-non-null signal (drives the
-    // status line); _bookLoadFailed marks a rejected upload.
-    private OpeningBook? _openingBook;
-    private int? _bookEntryCount;
-    private bool _bookLoadFailed;
+    public void Dispose()
+    {
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -344,13 +389,13 @@
         StateHasChanged();
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         // Re-filter by the filter in effect. Whether one is in effect is the
         // panel's one filtering decision; materialization (cached by config
-        // value) and projection live in the cache.
+        // value) and projection live in the cache, over what is retained.
         if (FilterInEffect is { } filter)
-            _rowCache.Refilter(filter);
+            _session.Refilter(filter);
 
         // Update filename extension when output format changes
         if (!string.IsNullOrWhiteSpace(_csvFileName))
@@ -367,36 +412,44 @@
                 _ = Settings.WriteAsync("xg_csvFileName", _csvFileName);
             }
         }
+
+        // A format switch selects the new format's representation, and
+        // requests its conversion when nobody has — so records convert when
+        // Diagram JSON is first selected, and only then
+        // (halheinrich/backgammon#74). While another gesture is busy it is
+        // that gesture's to do: each ends by converting what the selected
+        // output needs, reading the format afresh.
+        if (!IsBusy && _session.Needs(SelectedRepresentation))
+            await RunBusyAsync(ConvertingMessage, EnsureConversionsAsync);
     }
 
     private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
     {
         _runError = null;
-        _rowCache.Clear();
-        _fileBytes.Clear();
 
         var files = e.GetMultipleFiles(500).ToList();
         _totalSelectedBytes = files.Sum(f => f.Size);
 
         // Over the limit nothing is read, and a dismissed picker selects
         // nothing: either way the gesture leaves no selection. Otherwise the
-        // files are the new selection, with a token of its own.
+        // files are the new selection, with a token of its own. The old
+        // selection ends here on every path — and with it its conversions,
+        // its projections and its last download — and any pick still reading
+        // is superseded: it will publish nothing.
         var selecting = files.Count > 0 && _totalSelectedBytes <= WebModeLimitBytes;
-        _selection = selecting ? MintSelectionToken() : null;
+        var pick = _session.BeginPick();
+        FilterSourceToken? token = selecting ? MintSelectionToken() : null;
 
-        // The old selection is gone as of the clears above, on every path out
-        // of this handler, so the source change is announced unconditionally —
-        // once, with the outcome's token — before anything is read.
-        await OnSelectionChanged.InvokeAsync(_selection);
+        // The source change is announced unconditionally — once, with the
+        // outcome's token — before anything is read.
+        await OnSelectionChanged.InvokeAsync(token);
 
         // Over the limit: the reason is on screen already, by the picker,
         // rendered from _totalSelectedBytes itself — a gate reason that stands
-        // until the selection changes. It used to be written into the run
-        // error as well: one fact in two boxes, and the second copy would now
-        // be a dismissible statement of a gate reason (SPEC-notices.md §1).
-        // One fact, one owner, one box. And for a dismissed picker the clear
-        // above is the whole effect: raising busy for it would flash a notice
-        // over no work (the wrapper's yield guarantees the flash would paint).
+        // until the selection changes (SPEC-notices.md §1): one fact, one
+        // owner, one box. And for a dismissed picker the clear above is the
+        // whole effect: raising busy for it would flash a notice over no work
+        // (the wrapper's yield guarantees the flash would paint).
         if (!selecting) return;
 
         // The hint is a convenience: a refused write is reported to the
@@ -407,70 +460,81 @@
 
         await RunBusyAsync(
             $"Reading {files.Count} file(s) and extracting decisions…",
-            async () =>
+            () => GuardedAsync(async () =>
             {
-                try
-                {
-                    foreach (var file in files)
-                    {
-                        using var ms = new MemoryStream();
-                        await file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024).CopyToAsync(ms);
-                        _fileBytes[file.Name] = ms.ToArray();
-                    }
-                    ExtractLoadedFiles();
-                }
-                catch (Exception ex)
-                {
-                    _runError = $"Error: {ex.Message}";
-                }
-            });
+                // Each file is read once; a file that cannot be read is named
+                // in "this selection" with the reader's message, and the good
+                // ones load (halheinrich/backgammon#364).
+                var picked = files
+                    .Select(f => new PickedFile(f.Name,
+                        ct => Task.FromResult(f.OpenReadStream(maxAllowedSize: WebModeLimitBytes, ct))))
+                    .ToList();
+                if (await _session.CompletePickAsync(pick, token!.Value, picked, _lifetime.Token))
+                    await _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token);
+            }));
     }
 
     private async Task HandleOpeningBookSelectionAsync(InputFileChangeEventArgs e)
     {
-        _bookLoadFailed = false;
+        var load = _session.BeginBookLoad();
 
         // One message has to cover the whole gesture: the load and the
         // re-extract both hold the thread, so there is no frame in between to
         // update it in. Naming the re-extract when there are files to re-read
         // is what keeps the notice from under-promising a multi-second wait.
-        var message = _fileBytes.Count > 0
-            ? $"Loading opening book and re-reading {_fileBytes.Count} file(s)…"
+        var decodedCount = _session.Selection?.Decoded.Length ?? 0;
+        var message = decodedCount > 0
+            ? $"Loading opening book and re-reading {decodedCount} file(s)…"
             : "Loading opening book…";
 
-        await RunBusyAsync(message, async () =>
+        await RunBusyAsync(message, () => GuardedAsync(async () =>
         {
+            OpeningBook? book = null;
+            var failed = false;
             try
             {
                 using var ms = new MemoryStream();
-                await e.File.OpenReadStream(maxAllowedSize: OpeningBookMaxBytes).CopyToAsync(ms);
-
-                if (Processor.TryLoadOpeningBook(ms.ToArray(), out var book))
-                {
-                    _openingBook = book;
-                    _bookEntryCount = book.EntryCount;
-                }
-                else
-                {
-                    _openingBook = null;
-                    _bookEntryCount = null;
-                    _bookLoadFailed = true;
-                }
+                await e.File.OpenReadStream(maxAllowedSize: OpeningBookMaxBytes, _lifetime.Token).CopyToAsync(ms, _lifetime.Token);
+                failed = !Processor.TryLoadOpeningBook(ms.ToArray(), out book);
             }
-            catch (Exception)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _openingBook = null;
-                _bookEntryCount = null;
-                _bookLoadFailed = true;
+                failed = true;
             }
 
-            // Re-extract already-loaded files so a book chosen after the .xg
-            // files still enriches them — and a currently-applied filter view
-            // updates.
-            if (_fileBytes.Count > 0)
-                ExtractLoadedFiles();
-        });
+            // A book chosen after the files still enriches them: a new book is
+            // a new conversion key, so the selection's rows reconvert under it
+            // — each file within its own boundary, as on a pick
+            // (halheinrich/backgammon#364) — and its records when an output
+            // needs them.
+            if (_session.CompleteBookLoad(load, book, failed))
+                await _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token);
+        }));
     }
+
+    /// <summary>
+    /// Runs a gesture's work: a cancellation from this panel's own lifetime
+    /// ends it silently, since the panel has gone; anything else that escapes
+    /// — never a file's failure, which is a skip — is the gesture's failure,
+    /// the run error.
+    /// </summary>
+    private async Task GuardedAsync(Func<Task> work)
+    {
+        try
+        {
+            await work();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _runError = $"Error: {ex.Message}";
+        }
+    }
+
+    private Task EnsureConversionsAsync() =>
+        GuardedAsync(() => _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token));
 
     /// <summary>
     /// Runs <paramref name="body"/> with the panel's busy notice showing.
@@ -497,7 +561,7 @@
     /// </remarks>
     private async Task RunBusyAsync(string message, Func<Task> body)
     {
-        _busy = true;
+        _busyDepth++;
         _busyMessage = message;
         StateHasChanged();
         await Task.Yield();
@@ -507,8 +571,8 @@
         }
         finally
         {
-            _busy = false;
-            _busyMessage = string.Empty;
+            if (--_busyDepth == 0)
+                _busyMessage = string.Empty;
             StateHasChanged();
         }
     }
@@ -522,39 +586,57 @@
     internal Task RunBusyForTest(string message, Func<Task> body) =>
         RunBusyAsync(message, body);
 
-    // Re-derives every row from the retained file bytes using the current
-    // opening book and hands them to the cache, which re-projects them through
-    // the filter already in effect — so rows loaded after an Apply are
-    // filtered immediately, and enrichment never depends on the order the
-    // file and book picks were made in. Called on a fresh file selection and
-    // whenever the book changes. Both extractions state the cache's ranking —
-    // the run's one ranking — so the rows are built for the ranking the
-    // records are filtered under.
-    private void ExtractLoadedFiles()
-    {
-        var ranking = _rowCache.Ranking;
-        var rows = new List<DecisionRow>();
-        var diagramRows = new List<BgDecisionData>();
-        foreach (var (name, bytes) in _fileBytes)
-        {
-            rows.AddRange(Processor.ExtractDecisions(bytes, name, ranking, _openingBook));
-            diagramRows.AddRange(Processor.ExtractDiagramRequests(bytes, name, ranking, _openingBook));
-        }
-        _rowCache.ReplaceRows(rows, diagramRows);
-    }
-
     private async Task OnCsvFileNameChanged(ChangeEventArgs e)
     {
         _csvFileName = e.Value?.ToString() ?? string.Empty;
         await Settings.WriteAsync("xg_csvFileName", _csvFileName);
     }
 
-    // Xgp needs matching decisions and valid naming options before the
-    // Download button makes sense; the text formats tolerate an empty set
-    // (header-only CSV / empty JSON array), so they stay ungated.
+    // ── The selected output's representation ────────────────────────────────
+
+    // Rows for CSV and XGP, records for Diagram JSON (SPEC-notices.md §7.1).
+    private Representation SelectedRepresentation =>
+        OutputFormat == OutputFormat.DiagramJson ? Representation.Records : Representation.Rows;
+
+    // The selected key's converted count, or null while it is not converted
+    // yet — "not converted yet" is never zero.
+    private int? SelectedConverted =>
+        _session.StateOf(SelectedRepresentation) != ConversionState.Completed ? null
+        : SelectedRepresentation == Representation.Records ? Projections.Records.Count
+        : Projections.Rows.Count;
+
+    private int SelectedMatched =>
+        SelectedRepresentation == Representation.Records
+            ? Projections.FilteredDiagramRows.Count
+            : Projections.FilteredRows.Count;
+
+    private string SelectedNoun => SelectedRepresentation == Representation.Records ? "decisions" : "rows";
+
+    private string ConvertingMessage => SelectedRepresentation == Representation.Records
+        ? "Converting decisions for Diagram JSON…"
+        : "Extracting decisions…";
+
+    // Download needs a filter in effect, a selection within the size limit,
+    // and the selected key converted with something in it; Xgp also needs
+    // matching decisions and valid naming options. The text formats tolerate
+    // an empty filtered set (header-only CSV / empty JSON array).
+    private bool DownloadReady =>
+        !IsBusy
+        && FilterInEffect is not null
+        && _totalSelectedBytes <= WebModeLimitBytes
+        && SelectedConverted > 0
+        && !XgpDownloadBlocked;
+
     private bool XgpDownloadBlocked =>
         OutputFormat == OutputFormat.Xgp
-        && (_rowCache.FilteredRows.Count == 0 || !XgpOptions.TryValidate(out _));
+        && (Projections.FilteredRows.Count == 0 || !XgpOptions.TryValidate(out _));
+
+    private static string LastDownloadLabel(WebDownload download) => download.Status switch
+    {
+        DownloadStatus.Failed => "The last download (failed)",
+        DownloadStatus.Cancelled => "The last download (stopped)",
+        _ => "The last download",
+    };
 
     private string DownloadButtonLabel => OutputFormat switch
     {
@@ -570,64 +652,95 @@
         _                        => "Building CSV…",
     };
 
+    // ── The download ────────────────────────────────────────────────────────
+
     // Not format-gated: CSV is the fast one today, but the builders share this
     // one path and the yield costs a single frame, so gating it would buy a
     // special case and nothing else.
     private Task DownloadAsync() => RunBusyAsync(BuildingMessage, DownloadCoreAsync);
 
+    /// <summary>
+    /// One download attempt (SPEC-notices.md §7.3): it captures at its start
+    /// everything it depends on, builds its file from what is retained,
+    /// prepares each XGP decision within its own boundary, and commits once —
+    /// the finalized file's hand-off to the browser. Its record becomes "the
+    /// last download" unless a newer attempt or selection has taken over; what
+    /// a successful XGP hand-off committed reaches the host's numbering
+    /// whatever is shown.
+    /// </summary>
     private async Task DownloadCoreAsync()
     {
-        // The gate guarantees a filter in effect; a stale click past it has
-        // nothing to build.
-        if (FilterInEffect is not { } filter) return;
+        // The gate guarantees a filter in effect and a converted selection; a
+        // stale click past it has nothing to build.
+        if (FilterInEffect is not { } filter || _session.BeginDownload() is not { } attempt) return;
 
         _runError = null;
-        // What the download depends on, captured at its start: a change to
-        // the controls while it runs reinterprets nothing.
+
+        // Captured at the start: a change to the filter, format, book or
+        // export options while the attempt runs neither discards nor
+        // reinterprets it.
         var format = OutputFormat;
         var options = XgpOptions;
-        var decisions = _rowCache.FilteredRows;
+        var anonymize = XgpAnonymize;
+        var fileName = string.IsNullOrWhiteSpace(_csvFileName)
+            ? format switch { OutputFormat.DiagramJson => "decisions.json", OutputFormat.Xgp => "decisions.zip", _ => "decisions.csv" }
+            : _csvFileName;
+        var rows = Projections.FilteredRows;
+        var records = Projections.FilteredDiagramRows;
+
+        var exportSkips = SkipRecord.Empty;
         try
         {
             byte[] bytes;
-            string fileName;
             string mimeType;
+            int committed;
+            XgpExportCommit? numbering = null;
 
             if (format == OutputFormat.Xgp)
             {
-                bytes = Processor.BuildXgpZip(
-                    _fileBytes,
-                    decisions,
-                    options,
-                    filter,
-                    anonymize: XgpAnonymize);
-                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.zip" : _csvFileName;
+                var archive = Processor.BuildXgpArchive(
+                    _session.XgpDecisionsFor(rows), options, filter, anonymize,
+                    skipped => exportSkips = exportSkips.With(skipped));
+                bytes = archive.Bytes;
                 mimeType = "application/zip";
+                committed = archive.Commit.Count;
+                numbering = archive.Commit;
             }
             else if (format == OutputFormat.DiagramJson)
             {
-                var content = Processor.BuildDiagramJson(_rowCache.FilteredDiagramRows);
-                bytes = System.Text.Encoding.UTF8.GetBytes(content);
-                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.json" : _csvFileName;
+                bytes = System.Text.Encoding.UTF8.GetBytes(Processor.BuildDiagramJson(records));
                 mimeType = "application/json";
+                committed = records.Count;
             }
             else
             {
-                var content = Processor.BuildCsv(_rowCache.FilteredRows);
-                bytes = System.Text.Encoding.UTF8.GetBytes(content);
-                fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.csv" : _csvFileName;
+                bytes = System.Text.Encoding.UTF8.GetBytes(Processor.BuildCsv(rows));
                 mimeType = "text/csv";
+                committed = rows.Count;
             }
 
+            // The commit: the hand-off to the browser.
             await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
 
-            // The archive holds an entry per decision — any failure fails the
-            // whole build — so the hand-off commits them all.
-            if (format == OutputFormat.Xgp)
-                await OnXgpExported.InvokeAsync(new XgpExportCommit(options, decisions.Count));
+            _session.CompleteDownload(attempt, new WebDownload(
+                format, fileName, DownloadStatus.Completed, committed, numbering, exportSkips));
+
+            // The archive was delivered, so the numbers it used are recorded,
+            // whatever is now shown — from the options it captured.
+            if (numbering is not null)
+                await OnXgpExported.InvokeAsync(numbering);
+        }
+        catch (OperationCanceledException)
+        {
+            _session.CompleteDownload(attempt, new WebDownload(
+                format, fileName, DownloadStatus.Cancelled, 0, null, exportSkips));
         }
         catch (Exception ex)
         {
+            // Nothing was handed over, so nothing counts as exported; the
+            // attempt keeps the skips it found.
+            _session.CompleteDownload(attempt, new WebDownload(
+                format, fileName, DownloadStatus.Failed, 0, null, exportSkips));
             _runError = $"Error: {ex.Message}";
         }
     }

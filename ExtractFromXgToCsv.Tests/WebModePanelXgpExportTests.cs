@@ -79,7 +79,7 @@ public class WebModePanelXgpExportTests : BunitContext
     public async Task SelectExportDownload_WithAnonymize_ProducesZipOfAnonymizedPositions()
     {
         // Same chain as above, but XgpAnonymize=true — the flag must ride the
-        // panel -> BuildXgpZip seam and every zip entry re-reads named by
+        // panel -> BuildXgpArchive seam and every zip entry re-reads named by
         // decision role.
         var options = new XgpExportOptions
         {

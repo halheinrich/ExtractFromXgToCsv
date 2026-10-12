@@ -15,8 +15,6 @@ namespace ExtractFromXgToCsv.Tests;
 /// </summary>
 public class OutputConsistencyTests
 {
-    private readonly XgProcessingService _svc = new();
-
     private static readonly PlayRanking Ranking = AppRanking.Ranking;
 
     [Theory]
@@ -24,10 +22,10 @@ public class OutputConsistencyTests
     [InlineData("MoneyTest.xg")]
     public void BothPathways_SameDecisionCount(string fileName)
     {
-        var bytes = FixtureHelper.ReadFixture(fileName);
+        var source = WebSources.Decode(fileName);
 
-        var rows = _svc.ExtractDecisions(bytes, fileName, Ranking);
-        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName, Ranking);
+        var rows = WebSources.Rows(source, Ranking);
+        var diagrams = WebSources.Records(source, Ranking);
 
         Assert.Equal(rows.Count, diagrams.Count);
     }
@@ -38,10 +36,10 @@ public class OutputConsistencyTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1859", Justification = "Testing IDecisionFilterData contract explicitly")]
     public void BothPathways_FilterDataPropertiesAgree(string fileName)
     {
-        var bytes = FixtureHelper.ReadFixture(fileName);
+        var source = WebSources.Decode(fileName);
 
-        var rows = _svc.ExtractDecisions(bytes, fileName, Ranking);
-        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName, Ranking);
+        var rows = WebSources.Rows(source, Ranking);
+        var diagrams = WebSources.Records(source, Ranking);
 
         for (int i = 0; i < rows.Count; i++)
         {
@@ -70,10 +68,10 @@ public class OutputConsistencyTests
     [InlineData("MoneyTest.xg", DecisionTypeOption.CubeOnly)]
     public void BothPathways_SameFilteredCount(string fileName, DecisionTypeOption decisionType)
     {
-        var bytes = FixtureHelper.ReadFixture(fileName);
+        var source = WebSources.Decode(fileName);
 
-        var rows = _svc.ExtractDecisions(bytes, fileName, Ranking);
-        var diagrams = _svc.ExtractDiagramRequests(bytes, fileName, Ranking);
+        var rows = WebSources.Rows(source, Ranking);
+        var diagrams = WebSources.Records(source, Ranking);
 
         var fs = new FilterConfig { DecisionType = decisionType }.Build();
 

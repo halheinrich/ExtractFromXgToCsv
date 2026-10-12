@@ -18,8 +18,10 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// skipped, or whose write ended the run, doesn't burn a number.
 /// <see cref="CommittedCount"/> — the numbers a run has used — is the count
 /// the run's <see cref="XgpExportCommit"/> carries to the persisted counter.
-/// The Web-mode zip builder uses <see cref="Next"/> — any failure there
-/// aborts the whole zip, so there is no partial-success state to protect.
+/// The Web-mode archive builder uses <see cref="Next"/> once a decision's
+/// payload has been prepared — a skipped preparation takes no slot — and its
+/// allocator is provisional: the download commits the archive's entries only
+/// at the browser hand-off.
 /// </para>
 ///
 /// <para>

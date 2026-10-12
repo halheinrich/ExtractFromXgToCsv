@@ -8,8 +8,8 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// One run, one ranking, in Web mode (halheinrich/backgammon#273): the
-/// pipeline the panel runs — <see cref="XgProcessingService"/>'s two
-/// extractions for the cache's ranking, then <see cref="FilteredRowCache"/> —
+/// pipeline the panel runs — <see cref="XgSourceConverter"/>'s two
+/// conversions for the cache's ranking, then <see cref="FilteredRowCache"/> —
 /// under <see cref="PlayRanking.DepthFirst"/>, which is neither the
 /// application's choice nor the producer's default
 /// (<see cref="XgIteratorOptions"/> takes <see cref="PlayRanking.Equity"/>
@@ -29,8 +29,6 @@ public class WebModeRankingTests
     private const string Fixture = "MatchTest.xg";
     private const PlayRanking Ranking = PlayRanking.DepthFirst;
 
-    private readonly XgProcessingService _service = new();
-
     private static FilterConfig Filter() => new() { ErrorMin = 0.001 };
 
     /// <summary>The ids of the producer's records whose view for <paramref name="ranking"/> the filter admits.</summary>
@@ -49,13 +47,14 @@ public class WebModeRankingTests
     {
         Assert.NotEqual(ReferenceIds(PlayRanking.Equity), ReferenceIds(Ranking));
 
-        var bytes = FixtureHelper.ReadFixture(Fixture);
+        var source = WebSources.Decode(Fixture);
         var cache = new FilteredRowCache(Ranking);
-        var rows = _service.ExtractDecisions(bytes, Fixture, cache.Ranking);
-        var records = _service.ExtractDiagramRequests(bytes, Fixture, cache.Ranking);
+        var rows = WebSources.Rows(source, cache.Ranking);
+        var records = WebSources.Records(source, cache.Ranking);
 
         Assert.All(rows, r => Assert.Equal(Ranking, r.Ranking));
-        cache.ReplaceRows(rows, records);
+        cache.ReplaceRows(rows);
+        cache.ReplaceRecords(records);
         cache.Refilter(Filter());
 
         var expected = ReferenceIds(Ranking);

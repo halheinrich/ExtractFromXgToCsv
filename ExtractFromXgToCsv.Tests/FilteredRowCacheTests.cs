@@ -13,8 +13,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// through the panel's private fields by reflection: no build before the
 /// first Refilter; build on the first Refilter; cache hit on an equal
 /// <see cref="FilterConfig"/> value, whatever the instance; rebuild on a
-/// different value; row replacement re-projects without rebuilding. And the
-/// run's one ranking:
+/// different value; row and record replacement re-project without
+/// rebuilding, each leaving the other set alone — rows and records arrive
+/// separately. And the run's one ranking:
 /// the rows and the records are filtered under the cache's ranking, never
 /// two. The panel-side routing is pinned separately by
 /// <c>WebModePanelFilteringTests</c>.
@@ -28,6 +29,13 @@ public class FilteredRowCacheTests
 
     private static FilteredRowCache NewCache() => new(PlayRanking.Equity);
 
+    /// <summary>Hands the cache rows and records, as a selection whose two conversions completed would.</summary>
+    private static void Load(FilteredRowCache cache, IEnumerable<DecisionRow> rows, IEnumerable<BgDecisionData> records)
+    {
+        cache.ReplaceRows(rows);
+        cache.ReplaceRecords(records);
+    }
+
     private static FilterConfig AliceOnly() =>
         new() { Players = new List<string> { "Alice" } };
 
@@ -36,7 +44,7 @@ public class FilteredRowCacheTests
     {
         var cache = NewCache();
 
-        cache.ReplaceRows(new[] { Row("Alice") }, new[] { Record("Alice") });
+        Load(cache, new[] { Row("Alice") }, new[] { Record("Alice") });
 
         Assert.Null(cache.BuiltSet);
         Assert.Single(cache.Rows);
@@ -48,7 +56,7 @@ public class FilteredRowCacheTests
     public void FirstRefilter_Builds_AndProjectsBothRowKinds()
     {
         var cache = NewCache();
-        cache.ReplaceRows(
+        Load(cache,
             new[] { Row("Alice"), Row("Bob") },
             new[] { Record("Alice"), Record("Bob") });
 
@@ -99,7 +107,7 @@ public class FilteredRowCacheTests
     public void Refilter_TheHandedInInstanceMutatedAfterwards_RebuildsForItsNewValue()
     {
         var cache = NewCache();
-        cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
+        Load(cache, new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
         var cfg = AliceOnly();
         cache.Refilter(cfg);
         var built = cache.BuiltSet;
@@ -115,7 +123,7 @@ public class FilteredRowCacheTests
     public void Refilter_DifferentValue_Rebuilds()
     {
         var cache = NewCache();
-        cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
+        Load(cache, new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
 
         cache.Refilter(AliceOnly());
         var built = cache.BuiltSet;
@@ -135,7 +143,7 @@ public class FilteredRowCacheTests
         cache.Refilter(AliceOnly());
         var built = cache.BuiltSet;
 
-        cache.ReplaceRows(
+        Load(cache,
             new[] { Row("Alice"), Row("Bob"), Row("Alice") },
             new[] { Record("Bob") });
 
@@ -150,12 +158,34 @@ public class FilteredRowCacheTests
     {
         var cache = NewCache();
         cache.Refilter(new FilterConfig());
-        cache.ReplaceRows(new[] { Row("Alice") }, Array.Empty<BgDecisionData>());
+        Load(cache, new[] { Row("Alice") }, Array.Empty<BgDecisionData>());
 
-        cache.ReplaceRows(new[] { Row("Bob"), Row("Cara") }, Array.Empty<BgDecisionData>());
+        Load(cache, new[] { Row("Bob"), Row("Cara") }, Array.Empty<BgDecisionData>());
 
         Assert.Equal(new[] { "Bob", "Cara" }, cache.Rows.Select(r => r.Player));
         Assert.Equal(new[] { "Bob", "Cara" }, cache.FilteredRows.Select(r => r.Player));
+    }
+
+    /// <summary>
+    /// Rows convert on a pick and records only when an output needs them, so
+    /// each arrives on its own and replaces only its own set.
+    /// </summary>
+    [Fact]
+    public void RowsAndRecords_AreReplacedEachOnItsOwn()
+    {
+        var cache = NewCache();
+        cache.Refilter(new FilterConfig());
+        Load(cache, [Row("Alice")], [Record("Alice")]);
+
+        cache.ReplaceRecords([Record("Bob"), Record("Cara")]);
+        Assert.Equal("Alice", Assert.Single(cache.Rows).Player);
+        Assert.Equal(["Bob", "Cara"], cache.Records.Select(r => r.Descriptive.OnRollName));
+        Assert.Equal(2, cache.FilteredDiagramRows.Count);
+
+        cache.ReplaceRows([]);
+        Assert.Empty(cache.Rows);
+        Assert.Empty(cache.FilteredRows);
+        Assert.Equal(2, cache.Records.Count);
     }
 
     [Fact]
@@ -164,17 +194,18 @@ public class FilteredRowCacheTests
         var cache = NewCache();
         cache.Refilter(AliceOnly());
         var built = cache.BuiltSet;
-        cache.ReplaceRows(new[] { Row("Alice") }, new[] { Record("Alice") });
+        Load(cache, new[] { Row("Alice") }, new[] { Record("Alice") });
 
         cache.Clear();
 
         Assert.Empty(cache.Rows);
+        Assert.Empty(cache.Records);
         Assert.Empty(cache.FilteredRows);
         Assert.Empty(cache.FilteredDiagramRows);
         // The applied filter survives a selection reset: rows loaded next
         // still re-project through it (the load-after-Apply pathway).
         Assert.Same(built, cache.BuiltSet);
-        cache.ReplaceRows(new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
+        Load(cache, new[] { Row("Alice"), Row("Bob") }, Array.Empty<BgDecisionData>());
         Assert.Equal("Alice", Assert.Single(cache.FilteredRows).Player);
     }
 
@@ -216,7 +247,7 @@ public class FilteredRowCacheTests
     {
         var record = RankingSplit();
         var cache = new FilteredRowCache(ranking);
-        cache.ReplaceRows([DecisionRow.From(record, ranking)], [record]);
+        Load(cache, [DecisionRow.From(record, ranking)], [record]);
 
         cache.Refilter(new FilterConfig { ErrorMin = 0.1 });
 
@@ -229,10 +260,10 @@ public class FilteredRowCacheTests
     public void ReplaceRows_RefusesARowBuiltForAnotherRanking_AndReplacesNothing()
     {
         var cache = NewCache();
-        cache.ReplaceRows([Row("Alice")], [Record("Alice")]);
+        Load(cache, [Row("Alice")], [Record("Alice")]);
 
         var ex = Assert.Throws<ArgumentException>(() => cache.ReplaceRows(
-            [TestRecords.Row(Record("Bob"), PlayRanking.DepthFirst)], [Record("Bob")]));
+            [TestRecords.Row(Record("Bob"), PlayRanking.DepthFirst)]));
 
         Assert.Equal("rows", ex.ParamName);
         Assert.Equal("Alice", Assert.Single(cache.Rows).Player);
@@ -258,10 +289,11 @@ public class FilteredRowCacheTests
     public void HandedOutCollections_AreImmutable()
     {
         var cache = NewCache();
-        cache.ReplaceRows([Row("Alice")], [Record("Alice")]);
+        Load(cache, [Row("Alice")], [Record("Alice")]);
         cache.Refilter(new FilterConfig());
 
         AssertImmutable(cache.Rows);
+        AssertImmutable(cache.Records);
         AssertImmutable(cache.FilteredRows);
         AssertImmutable(cache.FilteredDiagramRows);
     }

@@ -1,5 +1,4 @@
 using ConvertXgToJson_Lib;
-using ConvertXgToJson_Lib.Models;
 using BgDataTypes_Lib;
 using ExtractFromXgToCsv.Client.Shared;
 using System.Diagnostics.CodeAnalysis;
@@ -11,8 +10,10 @@ using XgFilter_Lib.Filtering;
 namespace ExtractFromXgToCsv.Client.Services;
 
 /// <summary>
-/// Processes .xg / .xgp file bytes and exports decisions as CSV.
-/// Runs entirely in WebAssembly on the user's machine — no data is transferred to the server.
+/// Web mode's output builders — CSV, Diagram JSON and the XGP archive — and
+/// its opening-book loader. Reading and converting the picked files is
+/// <see cref="WebSession"/>'s. Runs entirely in WebAssembly on the user's
+/// machine — no data is transferred to the server.
 /// </summary>
 internal class XgProcessingService
 {
@@ -56,30 +57,6 @@ internal class XgProcessingService
         }
     }
 
-    /// <summary>
-    /// The iterator options for one extraction — the single mapping point for
-    /// both extraction methods. Always stated, never null: the options carry
-    /// the caller's ranking, so the iterator's own default ranking never
-    /// stands in for it. A null book is the unenriched path.
-    /// </summary>
-    private static XgIteratorOptions OptionsFor(PlayRanking ranking, OpeningBook? book) =>
-        new(book, ranking);
-
-    /// <summary>
-    /// Reads one file's decisions as rows, each built by the producer for
-    /// <paramref name="ranking"/> — the run's one ranking (see
-    /// <see cref="AppRanking"/>), which the caller states.
-    /// </summary>
-    public IReadOnlyList<DecisionRow> ExtractDecisions(
-        byte[] fileBytes, string fileName, PlayRanking ranking, OpeningBook? book = null)
-    {
-        using var ms = new MemoryStream(fileBytes);
-        var xgFile = XgFileReader.ReadStream(ms);
-
-        string sourceFile = Path.GetFileName(fileName);
-        return XgDecisionIterator.Iterate(xgFile, sourceFile, options: OptionsFor(ranking, book)).ToList();
-    }
-
     public string BuildCsv(IEnumerable<DecisionRow> rows)
     {
         var sb = new StringBuilder();
@@ -89,163 +66,94 @@ internal class XgProcessingService
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Reads one file's decisions as records. A record depends on no ranking;
-    /// <paramref name="ranking"/> rides the iterator's options all the same, so
-    /// the one walk configuration is the run's and not the producer's default
-    /// (the caller filters each record through its view for the same ranking).
-    /// </summary>
-    public IReadOnlyList<BgDecisionData> ExtractDiagramRequests(
-        byte[] fileBytes, string fileName, PlayRanking ranking, OpeningBook? book = null)
-    {
-        using var ms = new MemoryStream(fileBytes);
-        var xgFile = XgFileReader.ReadStream(ms);
-        string sourceFile = Path.GetFileName(fileName);
-        return XgDecisionIterator
-            .IterateDiagramRequests(xgFile, sourceFile, options: OptionsFor(ranking, book))
-            .ToList();
-    }
-
     public string BuildDiagramJson(IEnumerable<BgDecisionData> items)
     {
         return JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true });
     }
 
     /// <summary>
-    /// Builds a zip archive holding one <c>.xgp</c> position file per decision,
-    /// named by <paramref name="options"/>' pattern via an
+    /// Builds the zip archive of an XGP download: one <c>.xgp</c> position
+    /// file per decision whose payload could be prepared, named by
+    /// <paramref name="options"/>' pattern through an
     /// <see cref="XgpNameAllocator"/> in the order given (numbering order =
     /// filtered order; duplicate rendered names get Windows-style
     /// <c>" (2)"</c> suffixes). Batch-constant tokens draw from
-    /// <paramref name="filters"/>; per-item tokens from each row. Parsing
-    /// stays inside this service: callers hand over the retained raw file
-    /// bytes keyed by bare filename plus the decision rows — never an
-    /// <c>XgFile</c>.
-    ///
-    /// <para>
-    /// A decision from an <c>.xg</c> source is sliced via
-    /// <see cref="XgpExporter"/> (analysis panes carried through, XG-SaveAs
-    /// equivalent). A decision from an <c>.xgp</c> source is the source file
-    /// copied verbatim — it already is a single-position analyzed
-    /// <c>.xgp</c>, so the copy is byte-identical and cheaper than a re-slice,
-    /// and stays strictly more faithful: a re-slice would clear the
-    /// match-level comments that the verbatim copy preserves.
-    /// </para>
-    ///
-    /// <para>
-    /// When <paramref name="anonymize"/> is <see langword="true"/>, every
-    /// entry's player names are rewritten to the anonymize preset
-    /// (<see cref="XgpSliceOptions.Anonymized"/> — the producer's SSOT for
-    /// what "anonymized" means): an <c>.xg</c> slice takes the options-bearing
-    /// overload, and an <c>.xgp</c> source takes the whole-file anonymize-copy
-    /// (comments and rollouts still preserved; only the header names change).
-    /// The toggle therefore covers every entry, not just the sliced ones.
-    /// Every entry either way is a single decision, so the preset names by
-    /// role — "On-roll" for the decision-maker (a cube decision's doubler),
-    /// "Opponent" for the other — and the producer resolves which header slot
-    /// each role lands in, per entry.
-    /// </para>
+    /// <paramref name="filters"/>; per-item tokens from each row.
     /// </summary>
-    /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="options"/> fails validation.
-    /// </exception>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when a decision references a source file absent from
-    /// <paramref name="sourceFiles"/>.
-    /// </exception>
-    public byte[] BuildXgpZip(
-        IReadOnlyDictionary<string, byte[]> sourceFiles,
-        IReadOnlyList<DecisionRow> decisions,
+    /// <remarks>
+    /// <para>
+    /// Each payload is prepared from the decision's retained decoded file by
+    /// <see cref="XgpPayload"/> — sliced from an <c>.xg</c> source, an
+    /// <c>.xgp</c> source copied verbatim from its retained bytes, both
+    /// anonymized when <paramref name="anonymize"/> is set — within the
+    /// decision's own boundary: a failure is that decision's export skip,
+    /// reported to <paramref name="skipped"/> as it happens, and consumes no
+    /// number (the umbrella's <c>SPEC-notices.md</c> §7.1, F1 of §7.4).
+    /// </para>
+    /// <para>
+    /// The download commits once, at the finalized archive's hand-off to the
+    /// browser, which is the caller's. Each prepared entry advances this
+    /// archive's allocator provisionally; writing the entries and finalizing
+    /// the archive are preparation of that one commit, outside the decisions'
+    /// boundaries, so a failure there propagates and fails the download.
+    /// </para>
+    /// </remarks>
+    /// <param name="decisions">The decisions to export, each with the decoded file it came from.</param>
+    /// <param name="options">The naming options the download captured.</param>
+    /// <param name="filters">The filter the download captured, for batch-constant tokens.</param>
+    /// <param name="anonymize">Whether every entry's player names are rewritten to the producer's role preset.</param>
+    /// <param name="skipped">Receives each decision skipped, as it is skipped — so a build that fails later keeps the skips it found.</param>
+    /// <returns>The archive, and the numbering its hand-off would commit.</returns>
+    /// <exception cref="ArgumentException"><paramref name="options"/> fails validation.</exception>
+    public XgpArchive BuildXgpArchive(
+        IReadOnlyList<XgpDecision> decisions,
         XgpExportOptions options,
         FilterConfig filters,
-        bool anonymize = false)
+        bool anonymize,
+        Action<SkippedItem> skipped)
     {
-        ArgumentNullException.ThrowIfNull(sourceFiles);
         ArgumentNullException.ThrowIfNull(decisions);
+        ArgumentNullException.ThrowIfNull(skipped);
 
         // Create validates the options — the single ArgumentException throw
         // point shared with the Local-mode pathway.
         var allocator = XgpNameAllocator.Create(options, filters);
-
-        // The service owns the bool -> producer-type mapping: the UI carries
-        // only intent. null keeps the current byte-for-byte behaviour; the
-        // preset is the producer's single source of what "anonymized" means.
-        var nameOverrides = anonymize ? XgpSliceOptions.Anonymized : null;
-
-        // Each source is parsed at most once per batch, however many of its
-        // decisions are being exported.
-        var parsed = new Dictionary<string, XgFile>();
 
         using var zipStream = new MemoryStream();
         // .xgp content is already zlib-compressed internally, so deflating
         // the entries again buys almost nothing — store fast.
         using (var zip = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var row in decisions)
+            foreach (var (row, source) in decisions)
             {
-                // Next (not Peek/Commit): any failure here aborts the whole
-                // zip, so there's no partial-success state to keep the
-                // counter honest for.
-                var bytes = ExportDecision(row.Id, sourceFiles, parsed, nameOverrides);
+                // The decision's payload, within its own boundary.
+                ReadOnlyMemory<byte> payload;
+                try
+                {
+                    payload = XgpPayload.Prepare(row.Id, source.File, source.VerbatimBytes, anonymize);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    skipped(new SkippedItem(source.Name, row.Id, ex.Message));
+                    continue;
+                }
+
+                // Preparation of the commit: the entry, under the
+                // provisional allocator's next name.
                 var entry = zip.CreateEntry(allocator.Next(row), CompressionLevel.Fastest);
                 using var entryStream = entry.Open();
-                entryStream.Write(bytes);
+                entryStream.Write(payload.Span);
             }
         }
-        return zipStream.ToArray();
-    }
-
-    private static byte[] ExportDecision(
-        DecisionId id,
-        IReadOnlyDictionary<string, byte[]> sourceFiles,
-        Dictionary<string, XgFile> parsed,
-        XgpSliceOptions? nameOverrides)
-    {
-        if (!sourceFiles.TryGetValue(id.Filename, out var sourceBytes))
-            throw new InvalidOperationException(
-                $"Source file '{id.Filename}' for decision '{id}' is not among the selected files.");
-
-        switch (id)
-        {
-            case XgpDecisionId:
-                // Already a single-position analyzed .xgp. Not anonymizing:
-                // copy verbatim (byte-for-byte with the source). Anonymizing:
-                // whole-file re-emit with only the header names rewritten —
-                // comments and rollout contexts still travel.
-                return nameOverrides is null
-                    ? sourceBytes
-                    : XgpExporter.ToBytes(Parse(id.Filename, sourceBytes, parsed), nameOverrides);
-
-            case XgDecisionId xgId:
-                // Pass the typed Id straight to the producer's Id overload —
-                // it destructures the coordinates internally and ignores
-                // Filename (the source is already resolved). Without overrides
-                // this is byte-identical to the coordinate overload.
-                var xgFile = Parse(id.Filename, sourceBytes, parsed);
-                return nameOverrides is null
-                    ? XgpExporter.ToBytes(xgFile, xgId)
-                    : XgpExporter.ToBytes(xgFile, xgId, nameOverrides);
-
-            default:
-                throw new NotSupportedException(
-                    $"Unsupported DecisionId shape '{id.GetType().Name}' for .xgp export.");
-        }
-    }
-
-    /// <summary>
-    /// Parses <paramref name="sourceBytes"/> once per source filename,
-    /// caching the result in <paramref name="parsed"/> so a batch re-parses
-    /// no source however many of its decisions are exported.
-    /// </summary>
-    private static XgFile Parse(
-        string filename, byte[] sourceBytes, Dictionary<string, XgFile> parsed)
-    {
-        if (!parsed.TryGetValue(filename, out var xgFile))
-        {
-            using var ms = new MemoryStream(sourceBytes);
-            xgFile = XgFileReader.ReadStream(ms);
-            parsed[filename] = xgFile;
-        }
-        return xgFile;
+        return new XgpArchive(zipStream.ToArray(), new XgpExportCommit(options, allocator.CommittedCount));
     }
 }
+
+/// <summary>
+/// An XGP download's finalized archive, and what its hand-off to the browser
+/// would commit: its entries, under the options the download captured.
+/// Nothing is committed until that hand-off succeeds.
+/// </summary>
+/// <param name="Bytes">The finalized zip archive.</param>
+/// <param name="Commit">The numbering a successful hand-off commits.</param>
+internal sealed record XgpArchive(byte[] Bytes, XgpExportCommit Commit);

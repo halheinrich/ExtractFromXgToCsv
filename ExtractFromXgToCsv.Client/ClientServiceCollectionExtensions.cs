@@ -24,6 +24,12 @@ internal static class ClientServiceCollectionExtensions
 
         services.AddScoped<XgProcessingService>();
 
+        // How Web mode converts a decoded file to rows or records. A service
+        // so the conversion's completion is a seam: a test can count the
+        // conversions a gesture made, or hold one at the point its owner
+        // decides whether it may publish.
+        services.AddScoped<ISourceConverter, XgSourceConverter>();
+
         // This app's one storage condition: whether the browser has refused a
         // storage call this visit, and the dismissal of the notice that says
         // so. Scoped — one per loaded app under WebAssembly — because the

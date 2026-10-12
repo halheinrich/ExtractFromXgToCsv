@@ -5,11 +5,12 @@ using XgFilter_Lib.Filtering;
 namespace ExtractFromXgToCsv.Client.Services;
 
 /// <summary>
-/// Web mode's live-preview row state: the extracted decision rows and diagram
-/// records, the materialized filter currently in effect, and the filtered
-/// projections derived from them. Extracted from <c>WebModePanel</c> so the
-/// projection rules are a directly-testable unit instead of component-private
-/// fields.
+/// Web mode's projections: the converted decision rows and diagram records,
+/// each retained unfiltered, the materialized filter currently in effect, and
+/// the filtered projections derived from them. Rows and records arrive
+/// separately — rows convert on a pick or a book change, records only when an
+/// output needs them — and each set is replaced whole. The owner of when they
+/// arrive is <c>WebSession</c>; this type owns only how they are filtered.
 ///
 /// <para>
 /// Three rules live here — and only here:
@@ -37,13 +38,14 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// move the key out from under the built set.
 /// </para>
 /// <para>
-/// <b>The projections always reflect the current rows.</b>
-/// <see cref="ReplaceRows"/> re-projects the incoming rows through the
-/// already-materialized set immediately (without rebuilding it), so rows that
-/// arrive while a filter is in effect never sit unfiltered waiting for the
-/// next Apply. Until the first <see cref="Refilter"/> there is no set and the
-/// projections stay empty — the panel shows nothing filtered before a filter
-/// is first in effect.
+/// <b>The projections always reflect the current rows and records.</b>
+/// <see cref="ReplaceRows"/> and <see cref="ReplaceRecords"/> re-project the
+/// incoming set through the already-materialized filter immediately (without
+/// rebuilding it), so items that arrive while a filter is in effect never sit
+/// unfiltered waiting for the next Apply. Until the first
+/// <see cref="Refilter"/> there is no set and the projections stay empty — the
+/// panel shows nothing filtered before a filter is first in effect. Refiltering
+/// reads only what is retained: it converts and reads nothing.
 /// </para>
 /// <para>
 /// Every collection the cache hands out is immutable, and each replacement is
@@ -63,6 +65,7 @@ internal sealed class FilteredRowCache
     // Each record beside its view for Ranking, built once when the records
     // arrive, so a Refilter reads the views rather than rebuilding them.
     private ImmutableArray<(BgDecisionData Record, IDecisionFilterData View)> _diagramRows = [];
+    private IReadOnlyList<BgDecisionData> _records = ImmutableArray<BgDecisionData>.Empty;
 
     // Cached materialization of the last Refilter config — see the class
     // remarks for the value-equality rule these two implement.
@@ -84,8 +87,11 @@ internal sealed class FilteredRowCache
     /// </summary>
     public PlayRanking Ranking { get; }
 
-    /// <summary>All loaded decision rows, unfiltered.</summary>
+    /// <summary>All converted decision rows, unfiltered — the unfiltered row total is their count.</summary>
     public IReadOnlyList<DecisionRow> Rows => _rows;
+
+    /// <summary>All converted diagram records, unfiltered.</summary>
+    public IReadOnlyList<BgDecisionData> Records => _records;
 
     /// <summary>The decision rows passing the materialized filter; empty until the first <see cref="Refilter"/>.</summary>
     public IReadOnlyList<DecisionRow> FilteredRows => _filteredRows;
@@ -106,33 +112,31 @@ internal sealed class FilteredRowCache
     public DecisionFilterSet? BuiltSet => _builtSet;
 
     /// <summary>
-    /// Empties the rows and both projections — a fresh file selection starts
-    /// from nothing. The materialized filter is retained: it still describes
-    /// the applied config, so rows loaded next re-project through it.
+    /// Empties the rows, the records and both projections — a fresh file
+    /// selection starts from nothing. The materialized filter is retained: it
+    /// still describes the applied config, so items loaded next re-project
+    /// through it.
     /// </summary>
     public void Clear()
     {
-        _rows = ImmutableArray<DecisionRow>.Empty;
-        _diagramRows = [];
-        _filteredRows = ImmutableArray<DecisionRow>.Empty;
-        _filteredDiagramRows = ImmutableArray<BgDecisionData>.Empty;
+        ReplaceRows([]);
+        ReplaceRecords([]);
     }
 
     /// <summary>
-    /// Replaces the loaded rows and records and immediately re-projects them
-    /// through the materialized filter, if one is in effect. Never builds — row
-    /// arrival must not trigger <see cref="FilterConfig.Build"/> (that belongs
-    /// to <see cref="Refilter"/>, the filter-in-effect path).
+    /// Replaces the converted rows and immediately re-projects them through
+    /// the materialized filter, if one is in effect. Never builds — arrival
+    /// must not trigger <see cref="FilterConfig.Build"/> (that belongs to
+    /// <see cref="Refilter"/>, the filter-in-effect path). The records are
+    /// untouched.
     /// </summary>
     /// <exception cref="ArgumentException">
     /// A row in <paramref name="rows"/> was built for a ranking other than
     /// <see cref="Ranking"/>. Nothing is replaced.
     /// </exception>
-    public void ReplaceRows(
-        IEnumerable<DecisionRow> rows, IEnumerable<BgDecisionData> diagramRows)
+    public void ReplaceRows(IEnumerable<DecisionRow> rows)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        ArgumentNullException.ThrowIfNull(diagramRows);
 
         var newRows = rows.ToImmutableArray();
         foreach (var row in newRows)
@@ -142,10 +146,24 @@ internal sealed class FilteredRowCache
                     $"Row {row.Id} was built for the {row.Ranking} ranking; this run is under {Ranking}.",
                     nameof(rows));
         }
-        var newDiagramRows = diagramRows.Select(r => (r, r.ViewFor(Ranking))).ToImmutableArray();
 
         _rows = newRows;
-        _diagramRows = newDiagramRows;
+        Materialize();
+    }
+
+    /// <summary>
+    /// Replaces the converted records — each filtered through its view for
+    /// <see cref="Ranking"/>, built once here — and immediately re-projects
+    /// them, as <see cref="ReplaceRows"/> does the rows. The rows are
+    /// untouched.
+    /// </summary>
+    public void ReplaceRecords(IEnumerable<BgDecisionData> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+
+        var newRecords = records.ToImmutableArray();
+        _diagramRows = newRecords.Select(r => (r, r.ViewFor(Ranking))).ToImmutableArray();
+        _records = newRecords;
         Materialize();
     }
 

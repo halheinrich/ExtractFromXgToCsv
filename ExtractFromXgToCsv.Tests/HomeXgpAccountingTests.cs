@@ -150,4 +150,45 @@ public class HomeXgpAccountingTests : BunitContext
         Assert.Equal(3, PanelOptions(cut).StartNumber);
         Storage.Verify();
     }
+
+    /// <summary>
+    /// Web mode through the same handler (<c>SPEC-notices.md</c> §7.3): a
+    /// download's hand-off is pending while the user types a new next number.
+    /// The archive committed what the attempt captured, so Home persists the
+    /// attempt's numbering — the archive's entry count, from its options — and
+    /// the newer choice in the control stands.
+    /// </summary>
+    [Fact]
+    public async Task AWebDownloadsHandOff_ControlsChangedWhilePending_StandAndTheAttemptsNumberingIsPersisted()
+    {
+        this.AddHomeServices("Web");
+        Storage = BrowserStoragePlan.On(JSInterop);
+        Storage.ExpectFilterRestore(FilterRestoration.NothingStored);
+        Storage.ExpectHomeVisit("Web");
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
+            BrowserStorageWriteAnswer.Succeeded);
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.CsvFileNameKey, "decisions.zip",
+            BrowserStorageWriteAnswer.Succeeded);
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.LastFolderHintKey, "1 file(s) — first: MTCH4064.xg",
+            BrowserStorageWriteAnswer.Succeeded);
+        var handOff = JSInterop.SetupVoid("downloadFile", _ => true);
+
+        var cut = this.RenderHome();
+        cut.Find("#fmtXgp").Change(true);
+        cut.UploadFixture("MTCH4064.xg");
+        var panel = cut.FindComponent<WebModePanel>();
+        var entries = panel.Instance.RowCache.FilteredRows.Count;
+        Assert.True(entries > 0);
+
+        var click = cut.DownloadButton().ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
+
+        ExpectTheNumberingPersisted("pos{n}", lastNumber: entries, suffixLength: 3);
+        handOff.SetVoidResult();
+        await click.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Equal(50, panel.Instance.XgpOptions.StartNumber);
+        Storage.Verify();
+    }
 }

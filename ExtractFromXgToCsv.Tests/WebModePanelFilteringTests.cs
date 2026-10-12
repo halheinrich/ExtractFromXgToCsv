@@ -93,14 +93,16 @@ public class WebModePanelFilteringTests : BunitContext
     /// into a cache for that same ranking, so the preview's rows and the
     /// Diagram JSON's records are filtered under one ranking. The cache's own
     /// test pins that it filters both under its ranking; this pins that the
-    /// panel builds it for the application's, and extracts for it.
+    /// panel builds it for the application's, and converts for it. Diagram
+    /// JSON is selected, so the records convert too (they are deferred for the
+    /// other formats — <see cref="WebModePanelConversionTests"/>).
     /// </summary>
     [Fact]
     public void FileSelection_LoadsAndFiltersUnderTheAppsOneRanking()
     {
         const string fixture = "MTCH4064.xg";
         var cut = Render<WebModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
+            .Add(c => c.OutputFormat, OutputFormat.DiagramJson)
             .Add(c => c.FilterInEffect, new FilterConfig()));
 
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
