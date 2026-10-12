@@ -1,0 +1,78 @@
+@using ExtractFromXgToCsv.Client.Shared
+
+@* The one rendering of a skip record (SPEC-notices.md §7.1): every place this
+   app shows what was skipped shows it through here, so no surface words a
+   skip differently. Local mode's run record and Web mode's two lists — "this
+   selection" and "the last download" — are each one instance; a shared
+   rendering does not merge their owners, which is why each caller passes the
+   record it owns and, where its list needs one, the label naming that owner.
+
+   A gate reason — the record of what was lost — so not dismissible
+   (SPEC-notices.md §4, Fork C), and assertive. It renders nothing for an
+   empty record, so a caller hands it the record whenever its owner says the
+   record stands. *@
+@if (!Record.IsEmpty)
+{
+    @* The caller's attributes first, so the marker class, the kind and the
+       announcement stated after them are this rendering's, whatever a caller
+       passes. *@
+    <Notice @attributes="AdditionalAttributes"
+            class="@CssClass" Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive">
+        @if (Label is not null)
+        {
+            <div class="skip-list-label fw-semibold">@Label</div>
+        }
+        <div class="fw-bold">⚠ @Headline(Record)</div>
+        <ul class="mb-0">
+            @foreach (var item in Record)
+            {
+                // The file as the user named it; a decision adds its canonical
+                // id, which carries only the bare filename.
+                <li>
+                    <code>@item.FileName</code>@if (item.DecisionId is { } id)
+                    {
+                        <text>, decision <code>@id</code></text>
+                    } — @item.Reason
+                </li>
+            }
+        </ul>
+    </Notice>
+}
+
+@code {
+    /// <summary>The marker class every skip list carries, beside any the caller adds.</summary>
+    internal const string MarkerClass = "skipped-notice";
+
+    /// <summary>The record to show; nothing renders while it is empty.</summary>
+    [Parameter, EditorRequired] public SkipRecord Record { get; set; } = SkipRecord.Empty;
+
+    /// <summary>
+    /// What the list is the record of — its owner, for a surface that shows
+    /// more than one list or keeps a list beyond the result it came with; or
+    /// <see langword="null"/> for no label.
+    /// </summary>
+    [Parameter] public string? Label { get; set; }
+
+    /// <summary>
+    /// Attributes for the box, the caller's layout classes included; the
+    /// marker class is always added.
+    /// </summary>
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private string CssClass =>
+        AdditionalAttributes is not null && AdditionalAttributes.TryGetValue("class", out var extra)
+            ? $"{MarkerClass} {extra}"
+            : MarkerClass;
+
+    // Only the non-zero counts — e.g. "Skipped 2 files and 1 decision".
+    private static string Headline(SkipRecord record)
+    {
+        var parts = new List<string>(2);
+        if (record.FileCount > 0) parts.Add(Counted(record.FileCount, "file"));
+        if (record.DecisionCount > 0) parts.Add(Counted(record.DecisionCount, "decision"));
+        return $"Skipped {string.Join(" and ", parts)} — not in the output:";
+
+        static string Counted(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+    }
+}

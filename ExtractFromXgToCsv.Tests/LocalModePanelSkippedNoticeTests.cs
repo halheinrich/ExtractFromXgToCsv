@@ -44,7 +44,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     private static readonly string NestedFile = Path.Combine("2026", "truncated.xgp");
     private static readonly string NestedMatch = Path.Combine("club", "match.xg");
 
-    private static IReadOnlyList<SkippedItem> TwoFilesAndADecision() =>
+    private static SkipRecord TwoFilesAndADecision() =>
     [
         new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic."),
         new SkippedItem(NestedFile, null, "Unexpected end of stream."),

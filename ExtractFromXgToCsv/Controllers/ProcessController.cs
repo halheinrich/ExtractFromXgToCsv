@@ -36,12 +36,12 @@ public class ProcessController(
         {
             var progress = new InlineProgress(p => entry.Progress = p);
 
-            // The run's skip record, held here so the two terminal snapshots
+            // The run's record, held here so the two terminal snapshots
             // this runner builds itself can carry it. Neither can take it from
             // the last snapshot the run reported: a run-ending exception
             // reports nothing, and the streaming pathways report only every
             // tenth file, so the last report can trail the record.
-            var skips = new SkipRecord();
+            var record = new RunRecord();
 
             try
             {
@@ -50,17 +50,17 @@ public class ProcessController(
                     case OutputFormat.DiagramJson:
                         await processor.ProcessDiagramAsync(
                             request.FolderPath, request.OutputPath,
-                            filterSet, progress, skips, entry.Cts.Token);
+                            filterSet, progress, record, entry.Cts.Token);
                         break;
                     case OutputFormat.Pptx:
                         await processor.ProcessPptxAsync(
                             request.FolderPath, request.OutputPath,
-                            filterSet, progress, skips, entry.Cts.Token);
+                            filterSet, progress, record, entry.Cts.Token);
                         break;
                     case OutputFormat.Pdf:
                         await processor.ProcessPdfAsync(
                             request.FolderPath, request.OutputPath,
-                            filterSet, progress, skips, entry.Cts.Token);
+                            filterSet, progress, record, entry.Cts.Token);
                         break;
                     case OutputFormat.Xgp:
                         // The unbuilt Filters ride along besides filterSet:
@@ -69,12 +69,12 @@ public class ProcessController(
                         await processor.ProcessXgpAsync(
                             request.FolderPath, request.OutputPath,
                             filterSet, request.XgpOptions, request.Filters,
-                            progress, request.Anonymize, skips, entry.Cts.Token);
+                            progress, request.Anonymize, record, entry.Cts.Token);
                         break;
                     default:
                         await processor.ProcessAsync(
                             request.FolderPath, request.OutputPath,
-                            filterSet, progress, skips, entry.Cts.Token);
+                            filterSet, progress, record, entry.Cts.Token);
                         break;
                 }
             }
@@ -82,7 +82,7 @@ public class ProcessController(
             {
                 entry.Progress.Cancelled = true;
                 entry.Progress.Complete = true;
-                entry.Progress.Skipped = skips.Snapshot();
+                entry.Progress.Skipped = record.Skips;
             }
             catch (Exception ex)
             {
@@ -91,7 +91,7 @@ public class ProcessController(
                 {
                     Complete = true,
                     ErrorMessage = ex.Message,
-                    Skipped = skips.Snapshot(),
+                    Skipped = record.Skips,
                 };
             }
         });

@@ -189,12 +189,12 @@ public class LocalFolderProcessorSkipTests
     }
 
     [Fact]
-    public async Task CallersSkipRecord_HoldsTheRunsRecord_AndBelongsToThatRunOnly()
+    public async Task CallersRunRecord_HoldsTheRunsRecord_AndBelongsToThatRunOnly()
     {
         var folder = TempFolder(withMalformed: true);
         try
         {
-            var record = new SkipRecord();
+            var record = new RunRecord();
             var progress = new RecordingProgress();
 
             await Processor().ProcessAsync(
@@ -202,7 +202,7 @@ public class LocalFolderProcessorSkipTests
 
             // The caller's record is the run's record: what a caller reads after
             // a run-ending failure is what every snapshot carried.
-            Assert.Equal(progress.Reports[^1].Skipped, record.Snapshot());
+            Assert.Equal(progress.Reports[^1].Skipped, record.Skips);
 
             // A second run would report the first run's skips as its own.
             await Assert.ThrowsAsync<ArgumentException>(() => Processor().ProcessAsync(
@@ -331,8 +331,8 @@ public class LocalFolderProcessorSkipTests
         Assert.Null(skip.DecisionId);
         Assert.False(string.IsNullOrWhiteSpace(skip.Reason));
 
-        Assert.Equal(1, terminal.SkippedFileCount);
-        Assert.Equal(0, terminal.SkippedDecisionCount);
+        Assert.Equal(1, terminal.Skipped.FileCount);
+        Assert.Equal(0, terminal.Skipped.DecisionCount);
     }
 
     private static void AssertCancelledWithNoSkip(

@@ -14,14 +14,14 @@ namespace ExtractFromXgToCsv.Tests;
 /// <see cref="SkippedItem"/> constructor parameter that stopped matching its
 /// property would bind to null rather than fail, and a
 /// <see cref="DecisionId"/> without its bundled converter would not
-/// round-trip at all.
+/// round-trip at all. The record's own contract is <see cref="SkipRecordTests"/>'.
 /// </summary>
 public class ProcessingProgressWireTests
 {
     private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
 
     [Fact]
-    public void SkipRecord_RoundTripsWithItsDerivedCounts()
+    public void SkipRecord_RoundTripsAsAnArrayOfItsEntries()
     {
         var sent = new ProcessingProgress
         {
@@ -39,11 +39,13 @@ public class ProcessingProgressWireTests
         var received = JsonSerializer.Deserialize<ProcessingProgress>(json, Web)!;
 
         Assert.Equal(sent.Skipped, received.Skipped);
-        Assert.Equal(1, received.SkippedFileCount);
-        Assert.Equal(1, received.SkippedDecisionCount);
+        Assert.Equal(1, received.Skipped.FileCount);
+        Assert.Equal(1, received.Skipped.DecisionCount);
 
-        // The decision crosses in the library's canonical form, not as an
-        // object graph of its own fields.
+        // The record is the array of its entries on the wire, and the decision
+        // crosses in the library's canonical form, not as an object graph of
+        // its own fields.
+        Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(json).RootElement.GetProperty("skipped").ValueKind);
         Assert.Contains("\"match.xg:g2:m14:play\"", json, StringComparison.Ordinal);
     }
 
@@ -55,31 +57,14 @@ public class ProcessingProgressWireTests
         var received = JsonSerializer.Deserialize<ProcessingProgress>(
             "{\"complete\":true,\"totalRows\":3}", Web)!;
 
-        Assert.Empty(received.Skipped);
-        Assert.Equal(0, received.SkippedFileCount);
-        Assert.Equal(0, received.SkippedDecisionCount);
+        Assert.Same(SkipRecord.Empty, received.Skipped);
     }
 
-    /// <summary>
-    /// The collection rider (halheinrich/backgammon#273): the record a
-    /// snapshot hands out is never a live list — neither the one the JSON
-    /// reader builds on the client, nor one a caller set and kept.
-    /// </summary>
     [Fact]
-    public void Skipped_HandsOutAnImmutableCopy_NeverTheListItWasGiven()
+    public void Skipped_RefusesNull()
     {
-        var sent = new ProcessingProgress { Skipped = [new SkippedItem("bad.xg", null, "Bad.")] };
-        var received = JsonSerializer.Deserialize<ProcessingProgress>(
-            JsonSerializer.Serialize(sent, Web), Web)!;
-        var readBack = Assert.IsAssignableFrom<IList<SkippedItem>>(received.Skipped);
-        Assert.True(readBack.IsReadOnly);
-        Assert.Throws<NotSupportedException>(() => readBack.Clear());
+        var progress = new ProcessingProgress();
 
-        var kept = new List<SkippedItem> { new("a.xg", null, "A.") };
-        var progress = new ProcessingProgress { Skipped = kept };
-        kept.Add(new SkippedItem("b.xg", null, "B."));
-
-        Assert.Equal("a.xg", Assert.Single(progress.Skipped).FileName);
-        Assert.NotSame(kept, progress.Skipped);
+        Assert.Throws<ArgumentNullException>(() => progress.Skipped = null!);
     }
 }
