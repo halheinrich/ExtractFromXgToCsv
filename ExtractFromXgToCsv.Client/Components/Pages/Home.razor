@@ -239,7 +239,7 @@
                         XgpOptions="_xgpOptions"
                         XgpAnonymize="_xgpAnonymize"
                         StartState="_reconciler.State"
-                        OnXgpJobStarting="_reconciler.RecordOwedAsync"
+                        OnXgpJobStarting="OnXgpJobStartingAsync"
                         OnXgpJobEnded="_reconciler.ApplyEndedAsync"
                         OnXgpJobNeverStarted="_reconciler.ResolveNeverStartedAsync"
                         OnReconcileNeeded="_reconciler.ReconcileAsync" />
@@ -252,6 +252,7 @@
                       XgpOptions="_xgpOptions"
                       XgpAnonymize="_xgpAnonymize"
                       XgpNumberingUnreadable="_numbering.IsUnreadable"
+                      OnXgpExportStarting="OnXgpExportStarting"
                       OnXgpExported="OnXgpExported" />
     }
 }
@@ -577,6 +578,7 @@
 
     private void ApplyPatternEdit(string pattern)
     {
+        NoteEdit();
         _xgpPattern = pattern;
         // Continue the recorded numbering only while the pattern matches the
         // one it was recorded under; a different pattern starts a fresh
@@ -606,6 +608,7 @@
 
     private void OnXgpNextNumberChanged(ChangeEventArgs e)
     {
+        NoteEdit();
         if (int.TryParse(e.Value?.ToString(), out var n))
             _xgpNextNumber = n;
         RebuildXgpOptions();
@@ -642,47 +645,92 @@
     /// the export ran, and the files were named by what it captured. It is one
     /// checkpoint of the numbering record — the whole document, from a fresh
     /// read, in one write; a refused write leaves it recorded in this page.
-    /// The controls then follow the record (<see cref="FollowRecord"/>).
+    /// The controls then follow the record (<see cref="FollowRecord"/>), as of
+    /// the moment the download began (<see cref="OnXgpExportStarting"/>).
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
         await _numbering.RecordExportAsync(commit);
-        FollowRecord(commit.Options);
+        FollowRecord(_webExportStartedAt);
         StateHasChanged();
     }
 
-    // The controls' half after a Local reconciliation pass: they follow the
-    // record, given the entry its mark names when the pass's ledger holds it.
-    private Task FollowRecordAfterPassAsync(LedgerEntry? newest)
-    {
-        FollowRecord(newest?.Commit?.Options);
-        return Task.CompletedTask;
-    }
+    // ── The controls follow the record ──────────────────────────────────────
+    //
+    // A moment on this page's own clock — a count of its events, never
+    // wall-clock time — for every user edit of the next number or the pattern,
+    // every export this page starts, and every time the page sets the controls
+    // itself. An edit made after an export started is the user's choice, and
+    // the controls keep it (SPEC-notices.md §7.5).
+    private long _clock;
+
+    // The moment of the user's last edit of the next number or the pattern;
+    // zero for none. A value the page restored or set is not an edit, and
+    // changing a control away and back is one.
+    private long _lastEditAt;
+
+    // The moment the page last set the controls itself — restored them, or
+    // followed the record: zero until it follows anything.
+    private long _controlsSetAt;
+
+    // The moment each Local XGP job this page started was recorded as owed,
+    // by its identity.
+    private readonly Dictionary<string, long> _startedAt = new(StringComparer.Ordinal);
+
+    // The moment the Web panel's XGP download in hand began.
+    private long _webExportStartedAt;
 
     // What the controls last followed: the record's numbering when they were
     // restored from it or last followed it.
     private XgpNumbering? _controlsFollowed;
 
+    private void NoteEdit() => _lastEditAt = ++_clock;
+
+    // A Local XGP job about to start: its moment is noted, and the host
+    // records it as owed.
+    private Task OnXgpJobStartingAsync(OwedXgpJob job)
+    {
+        _startedAt[job.JobId] = ++_clock;
+        return _reconciler.RecordOwedAsync(job);
+    }
+
+    // A Web XGP download beginning: its moment is noted.
+    private void OnXgpExportStarting() => _webExportStartedAt = ++_clock;
+
+    // The controls' half after a Local reconciliation: they follow the
+    // record, as of the start of the export whose entry it took — known when
+    // this page started it; otherwise as of the last time the page set the
+    // controls, the latest moment this page knows the export can have
+    // started by.
+    private Task FollowRecordAfterPassAsync(LedgerEntry? taken)
+    {
+        FollowRecord(taken is not null && _startedAt.TryGetValue(taken.JobId, out var startedAt) ? startedAt : _controlsSetAt);
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// The controls follow the record (SPEC-notices.md §7.5): when its
     /// numbering has moved since they last did — it took an export's
-    /// accounting — the next number follows it, unless the user has changed
-    /// the next number or the pattern since that export started
-    /// (<see cref="FollowsExport"/>). They follow only what the record took:
-    /// an export that committed nothing moved nothing, which is the record's
-    /// own rule (<see cref="XgpNumberingRecord.WithCommit"/>).
+    /// accounting — the next number follows it, unless the user has edited the
+    /// next number or the pattern since that export started
+    /// (<paramref name="exportStartedAt"/>), and while the pattern is the one
+    /// the numbering continues. They follow only what the record took: an
+    /// export that committed nothing moved nothing, which is the record's own
+    /// rule (<see cref="XgpNumberingRecord.WithCommit"/>). The number length
+    /// decides nothing here: it says nothing about which number comes next.
     /// </summary>
-    /// <param name="exportStartedFrom">The options the export the record took started from; <see langword="null"/> when unknown.</param>
-    private void FollowRecord(XgpExportOptions? exportStartedFrom)
+    /// <param name="exportStartedAt">The moment the export the record took started, on this page's clock.</param>
+    private void FollowRecord(long exportStartedAt)
     {
         var numbering = _numbering.Record.Numbering;
         if (numbering == _controlsFollowed)
             return;
         _controlsFollowed = numbering;
-        if (numbering is null || exportStartedFrom is null || !FollowsExport(exportStartedFrom))
+        if (numbering is null || _lastEditAt > exportStartedAt || numbering.Pattern != _xgpPattern)
             return;
         _xgpNextNumber = numbering.LastNumber + 1;
         RebuildXgpOptions();
+        _controlsSetAt = ++_clock;
     }
 
     // The lost-export notice's action: the user's deliberate resolution.
@@ -693,15 +741,4 @@
     // admitted; Web mode has nothing to reconcile with.
     private Task ResolveUnreadableAsync() =>
         _appMode == "Local" ? _reconciler.ResolveUnreadableAsync() : _numbering.ResolveUnreadableAsync();
-
-    /// <summary>
-    /// Whether the next-number control follows an export that started from
-    /// <paramref name="exported"/>: unless the user has changed the next number
-    /// or the pattern since the export started, both of which the export
-    /// captured. A newer choice in either stands. The number length decides
-    /// nothing here: a length change says nothing about which number comes
-    /// next, so it never leaves the control on a number the export used.
-    /// </summary>
-    private bool FollowsExport(XgpExportOptions exported) =>
-        _xgpNextNumber == exported.StartNumber && _xgpPattern == exported.NamePattern;
 }

@@ -4,6 +4,7 @@ using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
 using ExtractFromXgToCsv.Client.Shared;
+using Microsoft.AspNetCore.Components;
 using XgFilter_Razor;
 using XgFilter_Razor.TestSupport;
 using Xunit;
@@ -220,6 +221,48 @@ public class HomeXgpPatternTests : BunitContext
 
         Assert.False(web.Instance.XgpNumberingUnreadable);
         Assert.Empty(cut.FindAll(".unreadable-numbering-notice"));
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// A next number the user typed before a Web download began is the one it
+    /// started from, not an edit since: the control follows the export.
+    /// </summary>
+    [Fact]
+    public async Task ANextNumberTypedBeforeAWebDownloadBegan_FollowsTheExport()
+    {
+        var cut = RenderHomeWithXgpSelected();
+        var web = cut.FindComponent<WebModePanel>();
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
+        var started = web.Instance.XgpOptions;
+        await cut.InvokeAsync(() => web.Instance.OnXgpExportStarting.InvokeAsync());
+        _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Absent, HomeStoragePlan.NumberingDocument("pos{n}", 54, 3));
+
+        await cut.InvokeAsync(() => web.Instance.OnXgpExported.InvokeAsync(new XgpExportCommit(started, 5)));
+
+        Assert.Equal(55, web.Instance.XgpOptions.StartNumber);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// The next number changed away and back while a Web download ran is the
+    /// user's choice, though it shows the number the download started from:
+    /// the control keeps it, while the record takes the export.
+    /// </summary>
+    [Fact]
+    public async Task ANextNumberChangedAwayAndBackDuringAWebDownload_IsTheUsersChoice()
+    {
+        var cut = RenderHomeWithXgpSelected();
+        var web = cut.FindComponent<WebModePanel>();
+        var started = web.Instance.XgpOptions;
+        await cut.InvokeAsync(() => web.Instance.OnXgpExportStarting.InvokeAsync());
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "77" });
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+        _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Absent, HomeStoragePlan.NumberingDocument("pos{n}", 5, 3));
+
+        await cut.InvokeAsync(() => web.Instance.OnXgpExported.InvokeAsync(new XgpExportCommit(started, 5)));
+
+        Assert.Equal(1, web.Instance.XgpOptions.StartNumber);
         _storage.Verify();
     }
 

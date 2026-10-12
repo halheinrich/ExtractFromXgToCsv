@@ -431,6 +431,77 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Empty(OwedIds(Record!.Value));
     }
 
+    // ── What counts as an edit ──────────────────────────────────────────────
+
+    /// <summary>
+    /// A reload while an export runs: the reloaded page's next number is a
+    /// value it restored, not the user's edit, so when the export applies the
+    /// control follows it — though the export started from a number the user
+    /// typed before the reload, which the restored control does not show.
+    /// </summary>
+    [Fact]
+    public async Task AReloadMidRun_TheRestoredControlFollowsTheExport_WhenItApplies()
+    {
+        var before = Open();
+        await before.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
+        _server.Gate.Close();
+        var run = before.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        var reloaded = await ReloadAsync(before);
+        Assert.Equal(1, reloaded.Options.StartNumber);
+        _server.Gate.Open();
+        reloaded.WaitFor(() => reloaded.StartState.XgpBlock is null);
+
+        Assert.Equal(50 + _decisions, reloaded.Options.StartNumber);
+        await run.WaitAsync(NoticeTesting.OperationBound);
+    }
+
+    /// <summary>
+    /// The next number changed away and back while the export ran: the value
+    /// is the one the export started from, but changing it is the user's own
+    /// input — their choice — so the control keeps it, while the record takes
+    /// the export.
+    /// </summary>
+    [Fact]
+    public async Task TheNextNumberChangedAwayAndBack_IsTheUsersChoice_AndDoesNotFollow()
+    {
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "77" });
+        await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(1, page.Options.StartNumber);
+        Assert.Equal(_decisions, LastNumber(Record!.Value));
+        Assert.Equal(1, MarkNumber(Record!.Value));
+    }
+
+    /// <summary>
+    /// The user sets the next number back to an earlier export's start, then
+    /// a reconciliation finds both exports in the ledger again: the replay
+    /// takes nothing into the record, so the controls follow nothing, and the
+    /// user's number stays.
+    /// </summary>
+    [Fact]
+    public async Task ANextNumberSetBackToAnEarlierExportsStart_StaysThroughAReplay()
+    {
+        var page = Open();
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+        await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+
+        Assert.Equal(1, page.Options.StartNumber);
+        Assert.Equal(2, MarkNumber(Record!.Value));
+        Assert.Equal(2 * _decisions, LastNumber(Record!.Value));
+    }
+
     // ── Ordering across instances ───────────────────────────────────────────
 
     /// <summary>
@@ -465,7 +536,9 @@ public class LocalRecoveryTests : IAsyncLifetime
 
         Assert.Equal(bsRecord, _storage[NumberingKey]);
         Assert.Equal(new LedgerMark(_instance, 1), a.StartState.Mark);
-        Assert.NotEqual(2 * _decisions + 1, a.Options.StartNumber);
+        // A's controls follow the newer accounting the record took, never the
+        // ended instance's entry.
+        Assert.Equal(1000 + _decisions, a.Options.StartNumber);
     }
 
     /// <summary>

@@ -299,6 +299,15 @@
     [Parameter, EditorRequired] public bool XgpNumberingUnreadable { get; set; }
 
     /// <summary>
+    /// Raised when an XGP download attempt begins, before anything is built:
+    /// the host notes the moment, so its controls know which of the user's
+    /// edits came after the export started (the umbrella's
+    /// <c>SPEC-notices.md</c> §7.5). EditorRequired: a silently splatted
+    /// binding would leave the host unable to tell.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback OnXgpExportStarting { get; set; }
+
+    /// <summary>
     /// Raised with an XGP download's commit — the entries of the archive
     /// handed to the browser and the options the download captured — once the
     /// hand-off has succeeded: the host owns the numbering those entries used.
@@ -749,7 +758,11 @@
     private async Task DownloadAsync()
     {
         if (BeginAttempt() is { } attempt)
+        {
+            if (attempt.Format == OutputFormat.Xgp)
+                await OnXgpExportStarting.InvokeAsync();
             await RunBusyAsync(BuildingMessage(attempt.Format), () => DownloadCoreAsync(attempt));
+        }
         await ConvertWhatTheSelectedOutputNeedsAsync();
     }
 
