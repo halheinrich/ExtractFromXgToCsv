@@ -346,7 +346,7 @@
     private readonly CancellationTokenSource _lifetime = new();
 
     // Whether the persistent-failure run error is up for the run in hand.
-    private bool _stillOwedShown;
+    private bool _stillTryingShown;
 
     // The failed run standing on screen, as its message; null when none is.
     // The run error notice's whole state — presence, text and dismissal are
@@ -631,7 +631,7 @@
 
         _busy = false;
         _currentJobId = null;
-        _stillOwedShown = false;
+        _stillTryingShown = false;
 
         // Judge before publishing: the outcome is shown only while the run's
         // source visit is the current one and the filter values on screen are
@@ -680,7 +680,7 @@
     /// refused — retrying a request that could not be made under the same
     /// identity, so a lost response finds the same job and a repeat never
     /// runs twice. A failure that persists shows as the run error, saying the
-    /// result is still owed, and the start goes on.
+    /// result hasn't arrived yet, and the start goes on.
     /// </summary>
     /// <returns>The answer; <see langword="null"/> when Stop ended the start first.</returns>
     private async Task<StartAnswer?> StartAsync(StartRequest start, CancellationToken abandon)
@@ -699,7 +699,7 @@
             }
             catch (Exception ex) when (IsUnreachable(ex))
             {
-                StillOwedAfter(++failures);
+                StillTryingAfter(++failures);
             }
 
             try
@@ -716,7 +716,7 @@
     /// <summary>
     /// Follows the job until its terminal result, retrying any status read
     /// that fails. A failure that persists shows as the run error, saying the
-    /// result is still owed, and following goes on; it never ends quietly.
+    /// result hasn't arrived yet, and following goes on; it never ends quietly.
     /// </summary>
     /// <returns>The terminal snapshot; <see langword="null"/> when the server does not hold the job, or the panel has gone.</returns>
     private async Task<ProcessingProgress?> FollowAsync(string jobId)
@@ -740,7 +740,7 @@
             }
             catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
             {
-                StillOwedAfter(++failures);
+                StillTryingAfter(++failures);
                 continue;
             }
             failures = 0;
@@ -759,21 +759,21 @@
     // The persistent-failure run error: shown once failures reach the
     // threshold, and taken down when contact returns, unless the user has
     // closed it already.
-    private void StillOwedAfter(int failures)
+    private void StillTryingAfter(int failures)
     {
         if (failures != Timing.FailuresBeforeError)
             return;
-        _runError = StillOwedMessage;
-        _stillOwedShown = true;
+        _runError = StillTryingMessage;
+        _stillTryingShown = true;
         StateHasChanged();
     }
 
     private void ContactReturned()
     {
-        if (!_stillOwedShown)
+        if (!_stillTryingShown)
             return;
-        _stillOwedShown = false;
-        if (_runError == StillOwedMessage)
+        _stillTryingShown = false;
+        if (_runError == StillTryingMessage)
             _runError = null;
         StateHasChanged();
     }
@@ -791,8 +791,8 @@
     private static bool IsUnreachable(Exception ex) =>
         ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException;
 
-    private const string StillOwedMessage =
-        "Can't reach the server. This run's result is still owed — still trying…";
+    private const string StillTryingMessage =
+        "Can't reach the server. This run's result hasn't arrived yet — still trying…";
 
     private const string UnknownJobMessage =
         "The server no longer has this run — it may have restarted — so its result can't be shown.";
@@ -807,7 +807,7 @@
         RefusalReason.StaleMark =>
             "Another XGP export finished since this page last counted, so the server refused this one. The numbering is being brought up to date; check Next number, then run again.",
         RefusalReason.Retired =>
-            "The server refused the run: it had already been given up as never started. Run again to start a new one.",
+            "This run request can no longer start. Run again to start a new one.",
         _ =>
             "The server refused the run: its identity was already used for a different run.",
     };

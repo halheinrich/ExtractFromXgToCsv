@@ -135,7 +135,7 @@ public class LocalRecoveryTests : IAsyncLifetime
 
         Assert.Empty((await LedgerAsync()).Entries);
         Assert.Empty(_server.XgpFiles());
-        Assert.Contains("given up as never started",
+        Assert.Contains("This run request can no longer start. Run again to start a new one.",
             Assert.Single(NoticeBox.AllIn(first.Home), b => b.Kind == NoticeKind.Error).Content.TextContent);
         Assert.Empty(OwedIds(Record!.Value));
     }
@@ -400,7 +400,7 @@ public class LocalRecoveryTests : IAsyncLifetime
         var run = page.RunAsync();
 
         page.WaitFor(() => NoticeBox.AllIn(page.Home).Any(b => b.Kind == NoticeKind.Error));
-        Assert.Equal("Can't reach the server. This run's result is still owed — still trying…",
+        Assert.Equal("Can't reach the server. This run's result hasn't arrived yet — still trying…",
             NoticeBox.AllIn(page.Home).Single(b => b.Kind == NoticeKind.Error).Content.TextContent.Trim());
         Assert.Equal(["job-1"], OwedIds(Record!.Value));
         Assert.False(run.IsCompleted);
