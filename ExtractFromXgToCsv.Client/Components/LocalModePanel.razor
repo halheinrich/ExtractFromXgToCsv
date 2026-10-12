@@ -303,13 +303,25 @@
     [Parameter, EditorRequired] public EventCallback<OwedXgpJob> OnXgpJobStarting { get; set; }
 
     /// <summary>
-    /// Raised with an XGP job's ended ledger entry when the panel has taken its
-    /// terminal result — completed, cancelled or failed, whatever the panel
-    /// shows: the host applies its accounting, and the panel acknowledges the
-    /// job only after. EditorRequired: a silently splatted binding would lose
-    /// the accounting.
+    /// Raised when the panel has taken an XGP job's terminal result —
+    /// completed, cancelled or failed, whatever the panel shows: the host
+    /// applies its accounting, through a reconciliation pass that reads it from
+    /// the server's ledger (a result the follower received carries no
+    /// authority of its own, SPEC-notices.md §7.5), and the panel acknowledges
+    /// the job only after. EditorRequired: a silently splatted binding would
+    /// lose the accounting.
     /// </summary>
-    [Parameter, EditorRequired] public EventCallback<EndedXgpJob> OnXgpJobEnded { get; set; }
+    [Parameter, EditorRequired] public EventCallback OnXgpJobEnded { get; set; }
+
+    /// <summary>
+    /// Raised with an XGP job, by its identity, that never ran: every start
+    /// the panel sent for it was answered with a refusal, or Stop settled it as
+    /// retired. The host resolves it, so it is never owed. A job any of whose
+    /// attempts went unanswered is not raised here: it stays owed, for
+    /// reconciliation to resolve. EditorRequired: a silently splatted binding
+    /// would leave a job owed that never ran, a false lost export.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback<string> OnXgpJobNeverStarted { get; set; }
 
     /// <summary>
     /// Raised when the host must reconcile with the server: a start refused or
@@ -583,7 +595,6 @@
         // snapshot, or the client's own failure to start or follow the job.
         ProcessingProgress? terminal = null;
         string? failure = null;
-        int? ledgerNumber = null;
         var reconcile = false;
 
         using var abandon = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -595,10 +606,10 @@
             if (xgp)
                 await OnXgpJobStarting.InvokeAsync(new OwedXgpJob(jobId, instance, XgpOptions, run.OutputPath));
 
-            switch (await StartAsync(start, abandon.Token))
+            var started = await StartAsync(start, abandon.Token);
+            switch (started.Answer)
             {
-                case StartAnswer.Admitted admitted:
-                    ledgerNumber = admitted.LedgerNumber;
+                case StartAnswer.Admitted:
                     _currentJobId = jobId;
                     terminal = await FollowAsync(jobId);
                     if (terminal is null && !_lifetime.IsCancellationRequested)
@@ -609,6 +620,11 @@
                     break;
                 case StartAnswer.Refused refused:
                     failure = RefusedMessage(refused.Reason);
+                    // A start refused on every attempt never ran; one any of
+                    // whose attempts went unanswered may have arrived, and
+                    // stays owed for reconciliation to resolve.
+                    if (xgp && started.EveryAttemptAnswered)
+                        await OnXgpJobNeverStarted.InvokeAsync(jobId);
                     reconcile = true;
                     break;
                 default:
@@ -670,13 +686,12 @@
 
         // The job's own accounting, whatever is on screen (§7.2): an XGP job's
         // ended ledger entry — completed, cancelled and failed alike, since a
-        // failed run's files were written too — is applied by the host, and
-        // the job is acknowledged only after.
+        // failed run's files were written too — is applied by the host, from
+        // the ledger, and the job is acknowledged only after.
         if (terminal is not null)
         {
-            if (xgp && ledgerNumber is { } number)
-                await OnXgpJobEnded.InvokeAsync(new EndedXgpJob(
-                    instance, new LedgerEntry(number, jobId, Running: false, terminal.XgpCommit)));
+            if (xgp)
+                await OnXgpJobEnded.InvokeAsync();
             await AcknowledgeAsync(jobId);
         }
 
@@ -691,23 +706,29 @@
     /// runs twice. A failure that persists shows as the run error, saying the
     /// result hasn't arrived yet, and the start goes on.
     /// </summary>
-    /// <returns>The answer; <see langword="null"/> when Stop ended the start first.</returns>
-    private async Task<StartAnswer?> StartAsync(StartRequest start, CancellationToken abandon)
+    /// <returns>
+    /// The answer — <see langword="null"/> when Stop ended the start first —
+    /// and whether every attempt sent was answered, which decides whether a
+    /// refused start can have run.
+    /// </returns>
+    private async Task<StartOutcome> StartAsync(StartRequest start, CancellationToken abandon)
     {
+        var unanswered = false;
         for (var failures = 0; ; )
         {
             try
             {
                 var answer = await Jobs.StartAsync(start, abandon);
                 ContactReturned();
-                return answer;
+                return new StartOutcome(answer, EveryAttemptAnswered: !unanswered);
             }
             catch (OperationCanceledException) when (abandon.IsCancellationRequested)
             {
-                return null;
+                return new StartOutcome(null, EveryAttemptAnswered: false);
             }
             catch (Exception ex) when (IsUnreachable(ex))
             {
+                unanswered = true;
                 StillTryingAfter(++failures);
             }
 
@@ -717,10 +738,15 @@
             }
             catch (OperationCanceledException)
             {
-                return null;
+                return new StartOutcome(null, EveryAttemptAnswered: false);
             }
         }
     }
+
+    /// <summary>What sending a start came to: the server's answer, and whether it answered every attempt.</summary>
+    /// <param name="Answer">The answer; <see langword="null"/> when Stop ended the start first.</param>
+    /// <param name="EveryAttemptAnswered">Whether no attempt went unanswered: a refusal then settles every attempt.</param>
+    private sealed record StartOutcome(StartAnswer? Answer, bool EveryAttemptAnswered);
 
     /// <summary>
     /// Follows the job until its terminal result, retrying any status read

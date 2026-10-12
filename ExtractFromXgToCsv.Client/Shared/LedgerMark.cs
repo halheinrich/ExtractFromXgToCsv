@@ -8,9 +8,11 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// the start only when it names the instance's latest entry.
 /// </summary>
 /// <remarks>
-/// Entries are ordered by number within an instance, and every entry of the
-/// current instance is newer than any mark from an earlier one
-/// (<see cref="IsNewerThan"/>).
+/// Entries are ordered by number within an instance (<see cref="Follows"/>).
+/// Marks of different instances are not ordered: across instances an entry is
+/// newer only under a reconciliation pass's authority, which the pass
+/// establishes and checks (§7.5). No wall-clock time orders them — system
+/// time can be set back.
 /// </remarks>
 public sealed record LedgerMark
 {
@@ -32,18 +34,14 @@ public sealed record LedgerMark
     public int Number { get; }
 
     /// <summary>
-    /// Whether this mark is newer than <paramref name="other"/>, judged as the
-    /// page that knows <paramref name="currentInstance"/> as the server's: a
-    /// later entry of the same instance is newer, and so is any entry of the
-    /// current instance than one of an earlier instance. Two marks of
-    /// different instances, neither of them current, are not ordered; neither
-    /// is newer.
+    /// Whether this mark comes after <paramref name="other"/> in their one
+    /// instance's ledger: a higher number of the same instance. Marks of
+    /// different instances are not ordered, so neither follows the other.
     /// </summary>
-    /// <param name="other">The mark to compare with; <see langword="null"/>, no mark, is older than any.</param>
-    /// <param name="currentInstance">The server's instance as the page knows it; <see langword="null"/> when unknown.</param>
-    public bool IsNewerThan(LedgerMark? other, string? currentInstance) =>
-        other is null
-        || (Instance == other.Instance
-            ? Number > other.Number
-            : Instance == currentInstance);
+    /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
+    public bool Follows(LedgerMark other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        return Instance == other.Instance && Number > other.Number;
+    }
 }

@@ -232,9 +232,10 @@ internal static class HomeStoragePlan
     /// The numbering record's part in one Local XGP run through Home
     /// (SPEC-notices.md §7.5): the job recorded as owed before its start sent
     /// — a checkpoint over <paramref name="before"/>, writing
-    /// <paramref name="owing"/> — then its ended entry applied — a checkpoint
-    /// writing <paramref name="applied"/>, numbering, mark and owed together —
-    /// then the reconciliation that follows, which reads it afresh.
+    /// <paramref name="owing"/> — then, the job ended, the reconciliation pass
+    /// that applies its entry from the ledger: the pass's first read, then the
+    /// entry's checkpoint, writing <paramref name="applied"/>, numbering, mark
+    /// and owed together.
     /// </summary>
     /// <returns>The apply checkpoint's write, held when <paramref name="holdTheApply"/>.</returns>
     public static BrowserStorageHeldWrite? ExpectXgpRunBookkeeping(
@@ -242,14 +243,12 @@ internal static class HomeStoragePlan
     {
         plan.ExpectNumberingCheckpoint(
             before is null ? BrowserStorageReadAnswer.Absent : BrowserStorageReadAnswer.Stored(before), owing);
+        plan.ExpectLocalReconcile(BrowserStorageReadAnswer.Stored(owing));
         plan.ExpectRead(BrowserStorageArea.Local, NumberingKey, BrowserStorageReadAnswer.Stored(owing));
-        BrowserStorageHeldWrite? held = null;
         if (holdTheApply)
-            held = plan.ExpectHeldWrite(BrowserStorageArea.Local, NumberingKey, applied);
-        else
-            plan.ExpectWrite(BrowserStorageArea.Local, NumberingKey, applied, BrowserStorageWriteAnswer.Succeeded);
-        plan.ExpectLocalReconcile(BrowserStorageReadAnswer.Stored(applied));
-        return held;
+            return plan.ExpectHeldWrite(BrowserStorageArea.Local, NumberingKey, applied);
+        plan.ExpectWrite(BrowserStorageArea.Local, NumberingKey, applied, BrowserStorageWriteAnswer.Succeeded);
+        return null;
     }
 
     /// <summary>

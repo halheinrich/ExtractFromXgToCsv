@@ -29,7 +29,8 @@ internal sealed class LocalServer : IDisposable
     private const string Fixture = "MTCH4064.xg";
 
     private readonly string _root = Directory.CreateTempSubdirectory("xg-protocol-").FullName;
-    private readonly WebApplicationFactory<AppModeService> _factory;
+    private readonly Action<IWebHostBuilder>? _configure;
+    private WebApplicationFactory<AppModeService> _factory;
 
     /// <summary>A server over a fresh input folder holding one fixture match.</summary>
     /// <param name="configure">Anything more the test's host needs — a logger, say.</param>
@@ -39,7 +40,26 @@ internal sealed class LocalServer : IDisposable
         OutputFolder = Path.Combine(_root, "positions");
         File.Copy(Path.Combine(FixtureHelper.FixtureDir, Fixture), Path.Combine(InputFolder, Fixture));
 
-        _factory = new WebApplicationFactory<AppModeService>().WithWebHostBuilder(builder =>
+        _configure = configure;
+        _factory = Start();
+        Wire = new ProtocolWire(_factory.Server.CreateHandler());
+    }
+
+    /// <summary>
+    /// Restarts the server, as Exit and a fresh start, or a crash, do: a new
+    /// process — a new instance, with an empty job store and ledger — over the
+    /// same folders, which the same wire now reaches.
+    /// </summary>
+    public void Restart()
+    {
+        var ended = _factory;
+        _factory = Start();
+        Wire.Retarget(_factory.Server.CreateHandler());
+        ended.Dispose();
+    }
+
+    private WebApplicationFactory<AppModeService> Start() =>
+        new WebApplicationFactory<AppModeService>().WithWebHostBuilder(builder =>
         {
             builder.UseSetting("AppMode", "Local");
             // Empty disables the opening book: these runs need none.
@@ -51,10 +71,8 @@ internal sealed class LocalServer : IDisposable
                 bookProvider: null,
                 XgpPayload.Prepare,
                 new GatedDestination(Gate))));
-            configure?.Invoke(builder);
+            _configure?.Invoke(builder);
         });
-        Wire = new ProtocolWire(_factory.Server.CreateHandler());
-    }
 
     /// <summary>The input folder: one fixture match.</summary>
     public string InputFolder { get; }
@@ -131,13 +149,24 @@ internal sealed class FileGate
 /// The wire between a page and the server, which a test can fault the way a
 /// network does (the umbrella's <c>SPEC-notices.md</c> §7.5): a response
 /// lost after the server acted (<see cref="Drop"/>), a request that never
-/// arrives (<see cref="Fail"/>), or one held before it arrives
-/// (<see cref="Hold"/>). Rules apply in the order added.
+/// arrives (<see cref="Fail"/>), one held before it arrives
+/// (<see cref="Hold"/>), a response held after the server answered
+/// (<see cref="HoldResponse"/>), or an answer the server never gave
+/// (<see cref="Respond"/>). Rules apply in the order added. A restarted
+/// server is reached over the same wire (<see cref="Retarget"/>).
 /// </summary>
-internal sealed class ProtocolWire(HttpMessageHandler server) : DelegatingHandler(server)
+internal sealed class ProtocolWire(HttpMessageHandler server) : HttpMessageHandler
 {
     private readonly object _gate = new();
     private readonly List<Rule> _rules = [];
+    private HttpMessageInvoker _server = new(server, disposeHandler: false);
+
+    /// <summary>Points the wire at <paramref name="server"/>: the restart of the one it reached.</summary>
+    public void Retarget(HttpMessageHandler server)
+    {
+        lock (_gate)
+            _server = new HttpMessageInvoker(server, disposeHandler: false);
+    }
 
     /// <summary>Every request made over the wire, as "METHOD path", in order.</summary>
     public List<string> Requests { get; } = [];
@@ -157,20 +186,42 @@ internal sealed class ProtocolWire(HttpMessageHandler server) : DelegatingHandle
     /// <summary>Acknowledgements.</summary>
     public static bool Acknowledge(HttpRequestMessage r) => r.Method == HttpMethod.Post && r.RequestUri!.AbsolutePath.EndsWith("/acknowledge", StringComparison.Ordinal);
 
+    /// <summary>Cancels.</summary>
+    public static bool Cancel(HttpRequestMessage r) => r.Method == HttpMethod.Post && r.RequestUri!.AbsolutePath.EndsWith("/cancel", StringComparison.Ordinal);
+
     /// <summary>The next <paramref name="times"/> matching requests reach the server, and their responses are lost.</summary>
     public Rule Drop(Func<HttpRequestMessage, bool> match, int times = 1) => Add(new Rule(match, RuleKind.Drop, times));
 
     /// <summary>Matching requests never reach the server — the next <paramref name="times"/>, or all until stopped.</summary>
     public Rule Fail(Func<HttpRequestMessage, bool> match, int times = int.MaxValue) => Add(new Rule(match, RuleKind.Fail, times));
 
-    /// <summary>The next matching request is held before it reaches the server, until released.</summary>
+    /// <summary>
+    /// The next matching request is held before it reaches the server, until
+    /// released. It is on the wire: if its sender stops waiting, it still
+    /// arrives when released.
+    /// </summary>
     public Rule Hold(Func<HttpRequestMessage, bool> match) => Add(new Rule(match, RuleKind.Hold, 1));
+
+    /// <summary>The next matching request reaches the server, and its response is held until released.</summary>
+    public Rule HoldResponse(Func<HttpRequestMessage, bool> match) => Add(new Rule(match, RuleKind.HoldResponse, 1));
+
+    /// <summary>The next <paramref name="times"/> matching requests never reach the server, and are answered <paramref name="status"/>.</summary>
+    public Rule Respond(Func<HttpRequestMessage, bool> match, System.Net.HttpStatusCode status, int times = 1) =>
+        Add(new Rule(match, RuleKind.Respond, times) { Status = status });
 
     private Rule Add(Rule rule)
     {
         lock (_gate)
             _rules.Add(rule);
         return rule;
+    }
+
+    private Task<HttpResponseMessage> ForwardAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        HttpMessageInvoker server;
+        lock (_gate)
+            server = _server;
+        return server.SendAsync(request, cancellationToken);
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -186,25 +237,58 @@ internal sealed class ProtocolWire(HttpMessageHandler server) : DelegatingHandle
         {
             case RuleKind.Fail:
                 throw new HttpRequestException("The request never reached the server.");
+            case RuleKind.Respond:
+                return new HttpResponseMessage(rule.Status);
             case RuleKind.Drop:
-                using (await base.SendAsync(request, cancellationToken))
+                using (await ForwardAsync(request, cancellationToken))
                     rule.Answered();
                 throw new HttpRequestException("The response was lost.");
             case RuleKind.Hold:
-                await rule.HeldAsync();
-                var response = await base.SendAsync(request, cancellationToken);
+            {
+                // Delivered whatever the sender does meanwhile: a copy, so its
+                // content outlives the sender's request.
+                var onTheWire = await CopyAsync(request);
+                var delivery = Task.Run(async () =>
+                {
+                    await rule.HeldAsync();
+                    var response = await ForwardAsync(onTheWire, CancellationToken.None);
+                    rule.Answered();
+                    return response;
+                });
+                return await delivery.WaitAsync(cancellationToken);
+            }
+            case RuleKind.HoldResponse:
+            {
+                var response = await ForwardAsync(request, cancellationToken);
                 rule.Answered();
+                await rule.HeldAsync();
                 return response;
+            }
             default:
-                return await base.SendAsync(request, cancellationToken);
+                return await ForwardAsync(request, cancellationToken);
         }
     }
 
-    public enum RuleKind { Drop, Fail, Hold }
+    private static async Task<HttpRequestMessage> CopyAsync(HttpRequestMessage request)
+    {
+        var copy = new HttpRequestMessage(request.Method, request.RequestUri);
+        if (request.Content is { } content)
+        {
+            copy.Content = new ByteArrayContent(await content.ReadAsByteArrayAsync());
+            foreach (var header in content.Headers)
+                copy.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        return copy;
+    }
+
+    public enum RuleKind { Drop, Fail, Hold, HoldResponse, Respond }
 
     /// <summary>One rule: what it matches, what it does, how many more times, and its signals.</summary>
     public sealed class Rule(Func<HttpRequestMessage, bool> match, RuleKind kind, int times)
     {
+        /// <summary>For <see cref="RuleKind.Respond"/>, the status answered.</summary>
+        public System.Net.HttpStatusCode Status { get; init; }
+
         private readonly TaskCompletionSource _reached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _answered = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -256,6 +340,9 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
     /// <summary>Every local write the browser stored, as (key, value), in order.</summary>
     public List<(string Key, string Value)> Writes { get; } = [];
 
+    /// <summary>The keys of every write the browser refused, in order.</summary>
+    public List<string> RefusedWrites { get; } = [];
+
     /// <summary>Whether the browser refuses every read.</summary>
     public bool RefuseReads { get; set; }
 
@@ -290,7 +377,10 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
                 return new ValueTask<TValue>((TValue)(object?)(area.TryGetValue(key, out var value) ? value : null)!);
             case "setItem":
                 if (RefuseWrites)
+                {
+                    RefusedWrites.Add(key);
                     throw new JSException("The browser refused the write.");
+                }
                 area[key] = (string)args[1]!;
                 if (ReferenceEquals(area, _local))
                     Writes.Add((key, (string)args[1]!));

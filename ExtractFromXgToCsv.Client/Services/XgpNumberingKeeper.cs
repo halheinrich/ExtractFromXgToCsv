@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using ExtractFromXgToCsv.Client.Shared;
 
 namespace ExtractFromXgToCsv.Client.Services;
 
@@ -15,14 +16,33 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// owed jobs are saved together or not at all.
 /// </para>
 /// <para>
-/// <b>A stored record never undoes what this page has applied or
-/// resolved.</b> The numbering and the mark come from whichever record's
-/// mark is newer (<see cref="ExtractFromXgToCsv.Client.Shared.LedgerMark.IsNewerThan"/>);
-/// with neither newer, the stored numbering — another page may have exported
-/// since — unless this page holds a change storage refused. The owed jobs are
-/// the stored ones and this page's together, less those this page has
-/// resolved, so another page's owed job is never dropped and a job this page
-/// resolved is never owed again.
+/// <b>The merge.</b> The page remembers what it last saw stored — read, or
+/// written by it. A stored record unchanged since then holds nothing new, so
+/// this page's record stands, its pending changes with it. A changed one is
+/// another page's write: its numbering and mark are taken together, never one
+/// record's mark with another's numbering, unless the two marks are of one
+/// instance and this page's is later (or equal, over a change of this page's
+/// that storage refused). Marks of different instances are not ordered, so a
+/// changed stored record's state is taken.
+/// </para>
+/// <para>
+/// <b>Owed jobs.</b> The stored ones, and those this page recorded and has
+/// not yet seen stored, less those this page resolved. A job this page
+/// learned from storage is resolved when a later readable record no longer
+/// holds it — another page resolved it — while a refused or unreadable read
+/// establishes nothing.
+/// </para>
+/// <para>
+/// <b>A pass's authority over another instance's mark</b>
+/// (<see cref="ApplyAsync"/>). A reconciliation pass reads the stored record
+/// first (<see cref="BeginPassAsync"/>), then the server's ledger, so the
+/// instance the server names is at least as new as any the record names. It
+/// writes an entry of another instance over the stored mark only from the
+/// state it started with, and only while both halves of it — the stored
+/// record it read first and this page's record as it stood then — are
+/// unchanged. Otherwise it writes nothing, takes the changed state, and the
+/// page reconciles again. This is an optimistic check, not a compare-and-swap:
+/// browser storage offers none across tabs, and §7.5 states the window left.
 /// </para>
 /// <para>
 /// <b>A refusal never stops the gesture.</b> When storage refuses a
@@ -36,10 +56,6 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// user. Their resolution (<see cref="ResolveUnreadableAsync"/>) authorizes
 /// replacing that document with a fresh record, and nothing more.
 /// </para>
-/// <para>
-/// Browser storage offers no compare-and-swap across tabs, so two pages
-/// writing at once can lose one write; §7.5 states that limit.
-/// </para>
 /// </remarks>
 internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
 {
@@ -47,9 +63,16 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     // stored record still says.
     private readonly HashSet<string> _resolved = new(StringComparer.Ordinal);
 
-    // Whether this page's record holds a change storage refused, which a
-    // stored record must not undo.
+    // The owed jobs this page recorded and has not yet seen stored: kept
+    // through a read that lacks them, since storage may never have taken them.
+    private readonly HashSet<string> _unseen = new(StringComparer.Ordinal);
+
+    // Whether this page's record holds a change storage refused.
     private bool _unsaved;
+
+    // What this page last saw stored, read or written by it; null while it
+    // knows nothing.
+    private StoredRecord? _seen;
 
     // The unreadable document this page last read and the user has not
     // resolved; null while there is none.
@@ -82,23 +105,120 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         if (read is NumberingRead.Missing && await store.MigrateAsync() is { } migrated)
         {
             Record = migrated.Record;
+            _seen = new StoredRecord(migrated.Stored ? migrated.Record : null);
             _unsaved = !migrated.Stored;
+            return;
         }
-        else if (read is NumberingRead.Valid valid)
-        {
+        if (read is NumberingRead.Valid valid)
             Record = valid.Record;
-        }
+        NoteRead(read);
     }
 
     /// <summary>
-    /// Reads the stored record afresh and merges it into this page's, never
-    /// undoing what this page has applied or resolved.
+    /// Begins a reconciliation pass: the stored record read first, before the
+    /// pass asks the server anything, and merged into this page's record.
     /// </summary>
-    /// <param name="currentInstance">The server's instance as this page knows it; <see langword="null"/> when unknown.</param>
-    public async Task RefreshAsync(string? currentInstance)
+    /// <returns>The state the pass starts from, which bounds its authority (<see cref="ApplyAsync"/>).</returns>
+    public async Task<PassStart> BeginPassAsync()
     {
-        if (await ReadAsync() is NumberingRead.Valid valid)
-            Record = Merge(valid.Record, currentInstance);
+        var page = Record;
+        var read = await ReadAsync();
+        if (read is NumberingRead.Valid valid)
+            Record = Merge(valid.Record, page);
+        NoteRead(read);
+        return new PassStart(Fresh(read), Record);
+    }
+
+    /// <summary>
+    /// Applies one ended ledger entry of <paramref name="instance"/> for a
+    /// pass begun at <paramref name="start"/>, in one checkpoint.
+    /// </summary>
+    /// <remarks>
+    /// An entry of the mark's instance is ordered by number, an ordinary
+    /// checkpoint. An entry of another instance — or any, while no mark is set
+    /// — is written over the stored mark only from the state the pass started
+    /// with, while both the stored record and this page's record are as they
+    /// were then. If either has changed, nothing is written, the changed state
+    /// is taken, and the caller reconciles again. A fresh read that is refused
+    /// cannot show the stored record unchanged: nothing is written, and the
+    /// entry is applied in this page's memory alone — an entry of another
+    /// instance only while this page's record is unchanged. Over a record that
+    /// cannot be read nothing is applied at all. An entry that changes nothing
+    /// writes nothing.
+    /// </remarks>
+    public async Task<EntryApplied> ApplyAsync(PassStart start, string instance, LedgerEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var page = Record;
+        var read = await ReadAsync();
+        if (read is NumberingRead.Unreadable)
+            return EntryApplied.Unreadable;
+        var current = read is NumberingRead.Valid valid ? Merge(valid.Record, page) : page;
+        var fresh = Fresh(read);
+        NoteRead(read);
+
+        XgpNumberingRecord before, applied;
+        if (current.HasMarkOf(instance))
+        {
+            before = current;
+            applied = current.Applying(instance, entry, underPassAuthority: false);
+        }
+        else if (!page.Equals(start.Page) || (fresh is not null && fresh != start.Stored))
+        {
+            // The state the pass started from has changed: nothing is
+            // written, and the changed state is taken, mark and numbering
+            // together, with this page's own pending changes.
+            Record = current;
+            return EntryApplied.StateChanged;
+        }
+        else
+        {
+            before = start.Page;
+            applied = start.Page.Applying(instance, entry, underPassAuthority: true);
+        }
+
+        var taken = applied.Mark != before.Mark;
+        var changed = !applied.Equals(before);
+        Take(before, applied);
+        if (fresh is null)
+        {
+            // Refused: nothing is written; applied in this page alone.
+            _unsaved |= changed;
+        }
+        else if (changed)
+        {
+            await WriteAsync(applied);
+        }
+        return taken ? EntryApplied.Taken : EntryApplied.NotNewer;
+    }
+
+    /// <summary>Records <paramref name="job"/> as owed, durably where storage allows, before its start is sent.</summary>
+    /// <returns>Whether storage stored the record.</returns>
+    public Task<bool> OweAsync(OwedXgpJob job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        _unseen.Add(job.JobId);
+        return CheckpointAsync(record => record.Owing(job));
+    }
+
+    /// <summary>Resolves the owed job <paramref name="jobId"/>: this page will never owe it again.</summary>
+    /// <returns>Whether storage stored the record.</returns>
+    public Task<bool> ResolveAsync(string jobId) => CheckpointAsync(record => record.Resolving(jobId));
+
+    /// <summary>
+    /// Records what a Web download committed, as Home sets it from an export
+    /// (<see cref="XgpNumberingRecord.WithCommit"/>). An export that committed
+    /// nothing changes no number, so nothing is written.
+    /// </summary>
+    /// <returns>Whether the record now stored holds it, or there was nothing to hold.</returns>
+    public Task<bool> RecordExportAsync(XgpExportCommit commit)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        return Record.WithCommit(commit).Equals(Record)
+            ? Task.FromResult(true)
+            : CheckpointAsync(record => record.WithCommit(commit));
     }
 
     /// <summary>
@@ -115,7 +235,7 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         _replaceable = document;
         _unreadable = null;
         Record = XgpNumberingRecord.Empty;
-        await CheckpointAsync(record => record, currentInstance: null);
+        await CheckpointAsync(record => record);
     }
 
     /// <summary>
@@ -126,30 +246,24 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     /// replaced: the change stands in this page's record alone.
     /// </summary>
     /// <param name="change">The change, applied to the merged record.</param>
-    /// <param name="currentInstance">The server's instance as this page knows it; <see langword="null"/> when unknown.</param>
     /// <returns>Whether storage stored the record.</returns>
-    public async Task<bool> CheckpointAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change, string? currentInstance)
+    public async Task<bool> CheckpointAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change)
     {
         ArgumentNullException.ThrowIfNull(change);
 
+        var page = Record;
         var read = await ReadAsync();
-        var merged = read is NumberingRead.Valid valid ? Merge(valid.Record, currentInstance) : Record;
+        var merged = read is NumberingRead.Valid valid ? Merge(valid.Record, page) : page;
+        NoteRead(read);
         var changed = change(merged);
-        foreach (var job in merged.Owed)
-        {
-            if (!changed.Owed.Any(kept => kept.JobId == job.JobId))
-                _resolved.Add(job.JobId);
-        }
-        Record = changed;
+        Take(merged, changed);
 
         if (read is NumberingRead.Unreadable)
         {
             _unsaved = true;
             return false;
         }
-        var stored = await store.WriteAsync(changed);
-        _unsaved = !stored;
-        return stored;
+        return await WriteAsync(changed);
     }
 
     // Reads the stored record: one of its four outcomes, the document the user
@@ -173,20 +287,107 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         return read;
     }
 
-    private XgpNumberingRecord Merge(XgpNumberingRecord stored, string? currentInstance)
+    // What a read showed stored: a record, or nothing; null for a read that
+    // showed nothing — refused, or unreadable.
+    private static StoredRecord? Fresh(NumberingRead read) => read switch
     {
-        var page = Record;
+        NumberingRead.Valid valid => new StoredRecord(valid.Record),
+        NumberingRead.Missing => new StoredRecord(null),
+        _ => null,
+    };
 
-        var (mark, numbering) =
-            stored.Mark is { } storedMark && storedMark.IsNewerThan(page.Mark, currentInstance) ? (stored.Mark, stored.Numbering)
-            : page.Mark is { } pageMark && pageMark.IsNewerThan(stored.Mark, currentInstance) ? (page.Mark, page.Numbering)
-            : (page.Mark ?? stored.Mark, _unsaved ? page.Numbering : stored.Numbering);
+    // A readable read is what this page has now seen stored: the owed jobs it
+    // holds are seen stored, so a later read that lacks them means another
+    // page resolved them. Called after the read's merge, which compares with
+    // what was seen before it.
+    private void NoteRead(NumberingRead read)
+    {
+        if (Fresh(read) is not { } fresh)
+            return;
+        _seen = fresh;
+        if (fresh.Record is { } stored)
+            _unseen.ExceptWith(stored.Owed.Select(job => job.JobId));
+    }
 
+    // Makes changed this page's record: the owed jobs the change dropped are
+    // resolved by this page.
+    private void Take(XgpNumberingRecord before, XgpNumberingRecord changed)
+    {
+        foreach (var job in before.Owed)
+        {
+            if (!changed.Owed.Any(kept => kept.JobId == job.JobId))
+                _resolved.Add(job.JobId);
+        }
+        Record = changed;
+    }
+
+    // Writes record whole; stored, it is what this page has seen stored, and
+    // every owed job it holds has been seen stored.
+    private async Task<bool> WriteAsync(XgpNumberingRecord record)
+    {
+        var stored = await store.WriteAsync(record);
+        _unsaved = !stored;
+        if (stored)
+        {
+            _seen = new StoredRecord(record);
+            _unseen.Clear();
+        }
+        return stored;
+    }
+
+    private XgpNumberingRecord Merge(XgpNumberingRecord stored, XgpNumberingRecord page)
+    {
+        var pair = _seen is { } seen && Equals(seen.Record, stored) ? page : NewestOf(stored, page);
         var owed = stored.Owed
-            .Concat(page.Owed.Where(job => !stored.Owed.Any(other => other.JobId == job.JobId)))
+            .Concat(page.Owed.Where(job => _unseen.Contains(job.JobId) && !stored.Owed.Any(other => other.JobId == job.JobId)))
             .Where(job => !_resolved.Contains(job.JobId))
             .ToImmutableArray();
-
-        return new XgpNumberingRecord { Numbering = numbering, Mark = mark, Owed = owed };
+        return new XgpNumberingRecord { Numbering = pair.Numbering, Mark = pair.Mark, Owed = owed };
     }
+
+    // Whose numbering and mark, always together, a stored record another page
+    // changed and this page's yield: within one instance the later mark's —
+    // with the marks equal, the stored one's, unless this page holds a change
+    // storage refused; across instances, which no mark orders, the stored
+    // record's.
+    private XgpNumberingRecord NewestOf(XgpNumberingRecord stored, XgpNumberingRecord page)
+    {
+        if (stored.Mark?.Instance != page.Mark?.Instance)
+            return stored;
+        var storedNumber = stored.Mark?.Number ?? 0;
+        var pageNumber = page.Mark?.Number ?? 0;
+        return storedNumber > pageNumber ? stored
+            : pageNumber > storedNumber ? page
+            : _unsaved ? page : stored;
+    }
+
+    /// <summary>What this page knows storage to hold: a record, or — <see langword="null"/> — nothing stored.</summary>
+    /// <param name="Record">The stored record; <see langword="null"/> when nothing is stored.</param>
+    internal sealed record StoredRecord(XgpNumberingRecord? Record);
+
+    /// <summary>
+    /// The state a reconciliation pass starts from (§7.5): the stored record it
+    /// read first — <see langword="null"/> when that read showed nothing — and
+    /// this page's record as it stood then.
+    /// </summary>
+    internal sealed record PassStart(StoredRecord? Stored, XgpNumberingRecord Page);
+}
+
+/// <summary>What applying one ledger entry in a reconciliation pass did.</summary>
+internal enum EntryApplied
+{
+    /// <summary>The record took the entry: its mark moved to it, in storage or, refused, in this page.</summary>
+    Taken,
+
+    /// <summary>The entry is at or before the mark: nothing changed but its job, resolved.</summary>
+    NotNewer,
+
+    /// <summary>
+    /// The state the pass started from has changed: nothing was written, the
+    /// changed state was taken, and the page reconciles again from there.
+    /// </summary>
+    StateChanged,
+
+    /// <summary>The stored record cannot be read: nothing was applied.</summary>
+    Unreadable,
 }

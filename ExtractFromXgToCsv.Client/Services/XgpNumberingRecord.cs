@@ -89,14 +89,18 @@ internal sealed record XgpNumberingRecord
 
     /// <summary>
     /// This record with <paramref name="entry"/> of <paramref name="instance"/>
-    /// applied — one checkpoint's change: when the entry is newer than the
-    /// mark, its accounting sets the numbering (an export that committed
-    /// nothing changes no number) and the mark moves to it; whether or not it
-    /// was, the job is no longer owed. An older entry changes neither the
-    /// numbering nor the mark, so a replay never rolls back.
+    /// applied — one checkpoint's change. Whatever else, the job is no longer
+    /// owed. When the entry is newer than the mark, its accounting sets the
+    /// numbering (an export that committed nothing changes no number) and the
+    /// mark moves to it, the two together. An entry of the mark's instance is
+    /// newer when it follows the mark; an entry of another instance — or any
+    /// entry while no mark is set — only under a reconciliation pass's
+    /// authority (<paramref name="underPassAuthority"/>), which the caller has
+    /// established (the umbrella's <c>SPEC-notices.md</c> §7.5). An entry at
+    /// or before the mark changes neither, so a replay never rolls back.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="entry"/> is still running.</exception>
-    public XgpNumberingRecord Applying(string instance, LedgerEntry entry)
+    public XgpNumberingRecord Applying(string instance, LedgerEntry entry, bool underPassAuthority)
     {
         ArgumentNullException.ThrowIfNull(entry);
         if (entry.Running)
@@ -104,9 +108,27 @@ internal sealed record XgpNumberingRecord
 
         var resolved = Resolving(entry.JobId);
         var mark = new LedgerMark(instance, entry.Number);
-        if (!mark.IsNewerThan(Mark, instance))
+        var newer = HasMarkOf(instance) ? mark.Follows(Mark!) : underPassAuthority;
+        if (!newer)
             return resolved;
         return (entry.Commit is { } commit ? resolved.WithCommit(commit) : resolved) with { Mark = mark };
+    }
+
+    /// <summary>
+    /// Whether the mark is a position in <paramref name="instance"/>'s ledger,
+    /// so that an entry of it is ordered against the mark by number alone.
+    /// </summary>
+    public bool HasMarkOf(string instance) => Mark?.Instance == instance;
+
+    /// <summary>
+    /// Whether this record already holds <paramref name="entry"/>'s
+    /// accounting, so applying it would change nothing: an entry at or before
+    /// the mark of its own instance, whose job is not owed.
+    /// </summary>
+    public bool Holds(string instance, LedgerEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return HasMarkOf(instance) && entry.Number <= Mark!.Number && !Owed.Any(job => job.JobId == entry.JobId);
     }
 
     /// <summary>Whether this record and <paramref name="other"/> hold the same numbering, mark and owed jobs, in order.</summary>

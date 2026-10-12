@@ -53,11 +53,3 @@ public enum XgpStartBlock
 /// <param name="Options">The naming options the job captured.</param>
 /// <param name="Folder">The output folder the job writes to.</param>
 public sealed record OwedXgpJob(string JobId, string Instance, XgpExportOptions Options, string Folder);
-
-/// <summary>
-/// A Local XGP job the page followed to its terminal result, as its ledger
-/// entry: the page applies it before acknowledging the job.
-/// </summary>
-/// <param name="Instance">The server instance the job ran in.</param>
-/// <param name="Entry">Its ledger entry, ended, with the accounting its terminal result carries.</param>
-public sealed record EndedXgpJob(string Instance, LedgerEntry Entry);

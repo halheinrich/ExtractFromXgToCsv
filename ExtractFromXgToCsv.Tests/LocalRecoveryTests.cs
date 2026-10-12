@@ -66,6 +66,21 @@ public class LocalRecoveryTests : IAsyncLifetime
         return page;
     }
 
+    /// <summary>A reload: the page goes, and its app with it, before a new one opens over the same server and storage.</summary>
+    private async Task<LocalPage> ReloadAsync(LocalPage page, bool reconciled = true)
+    {
+        _pages.Remove(page);
+        await page.DisposeAsync();
+        return Open(reconciled);
+    }
+
+    /// <summary>Restarts the server: a new instance, which every page reaches next.</summary>
+    private async Task RestartAsync()
+    {
+        _server.Restart();
+        _instance = (await LedgerAsync()).Instance;
+    }
+
     /// <summary>The stored numbering record, parsed; null when none is stored.</summary>
     private JsonElement? Record =>
         _storage[NumberingKey] is { } text ? JsonDocument.Parse(text).RootElement : null;
@@ -95,7 +110,7 @@ public class LocalRecoveryTests : IAsyncLifetime
     /// touching none of this browser's storage — into its own folder, so its
     /// files never meet this test's pages' — and awaited to its end.
     /// </summary>
-    private async Task ExportElsewhereAsync(string jobId, LedgerMark? mark)
+    private async Task ExportElsewhereAsync(string jobId, LedgerMark? mark, XgpExportOptions? options = null)
     {
         using var client = _server.Client();
         var run = new ProcessRequest
@@ -103,6 +118,7 @@ public class LocalRecoveryTests : IAsyncLifetime
             FolderPath = _server.InputFolder,
             OutputPath = Path.Combine(_server.OutputFolder, jobId),
             OutputFormat = OutputFormat.Xgp,
+            XgpOptions = options ?? new XgpExportOptions(),
         };
         (await client.PostAsJsonAsync("/api/process/start", new StartRequest(jobId, _instance, mark, run))).EnsureSuccessStatusCode();
         var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
@@ -216,7 +232,7 @@ public class LocalRecoveryTests : IAsyncLifetime
         var run = before.RunAsync();
         await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
 
-        var reloaded = Open();
+        var reloaded = await ReloadAsync(before);
         Assert.Equal(XgpStartBlock.Running, reloaded.StartState.XgpBlock);
         reloaded.WaitForScreen(() =>
         {
@@ -258,7 +274,7 @@ public class LocalRecoveryTests : IAsyncLifetime
         // A reload in the same instance applies the entries again, from the
         // ledger.
         _storage.RefuseWrites = false;
-        var reloaded = Open();
+        var reloaded = await ReloadAsync(page);
         Assert.Equal(2 * _decisions + 1, reloaded.Options.StartNumber);
         Assert.Equal(2, MarkNumber(Record!.Value));
         Assert.Equal(2 * _decisions, LastNumber(Record!.Value));
@@ -304,7 +320,7 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Equal(2 * _decisions, LastNumber(Record!.Value));
         Assert.Equal(2, MarkNumber(Record!.Value));
 
-        var reloaded = Open();
+        var reloaded = await ReloadAsync(page);
         Assert.Equal(2 * _decisions + 1, reloaded.Options.StartNumber);
         Assert.Equal(2, MarkNumber(Record!.Value));
     }
@@ -413,6 +429,241 @@ public class LocalRecoveryTests : IAsyncLifetime
         failing.Stop();
         page.WaitFor(() => page.StartState.XgpBlock is null);
         Assert.Empty(OwedIds(Record!.Value));
+    }
+
+    // ── Ordering across instances ───────────────────────────────────────────
+
+    /// <summary>
+    /// A pass paused across a restart: page A has the old instance's ledger in
+    /// hand — an entry newer than its mark among it — when the server
+    /// restarts and page B applies the new instance's first export. Released,
+    /// A writes nothing over B's numbers or mark: the stored record changed
+    /// since its pass read it, so it takes the changed state and reconciles
+    /// again, and its controls are never set from the old instance's entry.
+    /// </summary>
+    [Fact]
+    public async Task APassPausedAcrossARestart_NeitherOverwritesTheNewerInstancesRecord_NorRollsItsControlsBack()
+    {
+        var a = Open();
+        await a.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        await ExportElsewhereAsync("elsewhere-2", new LedgerMark(_instance, 1),
+            new XgpExportOptions { StartNumber = _decisions + 1 });
+        var paused = _server.Wire.HoldResponse(ProtocolWire.Ledger);
+        var reconciling = a.Home.InvokeAsync(() => a.Panel.OnReconcileNeeded.InvokeAsync());
+        await paused.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        await RestartAsync();
+        var b = Open();
+        await b.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1000" });
+        await b.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        var bsRecord = _storage[NumberingKey];
+        Assert.Equal(999 + _decisions, LastNumber(Record!.Value));
+
+        paused.Release();
+        await reconciling.WaitAsync(NoticeTesting.OperationBound);
+        a.WaitFor(() => a.StartState.Instance == _instance);
+
+        Assert.Equal(bsRecord, _storage[NumberingKey]);
+        Assert.Equal(new LedgerMark(_instance, 1), a.StartState.Mark);
+        Assert.NotEqual(2 * _decisions + 1, a.Options.StartNumber);
+    }
+
+    /// <summary>
+    /// A pass held after reading the stored record, then a change to this
+    /// page's own record in memory alone — the lost export resolved while
+    /// storage refused the write — then the pass released: the pass does not
+    /// write over that change. It writes nothing, reconciles again, and the
+    /// entry it applies then is written with the resolution standing.
+    /// </summary>
+    [Fact]
+    public async Task APassHeldAcrossAChangeToThisPagesRecordInMemory_DoesNotWriteOverTheChange()
+    {
+        _storage[NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 4, 3, ("instance-before", 2),
+            HomeStoragePlan.OwedJob("lost-1", "instance-before", "pos{n}", 5, 3, @"D:\xg\lost"));
+        var page = Open();
+        Assert.Equal(XgpStartBlock.LostExport, page.StartState.XgpBlock);
+        await ExportElsewhereAsync("elsewhere-1", mark: null);
+        var held = _server.Wire.Hold(ProtocolWire.Ledger);
+        var reconciling = page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        await held.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        _storage.RefuseWrites = true;
+        var resolving = page.Home.FindAll(".lost-export-notice button").Single().ClickAsync(new MouseEventArgs());
+        page.WaitFor(() => _storage.RefusedWrites.Contains(NumberingKey));
+        _storage.RefuseWrites = false;
+        held.Release();
+        await reconciling.WaitAsync(NoticeTesting.OperationBound);
+        await resolving.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => page.StartState.XgpBlock is null);
+
+        var record = Record!.Value;
+        Assert.Empty(OwedIds(record));
+        Assert.Equal(1, MarkNumber(record));
+        Assert.Equal(_decisions, LastNumber(record));
+        Assert.Empty(page.Home.FindAll(".lost-export-notice"));
+    }
+
+    /// <summary>
+    /// A stale tab — it last reconciled with the instance before a restart —
+    /// records its owed job before its start: that checkpoint keeps the newer
+    /// instance's stored mark and numbering, rather than writing its own older
+    /// one over them. Its start is then refused, as naming the ended instance.
+    /// </summary>
+    [Fact]
+    public async Task AStaleTabsPreStartWrite_KeepsTheNewerInstancesStoredMark()
+    {
+        var stale = Open();
+        await stale.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        await RestartAsync();
+        var fresh = Open();
+        await fresh.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(new LedgerMark(_instance, 1), fresh.StartState.Mark);
+
+        await stale.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        var record = Record!.Value;
+        Assert.Equal(1, MarkNumber(record));
+        Assert.Equal(_instance, record.GetProperty("mark").GetProperty("instance").GetString());
+        Assert.Equal(2 * _decisions, LastNumber(record));
+        Assert.Contains(_storage.Writes, write => write.Key == NumberingKey && write.Value.Contains("job-3"));
+    }
+
+    /// <summary>
+    /// A result the follower received from an instance that has since ended,
+    /// delivered after newer accounting: it carries no authority of its own,
+    /// so it is not applied over the newer record — it goes through a pass,
+    /// whose ledger is the new instance's — and its job stays owed, a lost
+    /// export, until the user resolves it.
+    /// </summary>
+    [Fact]
+    public async Task AFollowersResultFromAnEndedInstance_DeliveredAfterNewerAccounting_IsNotAppliedOverIt()
+    {
+        var page = Open();
+        _server.Gate.Close();
+        var failing = _server.Wire.Fail(ProtocolWire.Status);
+        var delayed = _server.Wire.HoldResponse(ProtocolWire.Status);
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        _server.Gate.Open();
+        await WaitUntilAsync(async () => (await LedgerAsync()).Entries is [{ Running: false }]);
+        failing.Stop();
+        await delayed.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        await RestartAsync();
+        await ExportElsewhereAsync("elsewhere-1", mark: null, new XgpExportOptions { StartNumber = 500 });
+        var other = Open();
+        var newer = _storage[NumberingKey];
+        Assert.Equal(1, MarkNumber(Record!.Value));
+        Assert.Equal(499 + _decisions, LastNumber(Record!.Value));
+
+        delayed.Release();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => page.StartState.Instance == _instance);
+
+        Assert.Equal(newer, _storage[NumberingKey]);
+        Assert.Equal(["job-1"], OwedIds(Record!.Value));
+        Assert.Equal(XgpStartBlock.LostExport, page.StartState.XgpBlock);
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll(".lost-export-notice")));
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
+        while (!await condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The condition never held.");
+            await Task.Delay(20);
+        }
+    }
+
+    // ── Owed jobs learned from storage ──────────────────────────────────────
+
+    /// <summary>
+    /// Page P2 learns a lost job from storage; page P1 resolves it; P2's next
+    /// readable read no longer holds it, so P2 drops it — another page
+    /// resolved it — and after a restart no lost-export gate appears.
+    /// </summary>
+    [Fact]
+    public async Task AnOwedJobLearnedFromStorage_IsDroppedOnceAnotherPageResolvesIt()
+    {
+        _storage[NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 4, 3, null,
+            HomeStoragePlan.OwedJob("lost-1", "instance-before", "pos{n}", 5, 3, @"D:\xg\lost"));
+        var p2 = Open();
+        Assert.Equal(XgpStartBlock.LostExport, p2.StartState.XgpBlock);
+        var p1 = Open();
+        await p1.Home.FindAll(".lost-export-notice button").Single().ClickAsync(new MouseEventArgs());
+        Assert.Empty(OwedIds(Record!.Value));
+
+        await RestartAsync();
+        await p2.Home.InvokeAsync(() => p2.Panel.OnReconcileNeeded.InvokeAsync());
+        p2.WaitFor(() => p2.StartState.Instance == _instance);
+
+        Assert.Null(p2.StartState.XgpBlock);
+        p2.WaitForScreen(() => Assert.Empty(p2.Home.FindAll(".lost-export-notice")));
+    }
+
+    /// <summary>A refused read establishes nothing: the learned job stays owed, and its gate stays.</summary>
+    [Fact]
+    public async Task ARefusedRead_KeepsAnOwedJobLearnedFromStorage()
+    {
+        _storage[NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 4, 3, null,
+            HomeStoragePlan.OwedJob("lost-1", "instance-before", "pos{n}", 5, 3, @"D:\xg\lost"));
+        var p2 = Open();
+        var p1 = Open();
+        await p1.Home.FindAll(".lost-export-notice button").Single().ClickAsync(new MouseEventArgs());
+
+        _storage.RefuseReads = true;
+        await p2.Home.InvokeAsync(() => p2.Panel.OnReconcileNeeded.InvokeAsync());
+
+        Assert.Equal(XgpStartBlock.LostExport, p2.StartState.XgpBlock);
+        Assert.Single(p2.Home.FindAll(".lost-export-notice"));
+    }
+
+    // ── A start refused on every attempt ────────────────────────────────────
+
+    /// <summary>
+    /// A start refused on its only attempt never ran — here as naming the
+    /// instance a restart ended — so its job is resolved, and no lost-export
+    /// gate appears for it.
+    /// </summary>
+    [Fact]
+    public async Task AStartRefusedOnItsOnlyAttempt_LeavesNoLostExport()
+    {
+        var page = Open();
+        await RestartAsync();
+
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Contains("The server has restarted since this page last checked it",
+            Assert.Single(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error).Content.TextContent);
+        page.WaitFor(() => page.StartState.Instance == _instance);
+        Assert.Null(page.StartState.XgpBlock);
+        Assert.Empty(OwedIds(Record!.Value));
+        page.WaitForScreen(() => Assert.Empty(page.Home.FindAll(".lost-export-notice")));
+    }
+
+    /// <summary>
+    /// An attempt that went unanswered, then a refused one: the first may have
+    /// arrived — a later refusal does not settle it — so the job stays owed,
+    /// and once the page has reconciled with the new instance it is a lost
+    /// export for the user to resolve.
+    /// </summary>
+    [Fact]
+    public async Task AnUnansweredAttemptThenARefusedOne_LeavesTheJobOwed()
+    {
+        var page = Open();
+        _server.Wire.Fail(ProtocolWire.Start, times: 1);
+        var retry = _server.Wire.Hold(ProtocolWire.Start);
+        var run = page.RunAsync();
+        await retry.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await RestartAsync();
+        retry.Release();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => page.StartState.Instance == _instance);
+
+        Assert.Equal(["job-1"], OwedIds(Record!.Value));
+        Assert.Equal(XgpStartBlock.LostExport, page.StartState.XgpBlock);
     }
 
     // ── A record that cannot be read ────────────────────────────────────────

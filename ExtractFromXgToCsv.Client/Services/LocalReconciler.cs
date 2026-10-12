@@ -16,20 +16,24 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <b>When.</b> When the page loads (<see cref="StartAsync"/>), when the panel
 /// asks — its job unknown to the server, its start refused or never
 /// answered, its XGP job ended — and on its own: again after a failed attempt,
-/// and while an XGP job runs or an owed one is unresolved. Until a
-/// reconciliation succeeds the state is <i>checking</i>, never <i>nothing
-/// outstanding</i>.
+/// while an XGP job runs or an owed one is unresolved, and at once when the
+/// state a pass started from changed under it. Until a reconciliation
+/// succeeds the state is <i>checking</i>, never <i>nothing outstanding</i>.
 /// </para>
 /// <para>
-/// <b>How.</b> The record is read afresh, then the server's ledger: each ended
-/// entry newer than what the page applied is applied, in order — the controls
-/// follow it control by control, and the record takes it in one checkpoint
-/// (numbering, mark and owed together). An owed job of this instance with no
-/// entry is settled: retired resolves it; admitted means its start arrived
-/// after the ledger read, so it is followed and applied. An owed job of an
-/// earlier instance cannot be recovered: it blocks XGP until the user resolves
-/// it (<see cref="ResolveLostAsync"/>). A read of the ledger alone never
-/// resolves an owed job.
+/// <b>How.</b> A pass reads the stored record first, then the server's
+/// ledger; that order is its authority. Each ended entry the record does not
+/// hold is applied, in order, in one checkpoint each (numbering, mark and owed
+/// together) — an entry of another instance than the record's mark only from
+/// the state the pass started with, while it stands (<see cref="XgpNumberingKeeper.ApplyAsync"/>).
+/// The controls then follow the record, if it took anything. A result the
+/// panel's follower received carries no authority of its own: it is applied
+/// through a pass (<see cref="ApplyEndedAsync"/>). An owed job of this
+/// instance with no entry is settled: retired resolves it; admitted means its
+/// start arrived after the ledger read, so it is followed and applied. An owed
+/// job of an earlier instance cannot be recovered: it blocks XGP until the
+/// user resolves it (<see cref="ResolveLostAsync"/>). A read of the ledger
+/// alone never resolves an owed job.
 /// </para>
 /// <para>
 /// Not thread-safe: Blazor WebAssembly runs it on one thread, and its awaits
@@ -42,14 +46,9 @@ internal sealed class LocalReconciler
     private readonly LocalJobsClient _client;
     private readonly XgpNumberingKeeper _numbering;
     private readonly LocalJobTiming _timing;
-    private readonly Func<XgpExportCommit, Task> _followControls;
+    private readonly Func<LedgerEntry?, Task> _followRecord;
     private readonly ILogger _logger;
     private readonly CancellationToken _lifetime;
-
-    // The newest entry the page's controls have followed. Apart from the
-    // record's mark: another page may have taken entries into the stored
-    // record that this page's controls have not followed.
-    private LedgerMark? _controlsMark;
 
     private Task? _pass;
     private bool _again;
@@ -63,26 +62,30 @@ internal sealed class LocalReconciler
     /// <param name="client">The protocol's wire.</param>
     /// <param name="numbering">Home's numbering record.</param>
     /// <param name="timing">How often to follow and retry.</param>
-    /// <param name="followControls">Home's per-control rule, given each applied entry's accounting.</param>
+    /// <param name="followRecord">
+    /// Home's controls following the record: after each entry the record took,
+    /// given that entry, and after a pass, given the entry the record's mark
+    /// names when the pass's ledger holds it.
+    /// </param>
     /// <param name="logger">Logs a reconciliation that failed for any reason but the server's absence.</param>
     /// <param name="lifetime">The page's lifetime: nothing runs after it ends.</param>
     public LocalReconciler(
         LocalJobsClient client,
         XgpNumberingKeeper numbering,
         LocalJobTiming timing,
-        Func<XgpExportCommit, Task> followControls,
+        Func<LedgerEntry?, Task> followRecord,
         ILogger logger,
         CancellationToken lifetime)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(numbering);
         ArgumentNullException.ThrowIfNull(timing);
-        ArgumentNullException.ThrowIfNull(followControls);
+        ArgumentNullException.ThrowIfNull(followRecord);
         ArgumentNullException.ThrowIfNull(logger);
         _client = client;
         _numbering = numbering;
         _timing = timing;
-        _followControls = followControls;
+        _followRecord = followRecord;
         _logger = logger;
         _lifetime = lifetime;
     }
@@ -102,16 +105,8 @@ internal sealed class LocalReconciler
     /// <summary>Raised after <see cref="State"/> or <see cref="LostJobs"/> may have changed.</summary>
     public event Action? Changed;
 
-    /// <summary>
-    /// Begins reconciling, for a page that has just restored the record: the
-    /// controls stand on the record's numbering, so they have followed its
-    /// mark.
-    /// </summary>
-    public Task StartAsync()
-    {
-        _controlsMark = _numbering.Record.Mark;
-        return ReconcileAsync();
-    }
+    /// <summary>Begins reconciling, for a page that has just restored the record.</summary>
+    public Task StartAsync() => ReconcileAsync();
 
     /// <summary>Reconciles now, or once more after the pass under way.</summary>
     public Task ReconcileAsync()
@@ -133,20 +128,27 @@ internal sealed class LocalReconciler
     public async Task RecordOwedAsync(OwedXgpJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
-        await _numbering.CheckpointAsync(record => record.Owing(job), State.Instance);
+        await _numbering.OweAsync(job);
         Publish(State with { XgpBlock = XgpStartBlock.Checking });
     }
 
     /// <summary>
-    /// Applies the ledger entry of an XGP job the page followed to its end,
-    /// then reconciles; the page acknowledges the job after this.
+    /// Resolves an owed job whose start never ran — every attempt the page
+    /// sent was refused, or Stop settled its identity as retired — then
+    /// reconciles.
     /// </summary>
-    public async Task ApplyEndedAsync(EndedXgpJob ended)
+    public async Task ResolveNeverStartedAsync(string jobId)
     {
-        ArgumentNullException.ThrowIfNull(ended);
-        await ApplyAsync(ended.Instance, ended.Entry);
+        await _numbering.ResolveAsync(jobId);
         await ReconcileAsync();
     }
+
+    /// <summary>
+    /// An XGP job the page followed to its terminal result: its result carries
+    /// no authority of its own, so its entry is applied by a pass, from the
+    /// ledger, like any other. The page acknowledges the job after this.
+    /// </summary>
+    public Task ApplyEndedAsync() => ReconcileAsync();
 
     /// <summary>
     /// The user's deliberate resolution of a job lost with an earlier
@@ -155,7 +157,7 @@ internal sealed class LocalReconciler
     /// </summary>
     public async Task ResolveLostAsync(string jobId)
     {
-        await _numbering.CheckpointAsync(record => record.Resolving(jobId), State.Instance);
+        await _numbering.ResolveAsync(jobId);
         await ReconcileAsync();
     }
 
@@ -202,7 +204,9 @@ internal sealed class LocalReconciler
 
     private async Task PassAsync()
     {
-        await _numbering.RefreshAsync(State.Instance);
+        // The stored record first, then the server: the instance the server
+        // names was live after the record was read.
+        var start = await _numbering.BeginPassAsync();
 
         if (await TryAsync(() => _client.ReadLedgerAsync(_lifetime), State.Instance) is not { } ledger)
             return;
@@ -218,7 +222,25 @@ internal sealed class LocalReconciler
         }
 
         foreach (var entry in ledger.Entries.Where(entry => !entry.Running))
-            await ApplyAsync(instance, entry);
+        {
+            if (_numbering.Record.Holds(instance, entry))
+                continue;
+            switch (await _numbering.ApplyAsync(start, instance, entry))
+            {
+                case EntryApplied.Taken:
+                    // The record took it, so the controls follow it.
+                    await _followRecord(entry);
+                    break;
+                case EntryApplied.StateChanged:
+                    // Nothing was written, and the changed state was taken:
+                    // reconcile again from there.
+                    _again = true;
+                    return;
+                case EntryApplied.Unreadable:
+                    Publish(new LocalStartState(instance, _numbering.Record.Mark, XgpStartBlock.UnreadableRecord));
+                    return;
+            }
+        }
 
         var running = ledger.Entries.Any(entry => entry.Running);
         var unresolved = false;
@@ -237,10 +259,16 @@ internal sealed class LocalReconciler
             if (outcome is null)
                 return;
             if (outcome == Settled.Retired)
-                await _numbering.CheckpointAsync(record => record.Resolving(job.JobId), instance);
+                await _numbering.ResolveAsync(job.JobId);
             else
                 unresolved = true;
         }
+
+        // The controls follow what the record took from storage too — another
+        // page's accounting — named by the entry its mark names, where this
+        // ledger holds it.
+        var mark = _numbering.Record.Mark;
+        await _followRecord(ledger.Entries.FirstOrDefault(entry => mark == new LedgerMark(instance, entry.Number)));
 
         var lost = _numbering.Record.Owed.Any(job => job.Instance != instance);
         Publish(new LocalStartState(
@@ -266,27 +294,6 @@ internal sealed class LocalReconciler
             SettleOutcome.Admitted => Settled.Admitted,
             _ => Settled.OtherInstance,
         };
-
-    /// <summary>
-    /// One ledger entry, applied: the controls follow it if they have not, and
-    /// the record takes it in one checkpoint if applying it changes the record
-    /// — whether it does is the record's own rule
-    /// (<see cref="XgpNumberingRecord.Applying"/>), so an entry at or before
-    /// the mark writes nothing unless its job is still owed.
-    /// </summary>
-    private async Task ApplyAsync(string instance, LedgerEntry entry)
-    {
-        var mark = new LedgerMark(instance, entry.Number);
-        if (mark.IsNewerThan(_controlsMark, instance))
-        {
-            if (entry.Commit is { } commit)
-                await _followControls(commit);
-            _controlsMark = mark;
-        }
-
-        if (!_numbering.Record.Applying(instance, entry).Equals(_numbering.Record))
-            await _numbering.CheckpointAsync(current => current.Applying(instance, entry), instance);
-    }
 
     /// <summary>
     /// A request to the server; <see langword="null"/> when it could not be

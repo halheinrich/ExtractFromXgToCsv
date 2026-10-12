@@ -241,6 +241,7 @@
                         StartState="_reconciler.State"
                         OnXgpJobStarting="_reconciler.RecordOwedAsync"
                         OnXgpJobEnded="_reconciler.ApplyEndedAsync"
+                        OnXgpJobNeverStarted="_reconciler.ResolveNeverStartedAsync"
                         OnReconcileNeeded="_reconciler.ReconcileAsync" />
     }
     else
@@ -357,7 +358,7 @@
     {
         _documentStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
         _numbering = new XgpNumberingKeeper(new XgpNumberingStore(Settings));
-        _reconciler = new LocalReconciler(Jobs, _numbering, Timing, FollowAppliedExportAsync, Logger, _lifetime.Token);
+        _reconciler = new LocalReconciler(Jobs, _numbering, Timing, FollowRecordAfterPassAsync, Logger, _lifetime.Token);
         _reconciler.Changed += () => _ = InvokeAsync(StateHasChanged);
 
         // Both owners outlive this page and change while no gesture of this
@@ -474,6 +475,7 @@
             _xgpNextNumber = numbering.LastNumber + 1;
             _xgpSuffixLength = numbering.SuffixLength;
         }
+        _controlsFollowed = _numbering.Record.Numbering;
         var savedAnonymize = await ReadSettingAsync("xg_xgpAnonymize");
         _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
@@ -639,37 +641,48 @@
     /// the controls: the user may have changed the pattern or the numbers while
     /// the export ran, and the files were named by what it captured. It is one
     /// checkpoint of the numbering record — the whole document, from a fresh
-    /// read, in one write; a refused write leaves it recorded in this page. The
-    /// controls follow it control by control (<see cref="FollowsExport"/>): a
-    /// newer choice in one stands.
+    /// read, in one write; a refused write leaves it recorded in this page.
+    /// The controls then follow the record (<see cref="FollowRecord"/>).
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
-        if (commit.Count <= 0) return;
-
-        if (FollowsExport(commit.Options))
-        {
-            _xgpNextNumber = commit.NextNumber;
-            RebuildXgpOptions();
-        }
-
-        await _numbering.CheckpointAsync(record => record.WithCommit(commit), currentInstance: null);
+        await _numbering.RecordExportAsync(commit);
+        FollowRecord(commit.Options);
         StateHasChanged();
     }
 
-    /// <summary>
-    /// The controls' half of applying a Local XGP ledger entry — the page's
-    /// own job's, or one recovered: the next number follows it by the same
-    /// control-by-control rule. The record's half is the reconciliation's.
-    /// </summary>
-    private Task FollowAppliedExportAsync(XgpExportCommit commit)
+    // The controls' half after a Local reconciliation pass: they follow the
+    // record, given the entry its mark names when the pass's ledger holds it.
+    private Task FollowRecordAfterPassAsync(LedgerEntry? newest)
     {
-        if (commit.Count > 0 && FollowsExport(commit.Options))
-        {
-            _xgpNextNumber = commit.NextNumber;
-            RebuildXgpOptions();
-        }
+        FollowRecord(newest?.Commit?.Options);
         return Task.CompletedTask;
+    }
+
+    // What the controls last followed: the record's numbering when they were
+    // restored from it or last followed it.
+    private XgpNumbering? _controlsFollowed;
+
+    /// <summary>
+    /// The controls follow the record (SPEC-notices.md §7.5): when its
+    /// numbering has moved since they last did — it took an export's
+    /// accounting — the next number follows it, unless the user has changed
+    /// the next number or the pattern since that export started
+    /// (<see cref="FollowsExport"/>). They follow only what the record took:
+    /// an export that committed nothing moved nothing, which is the record's
+    /// own rule (<see cref="XgpNumberingRecord.WithCommit"/>).
+    /// </summary>
+    /// <param name="exportStartedFrom">The options the export the record took started from; <see langword="null"/> when unknown.</param>
+    private void FollowRecord(XgpExportOptions? exportStartedFrom)
+    {
+        var numbering = _numbering.Record.Numbering;
+        if (numbering == _controlsFollowed)
+            return;
+        _controlsFollowed = numbering;
+        if (numbering is null || exportStartedFrom is null || !FollowsExport(exportStartedFrom))
+            return;
+        _xgpNextNumber = numbering.LastNumber + 1;
+        RebuildXgpOptions();
     }
 
     // The lost-export notice's action: the user's deliberate resolution.
