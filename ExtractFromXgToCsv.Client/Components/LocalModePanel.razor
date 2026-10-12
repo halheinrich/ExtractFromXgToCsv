@@ -3,8 +3,12 @@
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
 @using XgFilter_Razor
+@implements IDisposable
 @inject SettingsStorage Settings
 @inject HttpClient Http
+@inject LocalJobsClient Jobs
+@inject LocalJobTiming Timing
+@inject IJobIdentities Identities
 
 @* Panel root. It exists to carry the busy marker: everything the user can
    point at while a run is in flight sits inside it, so one class here dresses
@@ -75,7 +79,7 @@
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || FilterInEffect is null || XgpRunBlocked)">
+                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || FilterInEffect is null || XgpRunBlocked || !StartState.Allows(OutputFormat))">
             Run
         </button>
         @if (_busy)
@@ -99,6 +103,14 @@
         else if (XgpRunBlocked)
         {
             <small class="text-muted">Fix the XGP export options first</small>
+        }
+        else if (!_busy && StartHint is { } startHint)
+        {
+            @* What the page knows of the server (SPEC-notices.md §7.5): every
+               start names the instance it reconciled with, and an XGP start
+               waits while the page checks, while an export runs, or while a
+               lost export is unresolved. *@
+            <small class="text-muted" id="startHint">@startHint</small>
         }
     </div>
 
@@ -268,16 +280,50 @@
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
 
     /// <summary>
-    /// Raised with an XGP run's commit — the files it wrote and the options it
-    /// captured — when the run ends, completed, cancelled or failed, whatever
-    /// the panel shows: the host owns the numbering those files used.
-    /// EditorRequired: a silently splatted binding here would lose the
-    /// accounting.
+    /// What the page knows, for starting a run (SPEC-notices.md §7.5): the
+    /// server instance every start names, and for XGP the page's mark, or why
+    /// no XGP start may be sent now. The host's reconciliation owns it.
     /// </summary>
-    [Parameter, EditorRequired] public EventCallback<XgpExportCommit> OnXgpExported { get; set; }
+    [Parameter, EditorRequired] public LocalStartState StartState { get; set; } = LocalStartState.Checking;
+
+    /// <summary>
+    /// Raised with an XGP job the panel is about to start, before its start is
+    /// sent: the host records it as owed in its numbering record — the panel
+    /// never writes the record — and the start waits for it. EditorRequired: a
+    /// silently splatted binding would leave a job nobody could find again.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback<OwedXgpJob> OnXgpJobStarting { get; set; }
+
+    /// <summary>
+    /// Raised with an XGP job's ended ledger entry when the panel has taken its
+    /// terminal result — completed, cancelled or failed, whatever the panel
+    /// shows: the host applies its accounting, and the panel acknowledges the
+    /// job only after. EditorRequired: a silently splatted binding would lose
+    /// the accounting.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback<EndedXgpJob> OnXgpJobEnded { get; set; }
+
+    /// <summary>
+    /// Raised when the host must reconcile with the server: a start refused or
+    /// never answered, or a job the server no longer holds. EditorRequired: a
+    /// silently splatted binding would leave a job owed and nobody looking.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback OnReconcileNeeded { get; set; }
 
     private bool XgpRunBlocked =>
         OutputFormat == OutputFormat.Xgp && !XgpOptions.TryValidate(out _);
+
+    // Why the start the current format needs cannot be sent now; null when it can.
+    private string? StartHint =>
+        StartState.Instance is null ? "Checking the server…"
+        : OutputFormat != OutputFormat.Xgp ? null
+        : StartState.XgpBlock switch
+        {
+            XgpStartBlock.Checking => "Checking for earlier XGP exports…",
+            XgpStartBlock.Running => "An XGP export is running; wait for it to finish.",
+            XgpStartBlock.LostExport => "Resolve the lost XGP export above first.",
+            _ => null,
+        };
 
     // Busy marker for the panel root. It rides _busy — the state the panel
     // already keeps, unchanged — so every window that flag covers gets the
@@ -291,6 +337,16 @@
     private ProcessingProgress? _progress = null;
     private string? _currentJobId = null;
     private bool _busy = false;
+
+    // Ends the start of the run in hand when Stop is pressed before the server
+    // has answered it; null while no start is being sent.
+    private CancellationTokenSource? _abandonStart;
+
+    // This panel's lifetime: a run it is following stops when it goes.
+    private readonly CancellationTokenSource _lifetime = new();
+
+    // Whether the persistent-failure run error is up for the run in hand.
+    private bool _stillOwedShown;
 
     // The failed run standing on screen, as its message; null when none is.
     // The run error notice's whole state — presence, text and dismissal are
@@ -449,14 +505,25 @@
         _runError = null;
     }
 
+    // Stop cancels the job once the server has admitted it; before that, it
+    // stops sending the start. A start that may yet have arrived is the host's
+    // to find, by reconciling.
     private async Task StopLocalAsync()
     {
-        if (_currentJobId is not null)
+        if (_currentJobId is { } jobId)
         {
-            try { await Http.PostAsync($"/api/process/{_currentJobId}/cancel", null); }
-            catch { /* ignore */ }
+            try { await Jobs.CancelAsync(jobId); }
+            catch (Exception ex) when (IsUnreachable(ex)) { /* the run goes on; Stop can be pressed again */ }
+        }
+        else
+        {
+            _abandonStart?.Cancel();
         }
     }
+
+    // Cancelled, not disposed: a run still in flight reads its token, and
+    // nothing registers on it but the linked sources each run disposes.
+    public void Dispose() => _lifetime.Cancel();
 
     private async Task ExitAsync()
     {
@@ -464,12 +531,23 @@
         catch { /* server shuts down, request may not complete */ }
     }
 
+    /// <summary>
+    /// One Local run (SPEC-notices.md §7.5): its identity minted before
+    /// anything is sent, an XGP job recorded as owed by the host before its
+    /// start, the start sent — and retried under the same identity — until the
+    /// server answers, the job followed to its terminal result, its ended XGP
+    /// entry applied by the host, and only then the job acknowledged.
+    /// </summary>
     private async Task RunLocalAsync()
     {
-        // The gate guarantees a filter in effect; a stale click past it has
-        // nothing to run.
-        if (FilterInEffect is not { } filter) return;
+        // The gate guarantees a filter in effect and a start the page may
+        // send; a stale click past it has nothing to run.
+        if (FilterInEffect is not { } filter
+            || StartState.Instance is not { } instance
+            || !StartState.Allows(OutputFormat))
+            return;
 
+        var xgp = OutputFormat == OutputFormat.Xgp;
         var run = new RunInputs(_visit, filter, filter.Build().IsEmpty, _outputPath);
         _run = run;
         _busy = true; _runError = null;
@@ -479,67 +557,81 @@
         _lastRun = null;
         StateHasChanged();
 
-        var request = new ProcessRequest
+        // What a retry repeats: the identity and the whole request, so the
+        // server can tell a repeat from a different run.
+        var jobId = Identities.Mint();
+        var start = new StartRequest(jobId, instance, xgp ? StartState.Mark : null, new ProcessRequest
         {
             FolderPath = FolderPath,
             OutputPath = run.OutputPath,
             Filters = run.Filter,
             OutputFormat = OutputFormat,
             XgpOptions = XgpOptions,
-            Anonymize = XgpAnonymize
-        };
+            Anonymize = XgpAnonymize,
+        });
 
         // The run's outcome, held back until it is judged: the terminal
         // snapshot, or the client's own failure to start or follow the job.
         ProcessingProgress? terminal = null;
         string? failure = null;
+        int? ledgerNumber = null;
+        var reconcile = false;
 
+        using var abandon = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _abandonStart = abandon;
         try
         {
-            var startResponse = await Http.PostAsJsonAsync("/api/process/start", request);
-            startResponse.EnsureSuccessStatusCode();
+            // An XGP job is owed from before its start is sent, so a page that
+            // loses track of it can find it again.
+            if (xgp)
+                await OnXgpJobStarting.InvokeAsync(new OwedXgpJob(jobId, instance, XgpOptions, run.OutputPath));
 
-            var startResult = await startResponse.Content
-                .ReadFromJsonAsync<StartResult>();
-            _currentJobId = startResult?.JobId;
-
-            if (_currentJobId is null)
+            switch (await StartAsync(start, abandon.Token))
             {
-                failure = "Failed to start job — no jobId returned.";
-            }
-            else
-            {
-                while (true)
-                {
-                    await Task.Delay(1000);
-
-                    var statusResponse = await Http.GetAsync($"/api/process/{_currentJobId}/status");
-                    if (!statusResponse.IsSuccessStatusCode) break;
-
-                    var p = await statusResponse.Content
-                        .ReadFromJsonAsync<ProcessingProgress>();
-
-                    if (p is null) continue;
-                    if (p.Complete)
+                case StartAnswer.Admitted admitted:
+                    ledgerNumber = admitted.LedgerNumber;
+                    _currentJobId = jobId;
+                    terminal = await FollowAsync(jobId);
+                    if (terminal is null && !_lifetime.IsCancellationRequested)
                     {
-                        terminal = p;
-                        break;
+                        failure = UnknownJobMessage;
+                        reconcile = true;
                     }
-
-                    // The running job's own progress, shown with its Stop
-                    // whatever has changed on screen since it started.
-                    _progress = p;
-                    StateHasChanged();
-                }
+                    break;
+                case StartAnswer.Refused refused:
+                    failure = RefusedMessage(refused.Reason);
+                    reconcile = true;
+                    break;
+                default:
+                    // Stopped before the server answered: the start may yet
+                    // have arrived, which the host finds by reconciling.
+                    reconcile = xgp;
+                    break;
             }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // The panel has gone, and with it everything its run would show.
+            return;
         }
         catch (Exception ex)
         {
             failure = $"Error: {ex.Message}";
+            reconcile = xgp;
         }
+        finally
+        {
+            _abandonStart = null;
+        }
+
+        // The panel has gone, and with it everything its run would show; the
+        // job stays owed, for the page that comes next to find.
+        if (_lifetime.IsCancellationRequested)
+            return;
 
         _busy = false;
         _currentJobId = null;
+        _stillOwedShown = false;
 
         // Judge before publishing: the outcome is shown only while the run's
         // source visit is the current one and the filter values on screen are
@@ -567,18 +659,156 @@
             : null;
         StateHasChanged();
 
-        // The job's own accounting, whatever is on screen: the commit an XGP
-        // run's terminal snapshot carries, taken from the run's record —
-        // completed, cancelled and failed alike, since a failed run's files
-        // were written too. Only an XGP run carries one.
-        if (terminal?.XgpCommit is { } commit)
+        // The job's own accounting, whatever is on screen (§7.2): an XGP job's
+        // ended ledger entry — completed, cancelled and failed alike, since a
+        // failed run's files were written too — is applied by the host, and
+        // the job is acknowledged only after.
+        if (terminal is not null)
         {
-            await OnXgpExported.InvokeAsync(commit);
+            if (xgp && ledgerNumber is { } number)
+                await OnXgpJobEnded.InvokeAsync(new EndedXgpJob(
+                    instance, new LedgerEntry(number, jobId, Running: false, terminal.XgpCommit)));
+            await AcknowledgeAsync(jobId);
+        }
+
+        if (reconcile)
+            await OnReconcileNeeded.InvokeAsync();
+    }
+
+    /// <summary>
+    /// Sends <paramref name="start"/> until the server answers — admitted or
+    /// refused — retrying a request that could not be made under the same
+    /// identity, so a lost response finds the same job and a repeat never
+    /// runs twice. A failure that persists shows as the run error, saying the
+    /// result is still owed, and the start goes on.
+    /// </summary>
+    /// <returns>The answer; <see langword="null"/> when Stop ended the start first.</returns>
+    private async Task<StartAnswer?> StartAsync(StartRequest start, CancellationToken abandon)
+    {
+        for (var failures = 0; ; )
+        {
+            try
+            {
+                var answer = await Jobs.StartAsync(start, abandon);
+                ContactReturned();
+                return answer;
+            }
+            catch (OperationCanceledException) when (abandon.IsCancellationRequested)
+            {
+                return null;
+            }
+            catch (Exception ex) when (IsUnreachable(ex))
+            {
+                StillOwedAfter(++failures);
+            }
+
+            try
+            {
+                await Task.Delay(Timing.RetryDelay, abandon);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
         }
     }
 
-    private class StartResult
+    /// <summary>
+    /// Follows the job until its terminal result, retrying any status read
+    /// that fails. A failure that persists shows as the run error, saying the
+    /// result is still owed, and following goes on; it never ends quietly.
+    /// </summary>
+    /// <returns>The terminal snapshot; <see langword="null"/> when the server does not hold the job, or the panel has gone.</returns>
+    private async Task<ProcessingProgress?> FollowAsync(string jobId)
     {
-        public string? JobId { get; set; }
+        var failures = 0;
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(failures == 0 ? Timing.PollInterval : Timing.RetryDelay, _lifetime.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+
+            ProcessingProgress? snapshot;
+            try
+            {
+                snapshot = await Jobs.ReadStatusAsync(jobId, _lifetime.Token);
+            }
+            catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
+            {
+                StillOwedAfter(++failures);
+                continue;
+            }
+            failures = 0;
+            ContactReturned();
+
+            if (snapshot is null || snapshot.Complete)
+                return snapshot;
+
+            // The running job's own progress, shown with its Stop whatever has
+            // changed on screen since it started.
+            _progress = snapshot;
+            StateHasChanged();
+        }
     }
+
+    // The persistent-failure run error: shown once failures reach the
+    // threshold, and taken down when contact returns, unless the user has
+    // closed it already.
+    private void StillOwedAfter(int failures)
+    {
+        if (failures != Timing.FailuresBeforeError)
+            return;
+        _runError = StillOwedMessage;
+        _stillOwedShown = true;
+        StateHasChanged();
+    }
+
+    private void ContactReturned()
+    {
+        if (!_stillOwedShown)
+            return;
+        _stillOwedShown = false;
+        if (_runError == StillOwedMessage)
+            _runError = null;
+        StateHasChanged();
+    }
+
+    // The page that started the job acknowledges it once it has taken the
+    // terminal result. A lost acknowledgement is harmless: the server keeps
+    // the result until its instance ends, and a replay changes nothing.
+    private async Task AcknowledgeAsync(string jobId)
+    {
+        try { await Jobs.AcknowledgeAsync(jobId, _lifetime.Token); }
+        catch (Exception ex) when (IsUnreachable(ex) || ex is OperationCanceledException) { }
+    }
+
+    // A request that could not be made or answered: retried, never a result.
+    private static bool IsUnreachable(Exception ex) =>
+        ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException;
+
+    private const string StillOwedMessage =
+        "Can't reach the server. This run's result is still owed — still trying…";
+
+    private const string UnknownJobMessage =
+        "The server no longer has this run — it may have restarted — so its result can't be shown.";
+
+    // The page says why a refused start started nothing.
+    private static string RefusedMessage(RefusalReason reason) => reason switch
+    {
+        RefusalReason.OtherInstance =>
+            "The server has restarted since this page last checked it, so it refused the run. The page is checking again; run it once that's done.",
+        RefusalReason.XgpRunning =>
+            "Another XGP export is running, so the server refused this one. Run it again once that one has finished.",
+        RefusalReason.StaleMark =>
+            "Another XGP export finished since this page last counted, so the server refused this one. The numbering is being brought up to date; check Next number, then run again.",
+        RefusalReason.Retired =>
+            "The server refused the run: it had already been given up as never started. Run again to start a new one.",
+        _ =>
+            "The server refused the run: its identity was already used for a different run.",
+    };
 }

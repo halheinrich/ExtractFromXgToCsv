@@ -13,21 +13,25 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Local mode's committed accounting reaching Home (halheinrich/backgammon#374,
-/// <c>SPEC-notices.md</c> §7.1–§7.2): the commit an XGP run's terminal
-/// snapshot carries — completed, cancelled or failed — is handed to Home's
-/// one accounting handler, which persists the numbering from the options the
-/// run captured and never overwrites a newer choice in its controls.
+/// Committed accounting reaching Home's numbering record
+/// (halheinrich/backgammon#374 and #397, <c>SPEC-notices.md</c> §7.1, §7.2
+/// and §7.5): a Local XGP run's ended ledger entry — completed, cancelled or
+/// failed — is applied in one checkpoint, from the options the run captured,
+/// and the controls follow it control by control, so a newer choice in them
+/// stands; a Web download's commit reaches the same record at its hand-off.
 /// <para>
-/// Storage is planned: what Home persists is the subject. Each run goes
+/// Storage is planned: what Home records is the subject. Each run goes
 /// through the real page, the real panel and a stub server answering the
-/// terminal snapshot the job runner would build.
+/// terminal snapshot the job runner would build; the job's identity is the
+/// test's (<see cref="SequentialJobIdentities"/>), so the owed job's place in
+/// the record can be stated.
 /// </para>
 /// </summary>
 public class HomeXgpAccountingTests : BunitContext
 {
     private const string Folder = @"D:\xg\matches";
     private const string OutputFolder = @"D:\xg\positions";
+    private const string Instance = CapturingProcessHandler.Instance;
 
     private static readonly XgpExportOptions DefaultOptions = new();
 
@@ -46,11 +50,29 @@ public class HomeXgpAccountingTests : BunitContext
         });
         Storage.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Stored(OutputFolder));
         Storage.ExpectFilterPanelMount();
+        Storage.ExpectLocalReconcile();
         return processing;
     }
 
     /// <summary>
-    /// The one checkpoint Home's handler makes for an export ending at
+    /// The record's part in the page's first Local XGP run, <c>job-1</c>,
+    /// started under the default options: owed before its start, then its
+    /// entry applied — the numbering ending at <paramref name="lastNumber"/>,
+    /// or none for an export that committed nothing, and the mark at the
+    /// instance's first entry.
+    /// </summary>
+    private void ExpectTheRunsBookkeeping(int? lastNumber)
+    {
+        var owing = "{\"version\":1,\"owed\":["
+            + HomeStoragePlan.OwedJob("job-1", Instance, "pos{n}", 1, 3, OutputFolder) + "]}";
+        var applied = lastNumber is { } last
+            ? HomeStoragePlan.NumberingDocument("pos{n}", last, 3, (Instance, 1))
+            : $"{{\"version\":1,\"mark\":{{\"instance\":\"{Instance}\",\"number\":1}},\"owed\":[]}}";
+        Storage.ExpectXgpRunBookkeeping(before: null, owing, applied);
+    }
+
+    /// <summary>
+    /// The one checkpoint Home's handler makes for a Web export ending at
     /// <paramref name="lastNumber"/>: a fresh read of the record, then the
     /// whole document in one write.
     /// </summary>
@@ -78,7 +100,7 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 1),
         });
         var cut = this.RenderHome();
-        ExpectTheNumberingPersisted("pos{n}", lastNumber: 1, suffixLength: 3);
+        ExpectTheRunsBookkeeping(lastNumber: 1);
 
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
@@ -100,7 +122,7 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 3),
         });
         var cut = this.RenderHome();
-        ExpectTheNumberingPersisted("pos{n}", lastNumber: 3, suffixLength: 3);
+        ExpectTheRunsBookkeeping(lastNumber: 3);
 
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
@@ -126,6 +148,7 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 2),
         });
         var cut = this.RenderHome();
+        ExpectTheRunsBookkeeping(lastNumber: 2);
         processing.HoldStatus();
         var run = cut.RunButton().ClickAsync(new MouseEventArgs());
         await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
@@ -133,7 +156,6 @@ public class HomeXgpAccountingTests : BunitContext
         await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
         Assert.Equal(50, PanelOptions(cut).StartNumber);
 
-        ExpectTheNumberingPersisted("pos{n}", lastNumber: 2, suffixLength: 3);
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
@@ -166,13 +188,13 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 2),
         });
         var cut = this.RenderHome();
+        ExpectTheRunsBookkeeping(lastNumber: 2);
         processing.HoldStatus();
         var run = cut.RunButton().ClickAsync(new MouseEventArgs());
         await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         await cut.Find("#xgpSuffixLength").InputAsync(new ChangeEventArgs { Value = "4" });
 
-        ExpectTheNumberingPersisted("pos{n}", lastNumber: 2, suffixLength: 3);
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
@@ -186,11 +208,12 @@ public class HomeXgpAccountingTests : BunitContext
 
     /// <summary>
     /// The zero-count guard: an export that committed nothing changes no
-    /// number and persists nothing — the storage plan expects no write, so
-    /// any would fail it.
+    /// number. Its entry is still applied — the mark moves to it and the job
+    /// is no longer owed, in the one checkpoint — but the record holds no
+    /// numbering, and the controls stand.
     /// </summary>
     [Fact]
-    public async Task ARunThatCommittedNothing_ChangesNoNumber_AndPersistsNothing()
+    public async Task ARunThatCommittedNothing_ChangesNoNumber()
     {
         ServerAnswering(new ProcessingProgress
         {
@@ -199,6 +222,7 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 0),
         });
         var cut = this.RenderHome();
+        ExpectTheRunsBookkeeping(lastNumber: null);
 
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 

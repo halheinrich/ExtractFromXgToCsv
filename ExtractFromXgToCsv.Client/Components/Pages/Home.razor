@@ -3,6 +3,7 @@
 @using XgFilter_Razor
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
+@using Microsoft.Extensions.Logging
 @page "/"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
 @implements IDisposable
@@ -10,6 +11,9 @@
 @inject FilterSetup FilterSetup
 @inject BrowserStorageCondition StorageCondition
 @inject SettingsStorage Settings
+@inject LocalJobsClient Jobs
+@inject LocalJobTiming Timing
+@inject ILogger<Home> Logger
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
 
@@ -94,6 +98,31 @@
 
 @if (_outputFormat == OutputFormat.Xgp)
 {
+    @* A Local XGP export lost with an earlier server instance
+       (SPEC-notices.md §7.5): nothing still holds its accounting, and its
+       files may be on disk. A gate reason — XGP export is blocked until the
+       user resolves it — so not dismissible (§4), and assertive. It names the
+       export from what the record captured, shows this browser's last number
+       as information only, and carries the user's deliberate resolution as
+       its action. No number is inferred from file names. *@
+    @foreach (var lost in _reconciler.LostJobs)
+    {
+        <Notice class="lost-export-notice mb-3" style="max-width:800px"
+                Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive">
+            <div>
+                An earlier XGP export didn't report back before the server stopped: pattern
+                <code>@lost.Options.NamePattern</code>, numbered from @lost.Options.StartNumber,
+                into <code>@lost.Folder</code>. It may have written files there; existing
+                files are never overwritten.
+            </div>
+            <div class="small mt-1">
+                For information: @LastCountedLine
+            </div>
+            <button class="btn btn-sm btn-outline-dark mt-2" @onclick="() => ResolveLostAsync(lost.JobId)">
+                I've checked — continue
+            </button>
+        </Notice>
+    }
     <div class="mb-3 border rounded p-3" style="max-width:800px" id="xgpOptions">
         <label class="form-label d-block fw-bold">XGP export options</label>
         <div class="row g-3">
@@ -187,7 +216,10 @@
                         OnFolderPathCommitted="OnFolderPathCommitted"
                         XgpOptions="_xgpOptions"
                         XgpAnonymize="_xgpAnonymize"
-                        OnXgpExported="OnXgpExported" />
+                        StartState="_reconciler.State"
+                        OnXgpJobStarting="_reconciler.RecordOwedAsync"
+                        OnXgpJobEnded="_reconciler.ApplyEndedAsync"
+                        OnReconcileNeeded="_reconciler.ReconcileAsync" />
     }
     else
     {
@@ -302,6 +334,8 @@
     {
         _documentStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
         _numbering = new XgpNumberingKeeper(new XgpNumberingStore(Settings));
+        _reconciler = new LocalReconciler(Jobs, _numbering, Timing, FollowAppliedExportAsync, Logger, _lifetime.Token);
+        _reconciler.Changed += () => _ = InvokeAsync(StateHasChanged);
 
         // Both owners outlive this page and change while no gesture of this
         // page is running — a commit on the filter surface, a refusal from a
@@ -336,6 +370,18 @@
     // which this page is the one owner — the panels never write it. Its
     // numbering is what "next number" continues while the pattern matches it.
     private XgpNumberingKeeper _numbering = default!;
+
+    // Local mode's reconciliation with the server (§7.5): the instance every
+    // start names, the XGP ledger's entries applied, the owed jobs followed or
+    // settled, and what a start may do now. It keeps the record through
+    // _numbering, and lives as long as this page.
+    private LocalReconciler _reconciler = default!;
+
+    // The last number this browser counted, for the lost-export notice: as
+    // information only, never a number the export resumes from.
+    private string LastCountedLine => _numbering.Record.Numbering is { } numbering
+        ? $"this browser last counted number {numbering.LastNumber}, under the pattern {numbering.Pattern}."
+        : "this browser has counted no XGP numbers yet.";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -429,6 +475,12 @@
         ReportSource();
 
         StateHasChanged();
+
+        // Local mode reconciles with the server as the page loads
+        // (SPEC-notices.md §7.5) — after the first render, so the panel is
+        // on screen saying it is checking while the answer comes in.
+        if (_appMode == "Local")
+            await _reconciler.StartAsync();
     }
 
     // ── Source reporting ────────────────────────────────────────────────────
@@ -549,21 +601,22 @@
     }
 
     /// <summary>
-    /// The one accounting handler both modes' panels raise: an XGP export
-    /// committed <see cref="XgpExportCommit.Count"/> files under the options
-    /// it captured — a Local run when it ends, completed, cancelled or failed;
-    /// a Web download at its successful hand-off. Records the numbering those
-    /// files used, so the next export under the same pattern continues where
+    /// Web mode's accounting: a download committed
+    /// <see cref="XgpExportCommit.Count"/> entries under the options it
+    /// captured, at its successful hand-off. Records the numbering those
+    /// entries used, so the next export under the same pattern continues where
     /// this one ended. An export that committed nothing advances nothing.
+    /// Local mode's accounting reaches the record through the server's XGP
+    /// ledger instead (<see cref="LocalReconciler"/>).
     /// </summary>
     /// <remarks>
     /// Everything recorded comes from <paramref name="commit"/>, never from
     /// the controls: the user may have changed the pattern or the numbers while
-    /// the export ran, and the files on disk were named by what it captured.
-    /// It is one checkpoint of the numbering record — the whole document,
-    /// from a fresh read, in one write; a refused write leaves it recorded in
-    /// this page. The controls follow it control by control
-    /// (<see cref="FollowsExport"/>): a newer choice in one stands.
+    /// the export ran, and the files were named by what it captured. It is one
+    /// checkpoint of the numbering record — the whole document, from a fresh
+    /// read, in one write; a refused write leaves it recorded in this page. The
+    /// controls follow it control by control (<see cref="FollowsExport"/>): a
+    /// newer choice in one stands.
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
@@ -578,6 +631,24 @@
         await _numbering.CheckpointAsync(record => record.WithCommit(commit), currentInstance: null);
         StateHasChanged();
     }
+
+    /// <summary>
+    /// The controls' half of applying a Local XGP ledger entry — the page's
+    /// own job's, or one recovered: the next number follows it by the same
+    /// control-by-control rule. The record's half is the reconciliation's.
+    /// </summary>
+    private Task FollowAppliedExportAsync(XgpExportCommit commit)
+    {
+        if (commit.Count > 0 && FollowsExport(commit.Options))
+        {
+            _xgpNextNumber = commit.NextNumber;
+            RebuildXgpOptions();
+        }
+        return Task.CompletedTask;
+    }
+
+    // The lost-export notice's action: the user's deliberate resolution.
+    private Task ResolveLostAsync(string jobId) => _reconciler.ResolveLostAsync(jobId);
 
     /// <summary>
     /// Whether the next-number control follows an export that started from

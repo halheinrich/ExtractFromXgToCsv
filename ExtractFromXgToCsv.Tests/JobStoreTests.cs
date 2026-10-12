@@ -1,112 +1,266 @@
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
+using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the JobStore cleanup contract: a terminal snapshot is served exactly
-/// once, and serving it removes the job and disposes its CTS. These are the
-/// invariants the polling client relies on — it must observe the terminal
-/// snapshot (Done line, XGP counter advance) before the entry vanishes, which
-/// holds because cleanup rides the read that delivers completion, not the
-/// background job's completion. Deterministic: no timers, no wall-clock.
+/// One server instance's job store (the umbrella's <c>SPEC-notices.md</c>
+/// §7.5), directly: a start is judged by its identity first — a repeat returns
+/// its disposition and starts nothing, a changed request and a retired
+/// identity are refused, and so is a start naming another instance — and only
+/// then, for XGP, by the ledger: refused while any entry runs, and unless its
+/// mark names the latest entry. A status read never removes a job; the
+/// acknowledgement releases only its result. Settling retires an identity
+/// never admitted and answers admitted for one that was. Deterministic: the
+/// launched work is the test's.
 /// </summary>
 public class JobStoreTests
 {
-    [Fact]
-    public void ReadStatus_UnknownJob_ReturnsNull()
+    private const string Here = "instance-here";
+
+    private readonly JobStore _store = new(new ServerInstance(Here));
+    private readonly List<JobEntry> _launched = [];
+
+    private StartJudgement Start(StartRequest request) => _store.Start(request, _launched.Add);
+
+    private static StartRequest Csv(string jobId, string instance = Here) =>
+        new(jobId, instance, Mark: null, new ProcessRequest { FolderPath = @"D:\xg", OutputPath = @"D:\out.csv" });
+
+    private static StartRequest Xgp(string jobId, LedgerMark? mark = null, string instance = Here) =>
+        new(jobId, instance, mark, new ProcessRequest
+        {
+            FolderPath = @"D:\xg",
+            OutputPath = @"D:\positions",
+            OutputFormat = OutputFormat.Xgp,
+        });
+
+    private static LedgerMark Mark(int number) => new(Here, number);
+
+    private static ProcessingProgress Ended(int committed) => new()
     {
-        var store = new JobStore();
-        Assert.Null(store.ReadStatus("nope"));
-    }
+        Complete = true,
+        TotalRows = committed,
+        XgpCommit = new XgpExportCommit(new XgpExportOptions(), committed),
+    };
+
+    // ── The job and its result ──────────────────────────────────────────────
 
     [Fact]
-    public void ReadStatus_NonTerminalSnapshot_LeavesEntryAndCtsAlive()
+    public void AStatusRead_NeverRemovesTheJob_ItsTerminalResultIsServedAsOftenAsAsked()
     {
-        var store = new JobStore();
-        var jobId = store.CreateJob();
-        var entry = store.Get(jobId)!;
-        entry.Progress = new ProcessingProgress { Current = 3, Total = 10 };
-
-        var snapshot = store.ReadStatus(jobId);
-
-        Assert.Same(entry.Progress, snapshot);
-        Assert.NotNull(store.Get(jobId));            // entry untouched
-        _ = entry.Cts.Token;                          // CTS not disposed (Token getter would throw)
-    }
-
-    [Fact]
-    public void ReadStatus_TerminalSnapshot_RemovesEntryAndDisposesCts()
-    {
-        var store = new JobStore();
-        var jobId = store.CreateJob();
-        var entry = store.Get(jobId)!;
+        Start(Csv("a"));
         var terminal = new ProcessingProgress { Complete = true, TotalRows = 7 };
-        entry.Progress = terminal;
+        _store.Complete(_launched[0], terminal);
 
-        var snapshot = store.ReadStatus(jobId);
-
-        Assert.Same(terminal, snapshot);              // terminal state still delivered
-        Assert.Null(store.Get(jobId));                // …and the entry is gone
-        Assert.Throws<ObjectDisposedException>(() => _ = entry.Cts.Token); // CTS disposed
+        Assert.Same(terminal, _store.ReadStatus("a"));
+        Assert.Same(terminal, _store.ReadStatus("a"));
     }
 
-    public static IEnumerable<object[]> TerminalSnapshots() =>
-    [
-        [new ProcessingProgress { Complete = true, TotalRows = 5 }],                   // success
-        [new ProcessingProgress { Complete = true, Cancelled = true, TotalRows = 3 }], // cancellation
-        [new ProcessingProgress { Complete = true, ErrorMessage = "boom" }],           // failure
-    ];
+    [Fact]
+    public void TheAcknowledgement_ReleasesOnlyTheResult_TheDispositionAndTheLedgerStand()
+    {
+        Start(Xgp("a"));
+        _store.Complete(_launched[0], Ended(2));
+
+        _store.Acknowledge("a");
+
+        Assert.Null(_store.ReadStatus("a"));
+        Assert.Equal(new LedgerEntry(1, "a", Running: false, new XgpExportCommit(new XgpExportOptions(), 2)),
+            Assert.Single(_store.Ledger().Entries));
+        // A duplicate start after the acknowledgement: the disposition stands.
+        Assert.Equal(new StartJudgement.Admitted(1, Started: false), Start(Xgp("a")));
+        Assert.Single(_launched);
+    }
+
+    [Fact]
+    public void AnAcknowledgement_OfAJobNotHeld_OrStillRunning_ChangesNothing()
+    {
+        _store.Acknowledge("never-started");
+
+        Start(Csv("running"));
+        _store.Acknowledge("running");
+
+        Assert.NotNull(_store.ReadStatus("running"));
+    }
+
+    [Fact]
+    public void TheFirstTerminalResultStands_AndAReportAfterItIsIgnored()
+    {
+        Start(Xgp("a"));
+        var job = _launched[0];
+        var first = Ended(1);
+        _store.Complete(job, first);
+
+        _store.Complete(job, Ended(5));
+        _store.Report(job, new ProcessingProgress { Current = 3, Total = 9 });
+
+        Assert.Same(first, _store.ReadStatus("a"));
+        Assert.Equal(1, _store.Ledger().Entries[0].Commit!.Count);
+    }
+
+    [Fact]
+    public void Cancel_SignalsARunningJob_AndNoOpsForAnEndedOrUnknownOne()
+    {
+        Start(Csv("a"));
+        var token = _launched[0].Cancellation;
+
+        Assert.True(_store.Cancel("a"));
+        Assert.True(token.IsCancellationRequested);
+
+        _store.Complete(_launched[0], new ProcessingProgress { Complete = true, Cancelled = true });
+        Assert.False(_store.Cancel("a"));
+        Assert.False(_store.Cancel("nope"));
+    }
+
+    // ── A start is judged by its identity first ─────────────────────────────
 
     [Theory]
-    [MemberData(nameof(TerminalSnapshots))]
-    public void ReadStatus_AnyTerminalShape_CleansUp(ProcessingProgress terminal)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARepeatedStart_ReturnsItsDisposition_AndStartsNothing(bool xgp)
     {
-        // All three terminal shapes are distinguished only by Cancelled /
-        // ErrorMessage; Complete is the sole terminal signal, so each must clean
-        // up. Guards against an impl that only self-cleans on a plain success.
-        var store = new JobStore();
-        var jobId = store.CreateJob();
-        var entry = store.Get(jobId)!;
-        entry.Progress = terminal;
+        var request = xgp ? Xgp("a") : Csv("a");
+        var first = Start(request);
 
-        var snapshot = store.ReadStatus(jobId);
+        var repeat = Start(request);
 
-        Assert.Same(terminal, snapshot);
-        Assert.Null(store.Get(jobId));
-        Assert.Throws<ObjectDisposedException>(() => _ = entry.Cts.Token);
+        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: true), first);
+        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: false), repeat);
+        Assert.Single(_launched);
+        Assert.Equal(xgp ? 1 : 0, _store.Ledger().Entries.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheSameIdentityWithAChangedRequest_IsRefused(bool xgp)
+    {
+        Start(xgp ? Xgp("a") : Csv("a"));
+        var changed = (xgp ? Xgp("a") : Csv("a")) with { Run = new ProcessRequest { FolderPath = @"D:\elsewhere" } };
+
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.ChangedRequest), Start(changed));
+        Assert.Single(_launched);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AStartNamingAnotherInstance_IsRefused_BeforeItsIdentityIsJudged(bool xgp)
+    {
+        var elsewhere = xgp ? Xgp("a", instance: "instance-before") : Csv("a", instance: "instance-before");
+
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.OtherInstance), Start(elsewhere));
+        Assert.Empty(_launched);
+        Assert.Empty(_store.Ledger().Entries);
+    }
+
+    // ── Settling ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SettlingAnIdentityNeverAdmitted_RetiresIt_AndItsStartIsRefusedForever()
+    {
+        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Retired), _store.Settle("a", Here));
+
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.Retired), Start(Xgp("a")));
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.Retired), Start(Csv("a")));
+        Assert.Empty(_launched);
+        Assert.Empty(_store.Ledger().Entries);
+        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Retired), _store.Settle("a", Here));
     }
 
     [Fact]
-    public void Cancel_LiveJob_SignalsTokenAndReturnsTrue()
+    public void SettlingAnAdmittedIdentity_AnswersAdmitted_AndChangesNothing()
     {
-        var store = new JobStore();
-        var jobId = store.CreateJob();
-        var token = store.Get(jobId)!.Cts.Token;
+        Start(Xgp("a"));
 
-        Assert.True(store.Cancel(jobId));
-        Assert.True(token.IsCancellationRequested);
+        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Admitted), _store.Settle("a", Here));
+        Assert.True(_store.Ledger().Entries[0].Running);
+        Assert.NotNull(_store.ReadStatus("a"));
     }
 
     [Fact]
-    public void Cancel_AfterTerminalCleanup_NoOps()
+    public void ASettleNamingAnotherInstance_IsRefused()
     {
-        var store = new JobStore();
-        var jobId = store.CreateJob();
-        store.Get(jobId)!.Progress = new ProcessingProgress { Complete = true };
+        Assert.Equal(new SettleJudgement.Refused(RefusalReason.OtherInstance), _store.Settle("a", "instance-before"));
+        // And it retired nothing here.
+        Assert.IsType<StartJudgement.Admitted>(Start(Csv("a")));
+    }
 
-        store.ReadStatus(jobId);                      // terminal read removes + disposes
+    // ── XGP admission is the ledger's ───────────────────────────────────────
 
-        // Late cancel must no-op — not throw ObjectDisposedException — and report
-        // that no live job was signalled.
-        Assert.False(store.Cancel(jobId));
+    [Fact]
+    public void AnInstanceThatHasAdmittedNone_AdmitsAnyMark_AndNumbersItsEntriesInOrder()
+    {
+        Assert.Equal(new StartJudgement.Admitted(1, Started: true), Start(Xgp("a", new LedgerMark("instance-before", 9))));
+        _store.Complete(_launched[0], Ended(3));
+
+        Assert.Equal(new StartJudgement.Admitted(2, Started: true), Start(Xgp("b", Mark(1))));
+        Assert.Equal([1, 2], _store.Ledger().Entries.Select(entry => entry.Number));
     }
 
     [Fact]
-    public void Cancel_UnknownJob_ReturnsFalse()
+    public void AStartWhoseMarkIsNotTheLatestEntry_IsRefused_AndStartsNothing()
     {
-        var store = new JobStore();
-        Assert.False(store.Cancel("nope"));
+        Start(Xgp("a"));
+        _store.Complete(_launched[0], Ended(3));
+        Start(Xgp("b", Mark(1)));
+        _store.Complete(_launched[1], Ended(1));
+
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.StaleMark), Start(Xgp("stale", Mark(1))));
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.StaleMark), Start(Xgp("none", mark: null)));
+        Assert.Equal(2, _launched.Count);
+        Assert.Equal(2, _store.Ledger().Entries.Count);
+    }
+
+    /// <summary>
+    /// A start whose mark names the latest entry is still refused while that
+    /// entry runs: admission checks the running entry itself, not the mark
+    /// alone.
+    /// </summary>
+    [Fact]
+    public void AStartNamingTheLatestEntry_IsStillRefused_WhileAnyEntryRuns()
+    {
+        Start(Xgp("a"));
+        _store.Complete(_launched[0], Ended(1));
+        Start(Xgp("b", Mark(1)));
+
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.XgpRunning), Start(Xgp("c", Mark(2))));
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.XgpRunning), Start(Xgp("d", Mark(1))));
+        Assert.Equal(2, _store.Ledger().Entries.Count);
+    }
+
+    [Fact]
+    public void OtherFormats_AreNotAdmittedByTheLedger()
+    {
+        Start(Xgp("a"));
+
+        Assert.IsType<StartJudgement.Admitted>(Start(Csv("b")));
+        Assert.Single(_store.Ledger().Entries);
+    }
+
+    /// <summary>
+    /// Two XGP starts at once, each naming the same latest entry: exactly one
+    /// is admitted, under the lock, and the other is refused.
+    /// </summary>
+    [Fact]
+    public async Task OfTwoSimultaneousStarts_ExactlyOneIsAdmitted()
+    {
+        for (var round = 0; round < 50; round++)
+        {
+            var store = new JobStore(new ServerInstance(Here));
+            using var go = new ManualResetEventSlim();
+            var starts = Enumerable.Range(0, 2).Select(n => Task.Run(() =>
+            {
+                go.Wait();
+                return store.Start(Xgp($"r{round}-{n}"), _ => { });
+            })).ToArray();
+            go.Set();
+            var judgements = await Task.WhenAll(starts);
+
+            Assert.Single(judgements, judgement => judgement is StartJudgement.Admitted);
+            Assert.Single(store.Ledger().Entries);
+        }
     }
 }

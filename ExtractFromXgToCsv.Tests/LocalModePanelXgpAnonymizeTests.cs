@@ -37,6 +37,7 @@ public class LocalModePanelXgpAnonymizeTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
             .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, anonymize)
             .Add(c => c.FolderPath, "D:\\xg"));
 

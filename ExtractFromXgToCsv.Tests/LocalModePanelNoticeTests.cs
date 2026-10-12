@@ -34,19 +34,23 @@ namespace ExtractFromXgToCsv.Tests;
 public class LocalModePanelNoticeTests : BunitContext
 {
     /// <summary>
-    /// A server whose every <c>/api/process/start</c> fails identically — so
-    /// two consecutive failed runs carry the same text, which is the case that
-    /// proves the text is not the occurrence. The book-status probe 404s, which
-    /// the panel already reads as "unknown".
+    /// A server that refuses every <c>/api/process/start</c> identically — it
+    /// is another instance than the one the page names — so two consecutive
+    /// failed runs carry the same text, which is the case that proves the text
+    /// is not the occurrence. A refusal ends the run with the run error; a
+    /// start that cannot be made is retried instead (SPEC-notices.md §7.5).
+    /// The book-status probe 404s, which the panel already reads as "unknown".
     /// </summary>
     private sealed class FailingStartHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(
-                request.RequestUri!.AbsolutePath == "/api/process/start"
-                    ? HttpStatusCode.InternalServerError
-                    : HttpStatusCode.NotFound));
+            Task.FromResult(request.RequestUri!.AbsolutePath == "/api/process/start"
+                ? new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = new StringContent("{\"reason\":\"OtherInstance\"}", System.Text.Encoding.UTF8, "application/json"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 
     public LocalModePanelNoticeTests()
@@ -68,6 +72,7 @@ public class LocalModePanelNoticeTests : BunitContext
             .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.FolderPath, @"D:\xg")
             .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false));
 
     // ── The two gate reasons ────────────────────────────────────────────────
@@ -162,7 +167,7 @@ public class LocalModePanelNoticeTests : BunitContext
         // nobody announced.
         box.ShouldBe(NoticeKind.Error, NoticeAnnouncement.Assertive, dismissible: true, "class");
         Assert.Equal(["mt-2"], box.CallerClasses);
-        Assert.StartsWith("Error: ", box.Content.TextContent.Trim());
+        Assert.StartsWith("The server has restarted since this page last checked it", box.Content.TextContent.Trim());
     }
 
     [Theory]

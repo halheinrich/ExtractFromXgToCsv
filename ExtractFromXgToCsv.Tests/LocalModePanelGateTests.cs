@@ -62,7 +62,8 @@ public class LocalModePanelGateTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
             .Add(c => c.FilterInEffect, inEffect ? new FilterConfig() : null)
-            .Add(c => c.FolderPath, FolderA));
+            .Add(c => c.FolderPath, FolderA)
+            .Add(c => c.StartState, LocalPanelRuns.Ready));
 
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", @"D:\xg\out.csv");
         cut.Render();
@@ -226,6 +227,7 @@ public class LocalModePanelGateTests : BunitContext
             .Add(c => c.FilterInEffect, filter)
             .Add(c => c.FolderPath, FolderA)
             .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false));
         cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
         Assert.False(RunButton(cut).IsDisabled);

@@ -55,45 +55,49 @@ public class HomeRunResultTests : BunitContext
         });
         _storage.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Stored(OutputFolder));
         _storage.ExpectFilterPanelMount();
+        _storage.ExpectLocalReconcile();
     }
 
     /// <summary>
     /// The bookkeeping an export of two decisions under the default pattern
-    /// makes — one checkpoint of the numbering record — its write held.
+    /// makes — the job owed before its start, then its entry applied in one
+    /// checkpoint of the numbering record — the apply's write held.
     /// </summary>
-    private BrowserStorageHeldWrite ExpectTheExportBookkeepingHeld()
-    {
-        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, BrowserStorageReadAnswer.Absent);
-        return _storage.ExpectHeldWrite(
-            BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, HomeStoragePlan.NumberingDocument("pos{n}", 2, 3));
-    }
+    private BrowserStorageHeldWrite ExpectTheExportBookkeepingHeld() =>
+        _storage.ExpectXgpRunBookkeeping(
+            before: null,
+            owing: "{\"version\":1,\"owed\":["
+                + HomeStoragePlan.OwedJob("job-1", CapturingProcessHandler.Instance, "pos{n}", 1, 3, OutputFolder) + "]}",
+            applied: HomeStoragePlan.NumberingDocument("pos{n}", 2, 3, (CapturingProcessHandler.Instance, 1)),
+            holdTheApply: true)!;
 
     /// <summary>
-    /// Folder A, the empty filter ready, XGP: a run started, its status held.
+    /// Folder A, the empty filter ready, XGP: a run started, its status held,
+    /// its bookkeeping declared with the apply's write held.
     /// </summary>
-    private async Task<(IRenderedComponent<Home> Page, Task Run)> StartARunOverFolderAAsync()
+    private async Task<(IRenderedComponent<Home> Page, Task Run, BrowserStorageHeldWrite Bookkeeping)> StartARunOverFolderAAsync()
     {
         var cut = this.RenderHome();
         Assert.Equal(FilterSourceToken.FromPath(FolderA), Services.GetRequiredService<FilterSetup>().Current.Source);
         Assert.False(cut.RunButton().HasAttribute("disabled"));
 
+        var bookkeeping = ExpectTheExportBookkeepingHeld();
         _processing.HoldStatus();
         var run = cut.RunButton().ClickAsync(new MouseEventArgs());
         await _processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
-        return (cut, run);
+        return (cut, run, bookkeeping);
     }
 
     [Fact]
     public async Task ASupersededXgpRun_NeverShowsItsResult_WhileItsBookkeepingIsPendingOrAfter()
     {
-        var (cut, run) = await StartARunOverFolderAAsync();
+        var (cut, run, bookkeeping) = await StartARunOverFolderAAsync();
 
         // The folder changes under the running job; the empty filter stays
         // ready for the new one, so nothing about the gate falls.
         _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.FolderPathKey, FolderB,
             BrowserStorageWriteAnswer.Succeeded);
         await cut.CommitFolderAsync(FolderB);
-        var bookkeeping = ExpectTheExportBookkeepingHeld();
 
         _processing.ReleaseStatus();
         cut.WaitForAssertion(() => Assert.True(bookkeeping.IsReached), CapturingProcessHandler.RunTimeout);
@@ -119,8 +123,7 @@ public class HomeRunResultTests : BunitContext
     [Fact]
     public async Task AnXgpRunOverUnchangedInputs_ShowsItsResult_WhileItsBookkeepingIsPending()
     {
-        var (cut, run) = await StartARunOverFolderAAsync();
-        var bookkeeping = ExpectTheExportBookkeepingHeld();
+        var (cut, run, bookkeeping) = await StartARunOverFolderAAsync();
 
         _processing.ReleaseStatus();
         cut.WaitForAssertion(() => Assert.True(bookkeeping.IsReached), CapturingProcessHandler.RunTimeout);

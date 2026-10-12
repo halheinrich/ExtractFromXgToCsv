@@ -44,6 +44,7 @@ public class LocalModePanelStorageTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false));
 
     [Fact]

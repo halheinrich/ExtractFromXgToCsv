@@ -44,7 +44,7 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         CapturingProcessHandler server,
         FilterConfig filter,
         OutputFormat format = OutputFormat.Csv,
-        List<XgpExportCommit>? exported = null)
+        List<EndedXgpJob>? ended = null)
     {
         Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
         var cut = Render<LocalModePanel>(p => p
@@ -53,8 +53,9 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
             .Add(c => c.FilterInEffect, filter)
             .Add(c => c.FolderPath, FolderA)
             .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.OnXgpExported, (XgpExportCommit commit) => exported?.Add(commit)));
+            .Add(c => c.OnXgpJobEnded, (EndedXgpJob job) => ended?.Add(job)));
         cut.Find("#outputPath").Input(new ChangeEventArgs { Value = format == OutputFormat.Xgp ? @"D:\xg\positions" : @"D:\xg\out.csv" });
         return cut;
     }
@@ -167,8 +168,8 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         {
             Current = 2, Total = 2, Complete = true, TotalRows = 2, Skipped = BrokenA, XgpCommit = commit,
         });
-        var exported = new List<XgpExportCommit>();
-        var cut = PanelOver(server, new FilterConfig(), OutputFormat.Xgp, exported);
+        var ended = new List<EndedXgpJob>();
+        var cut = PanelOver(server, new FilterConfig(), OutputFormat.Xgp, ended);
         server.HoldStatus();
         var run = RunAsync(cut);
         await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
@@ -180,7 +181,11 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
 
         Assert.Empty(cut.FindAll(Notice));
         Assert.DoesNotContain("Done", cut.Markup);
-        Assert.Equal(commit, Assert.Single(exported));
+        // The host is handed the job's ended ledger entry, carrying its
+        // commit, and the job is acknowledged after.
+        var job = Assert.Single(ended);
+        Assert.Equal(commit, job.Entry.Commit);
+        Assert.Equal([job.Entry.JobId], server.Acknowledged);
     }
 
     /// <summary>

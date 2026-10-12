@@ -30,6 +30,14 @@ internal static class ClientServiceCollectionExtensions
         // decides whether it may publish.
         services.AddScoped<ISourceConverter, XgSourceConverter>();
 
+        // Local mode's job protocol (SPEC-notices.md §7.5): its wire, how
+        // patiently a page follows and reconciles, and the identities the
+        // browser mints for its starts. The timing and the identities are
+        // services so a test can shorten the one and name the other.
+        services.AddScoped<LocalJobsClient>();
+        services.AddSingleton(LocalJobTiming.Default);
+        services.AddSingleton<IJobIdentities, GuidJobIdentities>();
+
         // This app's one storage condition: whether the browser has refused a
         // storage call this visit, and the dismissal of the notice that says
         // so. Scoped — one per loaded app under WebAssembly — because the

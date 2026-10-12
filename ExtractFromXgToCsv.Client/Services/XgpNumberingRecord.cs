@@ -45,19 +45,6 @@ internal sealed record XgpNumbering
 }
 
 /// <summary>
-/// A Local XGP job this browser is owed: it minted the job's identity and
-/// recorded it before sending the start, and has not yet applied the job's
-/// accounting or resolved it (the umbrella's <c>SPEC-notices.md</c> §7.5). It
-/// captures what names the export if it is ever lost: its options — pattern
-/// and first number — and the folder it writes to.
-/// </summary>
-/// <param name="JobId">The identity the browser minted for the start.</param>
-/// <param name="Instance">The server instance the start named.</param>
-/// <param name="Options">The naming options the job captured.</param>
-/// <param name="Folder">The output folder the job writes to.</param>
-internal sealed record OwedXgpJob(string JobId, string Instance, XgpExportOptions Options, string Folder);
-
-/// <summary>
 /// Home's numbering record (the umbrella's <c>SPEC-notices.md</c> §7.5): one
 /// browser-storage document holding the numbering, the mark — the last XGP
 /// ledger entry applied — and the jobs this browser is owed. Home is its one
@@ -87,6 +74,39 @@ internal sealed record XgpNumberingRecord
     {
         ArgumentNullException.ThrowIfNull(commit);
         return commit.Count > 0 ? this with { Numbering = XgpNumbering.After(commit) } : this;
+    }
+
+    /// <summary>This record owing <paramref name="job"/> too; a job already owed is owed once.</summary>
+    public XgpNumberingRecord Owing(OwedXgpJob job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        return Owed.Any(owed => owed.JobId == job.JobId) ? this : this with { Owed = Owed.Add(job) };
+    }
+
+    /// <summary>This record no longer owing the job <paramref name="jobId"/>.</summary>
+    public XgpNumberingRecord Resolving(string jobId) =>
+        this with { Owed = Owed.RemoveAll(owed => owed.JobId == jobId) };
+
+    /// <summary>
+    /// This record with <paramref name="entry"/> of <paramref name="instance"/>
+    /// applied — one checkpoint's change: when the entry is newer than the
+    /// mark, its accounting sets the numbering (an export that committed
+    /// nothing changes no number) and the mark moves to it; whether or not it
+    /// was, the job is no longer owed. An older entry changes neither the
+    /// numbering nor the mark, so a replay never rolls back.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="entry"/> is still running.</exception>
+    public XgpNumberingRecord Applying(string instance, LedgerEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        if (entry.Running)
+            throw new ArgumentException("A running entry has no accounting to apply.", nameof(entry));
+
+        var resolved = Resolving(entry.JobId);
+        var mark = new LedgerMark(instance, entry.Number);
+        if (!mark.IsNewerThan(Mark, instance))
+            return resolved;
+        return (entry.Commit is { } commit ? resolved.WithCommit(commit) : resolved) with { Mark = mark };
     }
 
     /// <summary>Whether this record and <paramref name="other"/> hold the same numbering, mark and owed jobs, in order.</summary>

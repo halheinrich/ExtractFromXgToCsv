@@ -174,6 +174,7 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.DiagramJson)
             .Add(c => c.FilterInEffect, config)
             .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false)
             .Add(c => c.FolderPath, "D:\\xg"));
 

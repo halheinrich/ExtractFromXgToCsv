@@ -5,6 +5,7 @@ using Bunit;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
+using ExtractFromXgToCsv.Client.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
@@ -26,9 +27,12 @@ internal static class HomeTesting
     /// <paramref name="mode"/>; returns the stub.
     /// </summary>
     public static StubAppModeHandler AddHomeServices(
-        this BunitContext ctx, string mode, CapturingProcessHandler? processing = null)
+        this BunitContext ctx, string mode, HttpMessageHandler? processing = null)
     {
         ctx.Services.AddClientServices();
+        // Identities a test can name: the owed job's appears in the numbering
+        // record's document.
+        ctx.Services.AddSingleton<IJobIdentities>(new SequentialJobIdentities());
         var server = new StubAppModeHandler(mode) { Processing = processing };
         ctx.Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
         return server;
@@ -36,7 +40,8 @@ internal static class HomeTesting
 
     /// <summary>
     /// Renders Home and waits until its restore has resolved the mode — the
-    /// moment a mode panel renders and the source is reported.
+    /// moment a mode panel renders and the source is reported — and, in Local
+    /// mode, until the page has reconciled with the server.
     /// </summary>
     public static IRenderedComponent<Home> RenderHome(this BunitContext ctx)
     {
@@ -47,7 +52,9 @@ internal static class HomeTesting
 
     /// <summary>
     /// Waits until a mode panel is up — Home's restore has resolved the mode —
-    /// and its first after-render has run.
+    /// and its first after-render has run; and in Local mode until the page
+    /// has reconciled with the server, which every Local start waits on
+    /// (SPEC-notices.md §7.5).
     /// </summary>
     public static void WaitForModePanel(this IRenderedComponent<Home> cut)
     {
@@ -61,6 +68,9 @@ internal static class HomeTesting
         // renderer's own context means the panel's restore reads have been
         // made when this returns.
         cut.InvokeAsync(() => { }).GetAwaiter().GetResult();
+
+        if (cut.FindComponents<LocalModePanel>() is [var local])
+            cut.WaitForState(() => local.Instance.StartState.Instance is not null, TimeSpan.FromSeconds(5));
     }
 
     // ── Gestures ────────────────────────────────────────────────────────────
@@ -215,6 +225,39 @@ internal static class HomeStoragePlan
     }
 
     /// <summary>
+    /// A Local page's reconciliation with the server (SPEC-notices.md §7.5):
+    /// it reads the numbering record afresh — answered
+    /// <paramref name="stored"/>, absent by default — before asking the server
+    /// for its ledger.
+    /// </summary>
+    public static void ExpectLocalReconcile(this BrowserStoragePlan plan, BrowserStorageReadAnswer? stored = null) =>
+        plan.ExpectRead(BrowserStorageArea.Local, NumberingKey, stored ?? BrowserStorageReadAnswer.Absent);
+
+    /// <summary>
+    /// The numbering record's part in one Local XGP run through Home
+    /// (SPEC-notices.md §7.5): the job recorded as owed before its start sent
+    /// — a checkpoint over <paramref name="before"/>, writing
+    /// <paramref name="owing"/> — then its ended entry applied — a checkpoint
+    /// writing <paramref name="applied"/>, numbering, mark and owed together —
+    /// then the reconciliation that follows, which reads it afresh.
+    /// </summary>
+    /// <returns>The apply checkpoint's write, held when <paramref name="holdTheApply"/>.</returns>
+    public static BrowserStorageHeldWrite? ExpectXgpRunBookkeeping(
+        this BrowserStoragePlan plan, string? before, string owing, string applied, bool holdTheApply = false)
+    {
+        plan.ExpectNumberingCheckpoint(
+            before is null ? BrowserStorageReadAnswer.Absent : BrowserStorageReadAnswer.Stored(before), owing);
+        plan.ExpectRead(BrowserStorageArea.Local, NumberingKey, BrowserStorageReadAnswer.Stored(owing));
+        BrowserStorageHeldWrite? held = null;
+        if (holdTheApply)
+            held = plan.ExpectHeldWrite(BrowserStorageArea.Local, NumberingKey, applied);
+        else
+            plan.ExpectWrite(BrowserStorageArea.Local, NumberingKey, applied, BrowserStorageWriteAnswer.Succeeded);
+        plan.ExpectLocalReconcile(BrowserStorageReadAnswer.Stored(applied));
+        return held;
+    }
+
+    /// <summary>
     /// One checkpoint of the numbering record: its fresh read, answered
     /// <paramref name="before"/>, then its one write of
     /// <paramref name="written"/>, answered <paramref name="answer"/>
@@ -253,6 +296,10 @@ internal static class HomeStoragePlan
         plan.ExpectHomeRestore(stored, migratedDocument);
         plan.ExpectModePanelRestore(mode);
         plan.ExpectFilterPanelMount();
+        if (mode == "Local")
+            plan.ExpectLocalReconcile(stored is not null && stored.TryGetValue(NumberingKey, out var document)
+                ? BrowserStorageReadAnswer.Stored(document)
+                : migratedDocument is not null ? BrowserStorageReadAnswer.Stored(migratedDocument) : null);
     }
 
     /// <summary>One visit to Home in <paramref name="mode"/> in a browser that refuses every read.</summary>
@@ -261,6 +308,8 @@ internal static class HomeStoragePlan
         plan.ExpectHomeRestoreRefused();
         plan.ExpectModePanelRestore(mode, BrowserStorageReadAnswer.Refused);
         plan.ExpectFilterPanelMountRefused();
+        if (mode == "Local")
+            plan.ExpectLocalReconcile(BrowserStorageReadAnswer.Refused);
     }
 
     private static void ExpectModePanelRestore(
