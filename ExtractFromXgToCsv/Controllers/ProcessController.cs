@@ -103,8 +103,9 @@ public partial class ProcessController(
         };
     }
 
-    // The browser mints identities as GUIDs; anything else is not one.
-    [GeneratedRegex("^[A-Za-z0-9-]{1,64}$")]
+    // The browser mints identities as GUIDs; anything else is not one. \z,
+    // not $: $ also matches before a final newline.
+    [GeneratedRegex(@"^[A-Za-z0-9-]{1,64}\z")]
     private static partial Regex JobIdShape();
 
     private static bool IsJobId(string? jobId) => jobId is not null && JobIdShape().IsMatch(jobId);

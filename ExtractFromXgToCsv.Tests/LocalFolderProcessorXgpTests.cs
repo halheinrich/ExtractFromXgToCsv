@@ -171,8 +171,9 @@ public class LocalFolderProcessorXgpTests
     public async Task ProcessXgpAsync_CounterlessPattern_UniquifiesOnDisk()
     {
         // A pattern without {n} renders the same base name for every
-        // decision — the per-run uniquifier is the only thing standing
-        // between the batch and a folder of overwrites.
+        // decision — the per-run uniquifier gives each its own file. Without
+        // it the second would collide with the first, and the run would stop
+        // there: XGP export never overwrites a file.
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-uniq-{Guid.NewGuid():N}");
         var options = new XgpExportOptions { NamePattern = "same" };

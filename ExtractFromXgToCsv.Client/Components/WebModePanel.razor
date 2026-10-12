@@ -663,8 +663,10 @@
 
     private string SelectedNoun => SelectedRepresentation == Representation.Records ? "decisions" : "rows";
 
+    // Records serve Diagram JSON alone in Web mode; its name is the one
+    // OutputFormatNames states.
     private string ConvertingMessage => SelectedRepresentation == Representation.Records
-        ? "Converting decisions for Diagram JSON…"
+        ? $"Converting decisions for {OutputFormat.DiagramJson.ShortName()}…"
         : "Extracting decisions…";
 
     // Download needs a filter in effect, a selection within the size limit,

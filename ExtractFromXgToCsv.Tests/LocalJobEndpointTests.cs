@@ -267,6 +267,27 @@ public class LocalJobEndpointTests : IDisposable
         Assert.Equal([7], File.ReadAllBytes(Path.Combine(_server.OutputFolder, "pos002.xgp")));
     }
 
+    // ── An identity's shape ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// An identity the browser would never mint is refused as malformed, and
+    /// starts or settles nothing — one ending in a newline included, which a
+    /// pattern anchored with <c>$</c> lets through.
+    /// </summary>
+    [Theory]
+    [InlineData("job-1\n")]
+    [InlineData("job 1")]
+    public async Task AMalformedIdentity_IsABadRequest_AndStartsNothing(string jobId)
+    {
+        var instance = await InstanceAsync();
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await StartAsync(new StartRequest(jobId, instance, Mark: null, XgpRun()))).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await SettleAsync(Uri.EscapeDataString(jobId), instance)).StatusCode);
+        Assert.Empty((await LedgerAsync())!.Entries);
+    }
+
     // ── How a job ends ──────────────────────────────────────────────────────
 
     /// <summary>

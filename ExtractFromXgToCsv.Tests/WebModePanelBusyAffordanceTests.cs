@@ -184,6 +184,58 @@ public class WebModePanelBusyAffordanceTests : BunitContext
     /// Captures the markup after every render, so a state raised and released
     /// inside one gesture is still observable once the gesture has returned.
     /// </summary>
+    // ── Hal's three ruled busy messages (halheinrich/backgammon#374) ────────
+
+    [Fact]
+    public void TheFirstSwitchToDiagramJson_SaysItIsConvertingDecisionsForDiagramJson()
+    {
+        var cut = RenderPanel(OutputFormat.Csv, filterInEffect: true);
+        cut.FindComponents<InputFile>()[0].UploadFiles(InputFileContent.CreateFromBinary(Fixture, "MTCH4064.xg"));
+        var renders = RecordRenders(cut);
+
+        cut.Render(p => p.Add(c => c.OutputFormat, OutputFormat.DiagramJson));
+        cut.WaitForAssertion(() => Assert.DoesNotContain("busy-notice", cut.Markup));
+
+        Assert.Contains(renders, m => m.Contains("<span>Converting decisions for Diagram JSON…</span>"));
+    }
+
+    [Fact]
+    public void ABookLoadOverPickedFiles_SaysItIsReExtractingThem()
+    {
+        var cut = RenderPanel(OutputFormat.Csv, filterInEffect: true);
+        cut.FindComponents<InputFile>()[0].UploadFiles(InputFileContent.CreateFromBinary(Fixture, "MTCH4064.xg"));
+        var renders = RecordRenders(cut);
+
+        cut.FindComponents<InputFile>()[1].UploadFiles(InputFileContent.CreateFromBinary([1, 2, 3, 4], "not-a-book.ob"));
+
+        Assert.Contains(renders, m => m.Contains("<span>Loading opening book and re-extracting decisions from 1 file(s)…</span>"));
+    }
+
+    /// <summary>
+    /// Rows converted again outside a pick or a book load — here after a book
+    /// load's reconversion failed and left them unconverted, on the next
+    /// render — say "Extracting decisions…".
+    /// </summary>
+    [Fact]
+    public void RowsConvertedAgainAfterAFailedReconversion_SayItIsExtractingDecisions()
+    {
+        var converter = new ScriptedConverter();
+        Services.AddSingleton<ISourceConverter>(converter);
+        var cut = RenderPanel(OutputFormat.Csv, filterInEffect: true);
+        cut.FindComponents<InputFile>()[0].UploadFiles(InputFileContent.CreateFromBinary(Fixture, "MTCH4064.xg"));
+        converter.FailRows = (_, book) => book is not null ? new OperationCanceledException("Interrupted.") : null;
+        cut.FindComponents<InputFile>()[1].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture("OpeningBookV2.ob"), "OpeningBookV2.ob"));
+        cut.WaitForAssertion(() => Assert.Contains("Interrupted.", cut.Markup));
+        converter.FailRows = (_, _) => null;
+        var renders = RecordRenders(cut);
+
+        cut.Render(p => p.Add(c => c.OutputFormat, OutputFormat.Csv));
+        cut.WaitForAssertion(() => Assert.DoesNotContain("busy-notice", cut.Markup));
+
+        Assert.Contains(renders, m => m.Contains("<span>Extracting decisions…</span>"));
+    }
+
     private static List<string> RecordRenders(IRenderedComponent<WebModePanel> cut)
     {
         var renders = new List<string>();
