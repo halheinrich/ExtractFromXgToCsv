@@ -18,13 +18,19 @@ https://github.com/halheinrich/ExtractFromXgToCsv — branch `main`.
 
 ## Depends on
 
-- **ConvertXgToJson_Lib** — `XgDecisionIterator`, `XgFileReader`, `XgIteratorState`
-  for .xg/.xgp reading and decision iteration; `XgpExporter` (slice surface)
-  for the per-decision .xgp export pathway; `XgIteratorOptions`, which carries
-  the run's ranking and the optional `OpeningBook` into the iterators (see
-  "The ranking" and "Opening-book enrichment").
-- **XgFilter_Lib** — `DecisionFilterSet`, `FilteredDecisionIterator`,
-  `ColumnSelector`, `IDecisionFilter`, `IMatchFilter` for filter pipeline.
+- **ConvertXgToJson_Lib** — `XgSourceReader`, the one read of one source,
+  which both modes read every file through (`ReadFileAsync` in Local mode,
+  `ReadAsync` over a browser upload in Web mode; see "Reading, converting,
+  skipping and committing"); `XgFileReader` for discovery
+  (`EnumerateXgFormatFiles`); `XgDecisionIterator`, which Web mode converts
+  each decoded file through, under `XgIteratorOptions` (the run's ranking and
+  the optional `OpeningBook`; see "The ranking" and "Opening-book
+  enrichment"); `XgpExporter` (slice and anonymize-copy surfaces) for the XGP
+  export's payloads; `OpeningBook`.
+- **XgFilter_Lib** — `FilterConfig.Build()` / `DecisionFilterSet` for the
+  filter pipeline; `FilteredDecisionIterator`, whose parsed-file filtering
+  operation (`IterateFile`, `IterateFileDiagrams`) Local mode filters every
+  decoded file through, the filter set's early-exit hints wired.
 - **BgDataTypes_Lib** — `DecisionRow`, the decision records (`BgDecisionData`
   and its two kinds, `CheckerPlayDecision` and `CubeDecision`),
   `IDecisionFilterData`, `PlayRanking` and constituent types. All four output
@@ -111,8 +117,8 @@ Architecture). Four areas:
   opening-book status, the saved-filters file relay, shutdown. Thin
   pass-throughs to the services (see Public API).
 - **Local-mode services** — `Services/`: `LocalFolderProcessor` (the four
-  output pathways over a folder) and `SkipRecord` (one run's record of what
-  it skipped), `JobStore` (the
+  output pathways over a folder) and `RunRecord` (one run's record: what it
+  skipped and, for XGP, what it committed), `JobStore` (the
   job registry and its self-cleaning status read), `OpeningBookProvider`
   (resolves and loads the book), `FilterDocumentStore` (the named-file IO
   behind the relay) and `AppModeService` (the configured mode).
@@ -126,23 +132,32 @@ modes, and all processing in Web mode. `Program.cs` registers the
 components are rendered with — the test suite calls it too. Three areas:
 
 - **Components** — `Pages/Home.razor` (the shell, the `FilterSurface` host
-  and the source reporter) and the two mode panels, `LocalModePanel` and
-  `WebModePanel` (see Components).
+  and the source reporter), the two mode panels, `LocalModePanel` and
+  `WebModePanel`, and `SkipListNotice`, the one rendering of a skip record
+  (see Components).
 - **Services** — the Web-mode pipeline and the client's own state:
-  `XgProcessingService` (WASM extraction and the `.xgp` zip),
-  `FilteredRowCache` (loaded rows and their filtered projections),
+  `WebSession` (the panel's selection, conversion cache, book and last
+  download, and the ownership rules over them) with its types
+  (`WebSelection` and `DecodedSource`; `SourceConversion` with the
+  `ISourceConverter` seam and its application implementation
+  `XgSourceConverter`; `WebDownload`), `XgProcessingService` (the output
+  builders — CSV, Diagram JSON, the XGP archive — and the book loader),
+  `FilteredRowCache` (retained rows and records and their filtered
+  projections),
   `HttpDocumentStorage` (the storage seam over the server's file relay),
   `SettingsStorage` (this app's settings keys over BgUiPrimitives'
   `BrowserStorage`, reporting every refusal) and `BrowserStorageCondition`
   (this app's one storage condition and its notice's dismissal; the filter
   surface's registered refusal sink).
 - **Shared** — the wire types the server references too (`ProcessRequest`,
-  `ProcessingProgress` and `SkippedItem`, `JobPhase`, `OutputFormat`,
-  `AppModeResponse`, `OpeningBookStatus`, the strict enum converter), the
-  `.xgp` naming engine (`XgpExportOptions`, `XgpNameAllocator` and its
-  internal parts) with the name preview's sample (`XgpNamePreview`), and
-  `AppRanking`, the application's one ranking, which both modes read. See
-  Client-shared types.
+  `ProcessingProgress` with `SkipRecord`, `SkippedItem` and
+  `XgpExportCommit`, `JobPhase`, `OutputFormat`, `AppModeResponse`,
+  `OpeningBookStatus`, the strict enum converter), the `.xgp` naming engine
+  (`XgpExportOptions`, `XgpNameAllocator` and its internal parts) with the
+  name preview's sample (`XgpNamePreview`), `XgpPayload` (both modes' one
+  statement of how a decision becomes an `.xgp` payload), and `AppRanking`,
+  the application's one ranking, which both modes read. See Client-shared
+  types.
 
 **`ExtractFromXgToCsv.Tests/`** — xUnit, one class per contract: direct tests
 of the services and the naming engine, bUnit tests of `Home` and both panels,
@@ -154,7 +169,10 @@ registration, render and gestures, and `HomeStoragePlan` — Home's storage
 stated on a `BrowserStoragePlan`), `NoticeTesting` (a dismissal through
 BgUiPrimitives' `NoticeBox`, settled before its outcome is read, and the
 bound on awaiting an operation), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
-(the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`. Fixtures are the umbrella's `TestData/FixtureFiles`,
+(the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`,
+`WebSources` (a fixture decoded and converted as Web mode holds it) and
+`ScriptedConverter` (the real Web-mode converter wrapped to count, fail or
+hold conversions). Fixtures are the umbrella's `TestData/FixtureFiles`,
 linked into the build output rather than kept in this repo (see Test project,
 and the fixture pitfall).
 
@@ -185,13 +203,62 @@ PDF radios are disabled client-side when `AppMode != "Local"`. A
 persisted `xg_outputFormat` of `Pptx` or `Pdf` is sanitized to `Csv` on
 load. (See Pitfalls.)
 
-Web mode extracts both `DecisionRow` (for CSV) and `BgDecisionData` (for
-Diagram JSON) on file selection — keeps the two output formats in sync so
-toggling the output-format radio doesn't require re-processing. It also
-retains each selected file's **raw bytes** (keyed by bare filename) so the
-XGP export pathway can re-parse its source files at download time — raw
-zlib-compressed bytes are smaller than parsed record graphs and are already
-bounded by the 50 MB selection cap.
+How Web mode reads, converts and exports — once per file, once per key, and
+the records only when Diagram JSON needs them — is the next section's.
+
+### Reading, converting, skipping and committing
+
+The umbrella's `../SPEC-notices.md` §7 is the ratified model (v1.12.2 Arc 3,
+halheinrich/backgammon#374): what a skip is, who owns each skip record and
+how long it lasts, Web mode's two lists and conversion states, the ownership
+of late completions, readiness, the commit boundaries and the XGP
+numbering. This section says how the code meets it, not what it rules.
+
+- **One entry, one record, one rendering, both modes** (§7.1). A skipped unit
+  is a `SkippedItem` — a file, or a file and its `DecisionId` — in a
+  `SkipRecord`, the immutable record type both modes keep; `SkipListNotice`
+  renders any of them with the same headline and entry wording and, where
+  the list needs one, a label naming its owner.
+- **Local mode** (`LocalFolderProcessor`, §7.2). Each output run reads each
+  discovered file once (`XgSourceReader.ReadFileAsync`, format `Xg`, the
+  run's token; exact bytes kept only on the XGP pathway when not
+  anonymizing) and filters each decoded file through a
+  `FilteredDecisionIterator` built with the run's filters, ranking and
+  opening book. All four pathways share one walk, `ForEachFileAsync`: a
+  failed read is a read skip, the file's contribution is staged whole inside
+  the file's boundary (a failure is a conversion skip, so a file that fails
+  midway contributes nothing), and the commit — the CSV writer, the JSON
+  write, the deck build, an XGP file write — is outside it and fails the
+  run. An XGP payload is prepared within its decision's own boundary
+  (`XgpPayload`; a failure is an export skip and consumes no number) and
+  written outside it. The run's `RunRecord` holds its skips and, for XGP,
+  its `XgpExportCommit`, replaced as each file is written; the job runner's
+  cancelled and failed snapshots are built from it (`CancelledSnapshot`,
+  `FailedSnapshot`). `LocalModePanel` keeps the run's skip record apart from
+  its current-input result (see Components).
+- **Web mode** (`WebSession`, §7.3). A pick reads each upload once
+  (`XgSourceReader.ReadAsync`, format `Xg`) into a `WebSelection` of every
+  entry with its read outcome, and converts the decoded files to rows under
+  the book in force. Each decoded file is retained (`DecodedSource`), with
+  its exact bytes only where an export copies it verbatim — which the rows
+  the producer stamped decide (`XgpPayload.CopiesSourceVerbatim`); a file
+  whose rows failed keeps them, since a later book's rows might need them.
+  Conversion results are cached per selection and key (rows or records, plus
+  the book; the ranking is fixed), each file within its own boundary, in the
+  states `ConversionState` names. Rows convert on a pick and on a book
+  change; records only when Diagram JSON is selected
+  (halheinrich/backgammon#74). Refiltering reads only what is retained
+  (`FilteredRowCache`). Every asynchronous completion carries a ticket and
+  publishes only while its owner says so. "This selection"
+  (`SelectionSkips`) and "the last download" (`WebDownload`) are the two
+  lists. The XGP archive (`XgProcessingService.BuildXgpArchive`) is built
+  from the retained decoded files, skips a decision whose payload cannot be
+  prepared, and commits at the finalized archive's hand-off to the browser.
+- **XGP numbering, both modes** (§7.1). Only committed files consume numbers.
+  Both modes hand Home's one handler, `OnXgpExported(XgpExportCommit)`, the
+  options the export captured and the files it committed — Local when the
+  run ends, whatever ends it; Web at a successful hand-off — and Home
+  persists the numbering from the commit (see "XGP export").
 
 ### The ranking: one run, one ranking
 
@@ -211,22 +278,23 @@ nothing here restates it. The sites:
   `AppRanking.Ranking` to `LocalFolderProcessor`'s constructor, where the
   ranking is a required argument (a defined value, or
   `ArgumentOutOfRangeException`): the processor states no ranking of its own.
-  It builds its one `XgIteratorOptions` from that ranking and the loaded book,
-  so every row is built for it; the Diagram JSON and deck pathways filter
-  each record through `record.ViewFor(_ranking)`, and the deck draws each
-  through `DiagramRequest.ForDecision(record, _ranking)`.
-- **Web mode** — `WebModePanel` builds its `FilteredRowCache` for the value,
-  and extraction reads the ranking back from the cache, so
-  `XgProcessingService.ExtractDecisions` / `ExtractDiagramRequests` (which
-  take the ranking as a required argument, as the producers do) build the rows
-  for the ranking the cache filters the records under. The cache refuses a
-  row built for another ranking.
+  It builds each run's `FilteredDecisionIterator` for that ranking (with the
+  loaded book), which builds every row for it and filters every record
+  through its view for it; the deck draws each record through
+  `DiagramRequest.ForDecision(record, _ranking)`.
+- **Web mode** — `WebModePanel` builds its `WebSession` for the value, whose
+  `FilteredRowCache` is built for it, and the session converts for the
+  cache's ranking: `XgSourceConverter` (which takes the ranking as a required
+  argument, as the producers do) builds the rows for the ranking the cache
+  filters the records under. The cache refuses a row built for another
+  ranking.
 - **The name preview** — its sample row is `DecisionRow.From(record,
   AppRanking.Ranking)`.
 
 **What fails if a producer default stands in.** Of the producer operations
-above, `ViewFor`, `DecisionRow.From` and `DiagramRequest.ForDecision`
-require a ranking, so the compiler holds them. `XgIteratorOptions` does not:
+above, `ViewFor`, `DecisionRow.From`, `DiagramRequest.ForDecision` and the
+`FilteredDecisionIterator` constructor require a ranking, so the compiler
+holds them. `XgIteratorOptions`, which `XgSourceConverter` builds, does not:
 its ranking defaults to `Equity`, which is also this app's choice, so a run
 under `Equity` cannot tell the app's ranking from the default. The pins
 therefore run each mode under `DepthFirst`, over a fixture and filter
@@ -234,14 +302,13 @@ therefore run each mode under `DepthFirst`, over a fixture and filter
 the producer's own read, admits different decisions under the two rankings:
 
 - `LocalFolderProcessorRankingTests` — one test per pathway, each against the
-  producer's reference for `DepthFirst`. CSV and Xgp fail if the processor's
-  options drop the ranking (their rows are built by the iterator); Diagram
-  JSON and deck fail if records are filtered under any ranking but the
-  processor's. Both halves were checked by mutation at the time of writing.
-- `WebModeRankingTests` — the pipeline the panel runs (`XgProcessingService`'s
-  two extractions for the cache's ranking, then `FilteredRowCache`) under
-  `DepthFirst`. If `OptionsFor` dropped the ranking, the rows would be built
-  for `Equity` and the cache would refuse them.
+  producer's reference for `DepthFirst`: each fails if the run's filtering
+  operation is built for any ranking but the processor's.
+- `WebModeRankingTests` — the conversions the session runs
+  (`XgSourceConverter`'s two, for the cache's ranking, then
+  `FilteredRowCache`) under `DepthFirst`. If the converter's options dropped
+  the ranking, the rows would be built for `Equity` and the cache would
+  refuse them.
 
 Beside those, `FilteredRowCacheTests` pins the cache's own rule over
 hand-built rows under either ranking, and `WebModePanelFilteringTests` pins
@@ -251,20 +318,26 @@ that the panel builds its cache for `AppRanking.Ranking`.
 
 Selecting the **XGP positions** output format emits the filtered decisions
 as per-decision `.xgp` position files — available in both modes. In Web
-mode the download is one `.zip` with a `.xgp` entry per decision, built by
-`XgProcessingService.BuildXgpZip(sourceFiles, decisions, options)` — the
-encapsulation seam: the panel hands it retained file bytes plus
-`DecisionId`s; parsing stays inside the service and components never touch
-`XgFile`. In Local mode `LocalFolderProcessor.ProcessXgpAsync` writes the
-files server-side into the output **folder** (`OutputPath` is a directory
-for this format, created if absent; same-named files are overwritten).
-Per decision, both pathways apply the same routing rule:
+mode the download is one `.zip` with a `.xgp` entry per prepared decision,
+built by `XgProcessingService.BuildXgpArchive(decisions, options, filters,
+anonymize, skipped)` from the selection's retained decoded files: the panel
+hands it each filtered row paired with its file (`WebSession.XgpDecisionsFor`)
+and never touches an `XgFile`. In Local mode
+`LocalFolderProcessor.ProcessXgpAsync` writes the files server-side into the
+output **folder** (`OutputPath` is a directory for this format, created if
+absent; same-named files are overwritten). Per decision, both pathways
+prepare the payload through one statement of the routing rule,
+`XgpPayload.Prepare`, within the decision's own boundary (a failure skips
+that decision and consumes no number), and commit outside it:
 
-- `XgDecisionId` (from a `.xg` source) → `XgpExporter.ToBytes(xgFile, game,
-  moveNumber, isCube)` — the producer's **slice** surface, analysis panes
-  carried through, XG-SaveAs-equivalent, re-consumable by our own iterator.
-- `XgpDecisionId` (from an `.xgp` source) → the source file bytes
-  **verbatim** (see Pitfalls).
+- `XgDecisionId` (from a `.xg` source) → `XgpExporter.ToBytes(xgFile, id)` —
+  the producer's **slice** surface, analysis panes carried through,
+  XG-SaveAs-equivalent, re-consumable by our own iterator.
+- `XgpDecisionId` (from an `.xgp` source) → the source file's bytes
+  **verbatim**, as read and retained (see Pitfalls).
+- Anonymizing applies the producer's role preset to both (the slice's
+  options-bearing overload; the `.xgp`'s whole-file anonymize-copy, which
+  needs no bytes).
 
 Entry naming is a user-editable **name pattern** — literal text plus
 `{token}` placeholders (e.g. `Move{min-move}_{dice}_{score}` →
@@ -303,22 +376,35 @@ by the naming engine in `Client/Shared`:
   `Create(options, filters)` (the single options-validation throw point for
   both pathways). Appends `.xgp` and uniquifies duplicate rendered names
   Windows-style (`name.xgp`, `name (2).xgp`, …; case-insensitive
-  bookkeeping). Web mode consumes names via `Next`; Local mode uses the
-  `Peek`/`Commit` split so failed decisions don't consume a number.
+  bookkeeping). Local mode uses the `Peek`/`Commit` split, committing a slot
+  once its file is written; Web mode takes a name with `Next` once a payload
+  is prepared, provisionally — the archive commits at its hand-off.
+  `CommittedCount` is the numbers a run has used.
 
 The default pattern `pos{n}` names files byte-identically to the pre-pattern
 `{prefix}{number:D{suffixLength}}.xgp` rule; `StartNumber`/`SuffixLength`
 govern `{n}`. `Home` owns the option state and its localStorage persistence
 (`xg_xgpPattern`, `xg_xgpLastNumber`, `xg_xgpSuffixLength`): the "next
 number" field defaults to the persisted last number + 1 while the pattern
-matches the persisted pattern (else 1), and both panels report a completed
-export through their `OnXgpExported(count)` callback so `Home` can advance
-and persist the counter. A missing `xg_xgpPattern` migrates once from the
-legacy `xg_xgpPrefix` key (`{prefix}{n}`, falling back to `pos{n}` if the
-prefix breaks the grammar); the legacy key is removed on the next successful
-export. In Local mode the count is the final
-`ProcessingProgress.TotalRows`; cancelled runs advance the counter too
-(their files were written), error terminations don't.
+matches the persisted pattern (else 1). A missing `xg_xgpPattern` migrates
+once from the legacy `xg_xgpPrefix` key (`{prefix}{n}`, falling back to
+`pos{n}` if the prefix breaks the grammar); the legacy key is removed on the
+next export that commits a file.
+
+**The committed result** (`SPEC-notices.md` §7.1). An export's accounting is
+one `XgpExportCommit`: the options it captured when it started and the files
+it committed (`NextNumber` derived). Local mode: the processor's
+`RunRecord` holds it from the moment the options validate and replaces it as
+each file is written; every snapshot carries it
+(`ProcessingProgress.XgpCommit`), the job runner's cancelled and failed
+snapshots included, and `LocalModePanel` hands the terminal's commit on for
+every ending, whatever it shows. Web mode: the archive's commit is handed on
+only after its hand-off succeeds; a failed hand-off advances nothing. Both
+panels raise `OnXgpExported(XgpExportCommit)` (`[EditorRequired]`), and
+Home's one handler persists the pattern, last number and length from the
+commit's options — never from its controls — and advances its controls only
+while they still show exactly those options, so a choice made while the
+export ran stands. A commit of nothing advances nothing.
 
 ### Components
 
@@ -397,25 +483,33 @@ export. In Local mode the count is the final
   describes the inputs on screen. So a run that completes after its inputs
   were superseded is never shown as the new inputs' result, not even while
   the XGP export's bookkeeping (Home's counter writes) is pending. That
-  bookkeeping is the job's own and follows publication whatever is on
-  screen, in the format the job ran. Watching "a
+  bookkeeping is the job's own: the terminal's `XgpExportCommit` is handed to
+  Home for every ending — completed, cancelled or failed — whatever is on
+  screen (see "XGP export"). Watching "a
   filter is in effect" fall is not enough, and was what this replaced: the
   empty selection stays in effect across a folder change, so nothing falls
   while the folder the result was computed from has gone. The Done line
   names the run's own output path, and the zero-match box asks the run's own
   filter, never the one on screen now.
-  On a terminal snapshot whose `Skipped` record is non-empty it shows a
-  `skipped-notice` box under the status line (halheinrich/backgammon#223):
-  the non-zero counts, then each skipped input with its reason. A file is
-  shown by its path under the input folder, and a decision adds its canonical
-  `DecisionId`. It sits outside the success/cancelled/error branches, so a
-  cancelled or failed run's record shows too; mid-run it stays hidden while
-  the record is still growing. The zero-match notice **yields** to it. That
-  notice concludes "the filter matched nothing" from zero rows through an
-  active filter, and the conclusion holds only if every file was read, so it
-  renders only when the record is empty. Suppressing it, rather than rewording
-  it to mention the skips, keeps two independent notices, each with one
-  condition, instead of adding a third combined state.
+  **The run's skip record lives by other rules** (`SPEC-notices.md` §7.2,
+  ruled "Option B"), so it is its own state, `_lastRun`: the record the run's
+  terminal snapshot carried, the source the run ran against, and how the run
+  ended. It is published when the run ends while that source is still the
+  current one, whatever the filter now is; a filter change keeps it, an
+  unapplied edit included; replacing or removing the source clears it, and a
+  run from the former source publishes none; the next run's start clears it,
+  and mid-run it stays hidden while the record is still growing. It renders
+  through `SkipListNotice` below the result, labelled with its run — "The last
+  run", "The last run (stopped)", "The last run (failed)" — so once "Done" has
+  gone it still reads as that run's history (halheinrich/backgammon#223 for
+  the list itself). A file is shown by its path under the input folder, and a
+  decision adds its canonical `DecisionId`. The zero-match notice **yields**
+  to a non-empty record of the same run. That notice concludes "the filter
+  matched nothing" from zero rows through an active filter, and the
+  conclusion holds only if every file was read, so it renders only when the
+  terminal's record is empty. Suppressing it, rather than rewording it to
+  mention the skips, keeps two independent notices, each with one condition,
+  instead of adding a third combined state.
 - **`WebModePanel.razor`** — file picker, preview table, download; every slow
   gesture runs through `RunBusyAsync` (see "Busy affordance"). Parameters:
   `OutputFormat`, `FilterInEffect` (as Local's), `OnSelectionChanged`
@@ -426,43 +520,63 @@ export. In Local mode the count is the final
   the XGP members. Its settings — the download file name and the folder
   hint — go through `SettingsStorage`; the hint's write never stands between
   the user and their files (see "Browser storage").
-  **The selection, and its token, are the panel's.** The selected bytes
-  (`_fileBytes`) and rows (the cache) live in the panel and die with it, so
-  the token does too: minted when a gesture selects files, held beside them,
-  dropped when a gesture clears them. Two selections never share a token,
-  also across panel instances — the filter setup outlives every page, so a
-  page-lived counter would mint an earlier pick's token again after a
-  navigation, and a new pick would inherit that pick's consent. The counter
-  behind `FromGeneration` is therefore process-wide (one per loaded app),
-  and only moves forward. `XgProcessingService` keeps no selection.
-  The live row state — loaded decision rows and diagram records, the
-  materialized `DecisionFilterSet`, and the filtered projections — lives in
-  `FilteredRowCache` (Client `Services/`); the panel's own filtering logic
-  is one gate: `OnParametersSet` calls `Refilter(FilterInEffect)` only while
-  a filter is in effect. The cache is built for the run's one ranking (see
-  "The ranking"): it accepts only rows built for it and filters each record
-  through its view for it, built once when the records arrive. It builds
-  the filter via `FilterConfig.Build()` once per config **value** — the
-  owner's `ConfigInEffectFor` returns a new instance on every call, so a
-  reference key would rebuild on every render — and keeps its own copy as
-  the key; `ReplaceRows` re-projects fresh rows through the set already in
-  effect. Every list it hands out is an immutable array, replaced whole,
+  **The selection, and its token, are the panel's.** The panel's
+  `WebSession` (Client `Services/`) holds the selection, its conversions,
+  the book in force, the projections and the last download, and dies with
+  the panel; an operation still running when the panel goes is cancelled by
+  the panel's lifetime and publishes nothing. The token is minted when a
+  gesture selects files, held by the selection, and gone with it. Two
+  selections never share a token, also across panel instances — the filter
+  setup outlives every page, so a page-lived counter would mint an earlier
+  pick's token again after a navigation, and a new pick would inherit that
+  pick's consent. The counter behind `FromGeneration` is therefore
+  process-wide (one per loaded app), and only moves forward.
+  `XgProcessingService` keeps no selection.
+  **Gestures run through the session** (see "Reading, converting, skipping
+  and committing"): a pick begins by ending the old selection, reads and
+  converts rows, then converts what the selected output needs; a book pick
+  publishes the book and reconverts rows under it (and records, when Diagram
+  JSON is selected); a format switch to Diagram JSON converts the records
+  the first time (`OnParametersSetAsync`, "Converting decisions for Diagram
+  JSON…"), and each gesture ends by converting what the format selected then
+  needs. A file that cannot be read is no run error: it is named in "this
+  selection". `_runError` is for a gesture that itself failed — a download
+  that could not be built or handed over, or a selection that could not be
+  taken. The session's projections are a `FilteredRowCache`; the panel's own
+  filtering logic is one gate: `OnParametersSetAsync` calls
+  `Refilter(FilterInEffect)` only while a filter is in effect. The cache is
+  built for the run's one ranking (see "The ranking"): it accepts only rows
+  built for it and filters each record through its view for it, built once
+  when the records arrive. It builds the filter via `FilterConfig.Build()`
+  once per config **value** — the owner's `ConfigInEffectFor` returns a new
+  instance on every call, so a reference key would rebuild on every render —
+  and keeps its own copy as the key; `ReplaceRows` and `ReplaceRecords`
+  re-project each set through the filter already in effect, each leaving the
+  other alone. Every list it hands out is an immutable array, replaced whole,
   never a live list (the collection rider of halheinrich/backgammon#273).
-  The panel exposes the cache internally (`RowCache`) as the wire-test
-  seam. When a filter in effect excludes every loaded row (`Rows.Count > 0`
-  but `FilteredRows.Count == 0`) the panel renders an explicit zero-match
-  notice in place of the bland `N of M rows match` line, so a
-  filtered-to-zero result reads as a result rather than a silent success.
-  The "filters are active" signal is emergent, not a `FilterConfig`
-  re-inspection: an empty (inactive) set passes every row, so zero
-  survivors from a non-empty load can only mean the set is non-empty. The
-  Web view is derived from the current rows and the current filter on every
-  render, so it always describes its inputs.
+  The panel exposes the cache (`RowCache`) and the session (`Session`)
+  internally as wire-test seams.
+  **Readiness and counts follow the selected output's representation**
+  (§7.3): rows for CSV and XGP, records for Diagram JSON. The download block
+  shows for any selection with a decoded file; Download, the match line ("N of
+  M rows match current filters", or "… decisions …" for records) and the
+  zero-match notice read the selected key's state, and a key not converted
+  yet shows no count at all — never zero matches. The "N rows loaded" line
+  counts the rows that converted. When a filter in effect excludes every
+  converted item the panel renders an explicit zero-match notice in place of
+  the match line, so a filtered-to-zero result reads as a result rather than
+  a silent success. The "filters are active" signal is emergent, not a
+  `FilterConfig` re-inspection: an empty (inactive) set passes everything, so
+  zero survivors from a non-empty set can only mean the filter is non-empty.
+  "This selection" renders above the run error and "the last download" below
+  the download block, both through `SkipListNotice`; the last download's
+  label carries a failed or stopped attempt's ending.
 
 The Run/Download gate's filter term is `FilterInEffect is not null`, and
 nothing else filter-shaped — one fact, one owner. Each panel adds its own
-gates beside it (a folder and an output path; loaded rows within the size
-limit; valid XGP options); those stay the panels'. A source change (a new
+gates beside it (a folder and an output path; the selected representation
+converted, within the size limit; valid XGP options); those stay the
+panels'. A source change (a new
 folder commit, a new file selection) ends the setup: an applied selection is
 dropped and needs Apply again against the new source, while the empty
 selection stays in effect without one.
@@ -506,8 +620,9 @@ it, not a restatement.
   "Apply filters first" shows only while a source exists and nothing is in
   effect for it — with no folder, the blank folder box is why Run is dark.
 - **Derived facts are keyed by their inputs.** Local's result by its run's
-  source and filter values; Web's cache by the filter's value. Neither
-  compares configs by reference.
+  source and filter values, and its run record by its run's source; Web's
+  filter cache by the filter's value, and its conversions by selection and
+  conversion key. Nothing compares configs by reference.
 
 ### Browser storage
 
@@ -561,7 +676,7 @@ holds the dismissal**. No `.razor` file here types alert markup.
 | `#storageUnavailableNotice` (Home) | condition notice | yes, per occurrence | assertive |
 | the run error (both panels) | error | yes | assertive |
 | `zero-match-notice` (both panels) | gate reason — the run's result | no | assertive |
-| `skipped-notice` (Local) | gate reason — the record of what a run lost | no | assertive |
+| `skipped-notice` (both panels, `SkipListNotice`) | gate reason — the record of what was lost: Local's last run; Web's "this selection" and "the last download" | no | assertive |
 | the selected-size limit (Web) | gate reason — why nothing loaded and Download is dark | no | assertive |
 | `busy-notice` (Web) | live indicator | no | polite |
 
@@ -573,7 +688,9 @@ component keeps no bit that could disagree with the owner's:
 
 - **The run error — the panel's `_runError`.** One occurrence is one failed
   gesture: in Local mode a run the client could not start or follow, in Web
-  mode a file read or a download build that threw. `_runError` (nullable) is
+  mode a download that could not be built or handed to the browser, or a
+  selection that could not be taken (a file that cannot be read is a skip,
+  not a run error). `_runError` (nullable) is
   non-null exactly while one stands, so it is the box's presence, its text
   and its dismissal at once: closing the box assigns null, exactly as the next
   gesture and (Local) inputs that no longer match the run's already do, and
@@ -644,12 +761,15 @@ full corpus for **57 s**, a `.xgp` zip of 386 decisions for **6.6 s**, and a
 ms and deliberately gets nothing.
 
 `WebModePanel` routes every slow gesture — file selection, opening-book pick,
-and all three download formats — through one private `RunBusyAsync(message,
-body)`, which raises `_busy`/`_busyMessage`, renders, **yields**, runs the
-body, and releases in a `finally`. It drives a single `busy-notice` box at
-the top of the panel (the Download button's own "Building…" label is the local
-half of the same state). The yield is load-bearing, not stylistic — see
-Pitfalls. `RunBusyForTest` is its test seam, sibling of `RowCache`.
+the first switch to Diagram JSON (the records conversion), and all three
+download formats — through one private `RunBusyAsync(message, body)`, which
+raises the busy state and `_busyMessage`, renders, **yields**, runs the body,
+and releases in a `finally`. The busy state is a depth count (`IsBusy` while
+it is above zero), since a gesture can begin while another's await is
+pending. It drives a single `busy-notice` box at the top of the panel (the
+Download button's own "Building…" label is the local half of the same
+state). The yield is load-bearing, not stylistic — see Pitfalls.
+`RunBusyForTest` is its test seam, sibling of `RowCache`.
 
 Local mode's progress bar already covers the CSV, Diagram JSON and Xgp
 pathways end to end (2 s runs, reporting throughout). Two states carry no
@@ -666,8 +786,8 @@ fraction and get an indeterminate striped bar instead:
 the user found missing (issue halheinrich/backgammon#77): through that
 multi-minute deck render the bar and the phase message were right and the
 pointer stayed a plain arrow. Both panels put an `is-busy` class on their
-**root** element for exactly as long as their own busy flag is up — `_busy` in
-each, unchanged — and `wwwroot/app.css` turns that one class into
+**root** element for exactly as long as their own busy state is up — `_busy`
+in Local's panel, `IsBusy` in Web's — and `wwwroot/app.css` turns that one class into
 `cursor: progress` for the root and everything under it. Two details are
 load-bearing:
 
@@ -714,18 +834,19 @@ pins the state→class binding for both panels.
 #### Web/Azure (`"AppMode": "Web"`)
 
 - Browser file picker, 50 MB cap.
-- WASM processes everything client-side. Both `ExtractDecisions` and
-  `ExtractDiagramRequests` run on file selection.
-- Download button produces CSV or JSON from the pre-extracted in-memory data
-  based on the current output-format toggle.
+- WASM processes everything client-side: a pick reads each file once and
+  converts it to rows; records convert when Diagram JSON is first selected
+  (see "Reading, converting, skipping and committing").
+- Download builds CSV, Diagram JSON or the XGP archive from what the session
+  retains, for the format selected when the download starts.
 - PPTX and PDF are unavailable (radios disabled) — see "Client WASM" above.
 
 ### Job lifecycle (Local mode)
 
 `JobStore` is a singleton holding `ConcurrentDictionary<string, JobEntry>`.
 Each `JobEntry` carries a `ProcessingProgress` snapshot and a
-`CancellationTokenSource`. The client polls once per second
-(the processor uses `reportEvery = 10`, writing progress every 10th file).
+`CancellationTokenSource`. The client polls once per second (the processor
+reports every tenth file, on every pathway).
 
 Cleanup rides the status read. `JobStore.ReadStatus` returns the current
 snapshot and, when it is terminal (`Complete` — success, cancellation, and
@@ -741,30 +862,33 @@ The controller's `Status`/`Cancel` actions are thin pass-throughs to
 gap remains — an abandoned job whose client never polls to completion lingers
 for the process lifetime (see the "Abandoned-job expiry" next step).
 
-**Skips are recorded; cancellation is never one**
-(halheinrich/backgammon#223). One bad file must not kill a batch, so every
-pathway catches a file that fails and moves on — and the Xgp pathway also
-catches a single decision whose write fails. Every one of those catches calls
-one seam, `LocalFolderProcessor.RecordSkip`, and none logs on its own: the
-seam logs the skip and appends a `SkippedItem` (the file's path relative to
-the input folder; the decision's id for a decision skip; the exception's
-message as the reason) to the run's `SkipRecord`. Every snapshot the run
-reports, progress and terminal alike, carries a copy of that record as
-`ProcessingProgress.Skipped`, with the file and decision counts derived from
-it. Every skip catch excludes `OperationCanceledException`
-(`when (ex is not OperationCanceledException)`), so a cancellation raised
-inside a file's body cancels the run on all four pathways rather than being
-recorded as a skipped file.
+**Skips are recorded; a destination failure and a cancellation never are**
+(halheinrich/backgammon#223, `SPEC-notices.md` §7.1). One bad file must not
+kill a batch: a failed read (the read's outcome), a failed conversion (the
+file's staged contribution) and, on the Xgp pathway, a decision whose payload
+cannot be prepared are each skipped, and the run goes on. Every one of them
+goes through one seam, `LocalFolderProcessor.RecordSkip`, and nothing else
+logs a skip: the seam logs it and appends a `SkippedItem` (the file's path
+relative to the input folder; the decision's id for a decision skip; the
+exception's message as the reason) to the run's `RunRecord`. Every snapshot
+the run reports, progress and terminal alike, carries the record's skips as
+`ProcessingProgress.Skipped`. A commit to the destination is outside every
+skip boundary and fails the run. A cancellation propagates out of the read,
+which no catch encloses, and every skip catch excludes
+`OperationCanceledException`, so it cancels the run on all four pathways
+rather than being recorded as a skipped file.
 
 The record belongs to the run, so it reaches every terminal snapshot, the two
 the job runner builds as well as the one the processor reports. The runner in
-`ProcessController` creates one `SkipRecord` per job and passes it to the
-processor, and its cancel and error catches both copy it onto the snapshot
-they set. They cannot take it from the last reported snapshot: a run-ending
-exception reports nothing, and the streaming pathways report only every tenth
-file. The processor rejects a record that already holds entries, since one run
-must not report another's skips. A failed run therefore shows its error and
-its skips together.
+`ProcessController` creates one `RunRecord` per job and passes it to the
+processor, and its cancel and error catches set the snapshot the record
+builds (`CancelledSnapshot`, `FailedSnapshot` — new snapshots, swapped in
+whole): its skips and, for XGP, its commit. They cannot take them from the
+last reported snapshot: a run-ending exception reports nothing, and the
+pathways report only every tenth file. The processor rejects a record that
+already holds anything, since one run must not report another's. A failed
+run therefore shows its error and its skips together, and accounts for every
+file it wrote.
 
 The runner's progress sink applies each report inline (`InlineProgress`),
 not through `Progress<T>`. `Progress<T>` posts every report to the thread
@@ -786,8 +910,9 @@ level that carries no rollout parameters. Supplying XG's opening-book database
 book-analysed decisions then report an enriched `AnalysisDepth`
 (`Book V2: 12960 trials. 4-ply`) and a real `AnalysisLevel` instead of the
 degraded `BookRollout` + `Unknown` pair. The producer owns the enrichment; this
-app only *locates* the book and hands the loaded instance to the iterators via
-`XgIteratorOptions.OpeningBook`. Enrichment is strictly additive — it never
+app only *locates* the book and hands the loaded instance on — to each Local
+run's `FilteredDecisionIterator` (the book alone), and to Web mode's
+conversions through `XgIteratorOptions.OpeningBook`. Enrichment is strictly additive — it never
 changes which decisions or candidates are emitted, only their depth labels and
 levels — so a missing book degrades cleanly and never fails a run.
 
@@ -800,11 +925,11 @@ path; **absent** → auto-detect the default install
 tested; loading is the IO half. The provider exposes the loaded `Book`
 (null when none) and not iterator options: the options also carry the run's
 ranking, which is the application's, not the provider's.
-`LocalFolderProcessor` builds its one `XgIteratorOptions` from the book and
-the run's ranking, holds it in a field, and passes it as `options:` at all
-four iterator call sites (CSV, Diagram JSON, Xgp, deck). A null provider, a
-disabled key, a missing file, or an unreadable book all resolve to the same
-null-book / unenriched path.
+`LocalFolderProcessor` holds the book and builds each run's
+`FilteredDecisionIterator` with it and the run's ranking, on all four
+pathways (CSV, Diagram JSON, Xgp, deck). A null provider, a disabled key, a
+missing file, or an unreadable book all resolve to the same null-book /
+unenriched path.
 `GET /api/openingbook/status` surfaces the load state so `LocalModePanel` can
 show a status line by the folder input.
 
@@ -814,12 +939,14 @@ show a status line by the folder input.
 producer's loader is path-based and WASM has no real path for picked bytes, so
 it stages the image to an Emscripten MEMFS temp file, calls
 `OpeningBook.TryLoad`, and deletes it — keeping components off both the path API
-and the temp-file mechanics. `ExtractDecisions` / `ExtractDiagramRequests` take
-the run's ranking and an optional `OpeningBook?`, and map the two to options
-through one private `OptionsFor` helper, which always states options, so the
-iterator's own default ranking never stands in. `WebModePanel` retains the loaded book alongside the raw
-file bytes and **re-extracts** on a book change, so a book chosen after the
-files still enriches them — pick order is irrelevant. A status line reports the
+and the temp-file mechanics. `XgSourceConverter` takes the run's ranking and
+the book in force and always states options, so the iterator's own default
+ranking never stands in. The book is part of each conversion key: publishing
+a different book (`WebSession.CompleteBookLoad`, owned by its load's ticket)
+drops the old book's results and **reconverts** the selection's rows under the
+new one, each file within its own boundary (halheinrich/backgammon#364), and
+its records when Diagram JSON needs them — so a book chosen after the files
+still enriches them, and pick order is irrelevant. A status line reports the
 entry count (or an invalid-file error).
 
 ### Filter pipeline
@@ -828,10 +955,15 @@ entry count (or an invalid-file error).
 a `DecisionFilterSet` from the serializable DTO. The server calls
 `request.Filters.Build()` in `ProcessController.Start`; Web mode's build
 lives in `FilteredRowCache.Refilter`, driven by `WebModePanel`'s
-`OnParametersSet` gate. Same method, two call-sites —
-see "FilterConfig materialization differs by mode" in Pitfalls. CSV,
-Diagram JSON, PPTX, and PDF pathways all feed the same filter set via
-`IDecisionFilterData` — one filter implementation, four extraction outputs.
+`OnParametersSetAsync` gate. Same method, two call-sites —
+see "FilterConfig materialization differs by mode" in Pitfalls. Local mode's
+four pathways filter each decoded file through XgFilter_Lib's filtering
+operation (`FilteredDecisionIterator.IterateFile` / `IterateFileDiagrams`,
+the set's early-exit hints wired); Web mode refilters what it retains with
+`DecisionFilterSet.Matches`. Both are that library's rules — "two
+strategies, one rule set", which agree because early exit never changes what
+passes — through `IDecisionFilterData`: one filter implementation, every
+output.
 A row is its own view, built for the run's ranking; a record is not a view,
 and is filtered through `record.ViewFor(ranking)` for that same ranking (see
 "The ranking").
@@ -895,6 +1027,14 @@ records what a run was computed from when the run starts.
 - `XgProcessingServiceTests` — the service's CSV and Diagram JSON builders
   over producer-built rows and records (`TestRecords`): the CSV's header and
   row count, and the JSON read back as records of both kinds.
+- `XgpExportServiceTests` — the Web XGP archive over decoded fixtures: entry
+  naming (pattern, start number, length, tokens, the uniquifier), a sliced
+  decision and a cube re-reading to their source's XGID, an `.xgp` copied
+  verbatim from its retained bytes, numbering in the given order, anonymizing
+  both kinds; and the export skip — a decision whose payload the producer
+  refuses is skipped, reported with its file and id, and consumes no number,
+  the archive's commit counting its entries; a verbatim copy without its bytes
+  is skipped while an anonymized copy needs none.
 - `Make20PtSmokeTests` — wire test for the Make20Pt filter category.
   Exercises `FilterConfig.Build` + `FilteredDecisionIterator` under the
   app's ranking, against the real fixture
@@ -902,8 +1042,9 @@ records what a run was computed from when the run starts.
   XOR semantics so adding/removing fixtures shifts both sides together.
 - `OutputConsistencyTests` — verifies that the CSV pathway and the Diagram
   JSON pathway see the same decisions through the same filter set, under the
-  app's ranking: each row is built for `AppRanking.Ranking`, each record is
-  read through its view for it, and every view member the two share agrees.
+  app's ranking: each row the converter builds is built for
+  `AppRanking.Ranking`, each record is read through its view for it, and
+  every view member the two share agrees.
   Uses `IDecisionFilterData` explicitly (CA1859 suppressed — the interface
   contract is what's being tested).
 - `LocalFolderProcessorPptxTests` — wiring test for the Local-mode PPTX
@@ -920,8 +1061,9 @@ records what a run was computed from when the run starts.
 - `LocalFolderProcessorIllegalPlayTests` — the consumer half of the
   illegal-play log contract: a real tournament file carrying XG's
   illegal-play marker renders a PDF with nothing skipped, and the illegal
-  play surfaces as a contextual warning through the logger the deck pathway
-  hands the iterator.
+  play surfaces as a contextual warning through the filtering operation's
+  logger, which the processor hands the run's `FilteredDecisionIterator` and
+  it forwards to the producer.
 - `LocalFolderProcessorSkipTests` — the skip contract
   (halheinrich/backgammon#223) on all four pathways, twice each. *Skips are
   recorded*: a temp folder holds one fixture and one malformed file the test
@@ -931,7 +1073,7 @@ records what a run was computed from when the run starts.
   (checked against the producer read directly), and the bad file is recorded
   once, by its path under the input folder, with a non-empty reason. Two
   same-named files in different subfolders are recorded by their distinct
-  relative paths while the log keeps the bare name; a caller's `SkipRecord`
+  relative paths while the log keeps the bare name; a caller's `RunRecord`
   holds exactly what the snapshots carried and is refused for a second run.
   *Cancellation is not a skip*: a one-file run cancelled from its
   first progress report throws `OperationCanceledException`, its last
@@ -940,20 +1082,33 @@ records what a run was computed from when the run starts.
   catches' swallow was re-thrown by the final write before any snapshot could
   show it. Uses a synchronous `IProgress<T>`, because `Progress<T>` posts its
   callback and would race the cancellation point.
-- `ProcessingProgressWireTests` — the skip record round-trips under
-  `JsonSerializerDefaults.Web`, the defaults both ends of the status endpoint
-  actually use: record constructor binding, `DecisionId` in its canonical
-  form, and the derived counts. A body with no `skipped` field reads as an
-  empty record, not null. And the record handed out is an immutable copy —
-  never the list the JSON reader built, nor one a caller set and kept (the
-  collection rider).
+- `LocalFolderProcessorBoundaryTests` — Local mode's boundaries
+  (`SPEC-notices.md` §7.1): a file failing midway — a filter that throws on a
+  chosen decision, which the filtering operation propagates — contributes no
+  rows (CSV), records (Diagram JSON) or positions (XGP) and is a conversion
+  skip; an unwritable destination fails the run with no skip (CSV, Diagram
+  JSON, and an XGP write after a successful one, whose file and commit
+  survive); a failed XGP payload preparation, through the processor's
+  internal preparation seam, is a decision skip that consumes no number; and
+  a cancellation records no skip and keeps the files the run committed, its
+  XGP commit counting every file written.
+- `ProcessingProgressWireTests` / `SkipRecordTests` — the skip record: its
+  wire form under `JsonSerializerDefaults.Web` (the array of its entries,
+  `DecisionId` in its canonical form, a body without the field reading as the
+  empty record), and its own contract (immutability, the derived counts,
+  equality, the copy taken of its input, null entries refused).
+- `RunRecordTests` / `XgpExportCommitTests` — the job runner's cancelled and
+  failed snapshots take the skips and the commit from the record over a
+  trailing report; the commit's validation, `NextNumber`, equality and wire
+  form.
 - `ProcessEndpointTests` — hosted pins (`WebApplicationFactory`, Local
   config) for the terminal snapshot the job runner builds itself when a run
   fails, which nothing below the controller can observe. A Diagram JSON run
   that skips a file and then fails on an unwritable output path, and a deck
   run whose every file is skipped (nothing to render), both end with the
-  error and the skip together. Each polls the real status endpoint as the
-  panel does.
+  error and the skip together; an XGP run whose second write fails ends with
+  the error, no skip, and the commit of the one file written. Each polls the
+  real status endpoint as the panel does.
 - `HomeWiringTests` — bUnit wire tests pinning the `FilterSetup` → `Home`
   integration through the composite's rendered DOM (the panels are
   producer-internal; `FindComponent` over them is banned, host tests
@@ -1086,22 +1241,36 @@ records what a run was computed from when the run starts.
 - `HomeRunResultTests` — a Local XGP run through the real page, storage
   planned, its bookkeeping's first write held: a run whose folder changed
   while it ran shows no "Done" while that write is pending nor after it
-  completes, and the export counter still advances by what the job wrote;
-  the same held run over unchanged inputs shows its result throughout, as the
+  completes, and the export counter still advances by the job's commit; the
+  same held run over unchanged inputs shows its result throughout, as the
   control.
+- `HomeXgpAccountingTests` — Home's one accounting handler through the real
+  page, storage planned: a failed Local run and a cancelled one each advance
+  the numbering by their commit; a control changed while a Local run ran, or
+  while a Web download's hand-off was pending, stands, while the export's
+  numbering is persisted from its captured options.
 - `LocalModePanelZeroMatchTests` — the Local zero-match notice, through real
   runs against a zero-row server: shown beside the Done line for an active
   filter, not for the empty one, and not when an active filter comes into
   effect after a zero-row run through the empty one — the box asks the run's
   own filter.
 - `LocalModePanelSkippedNoticeTests` — the client half of
-  halheinrich/backgammon#223: a completed snapshot with skips shows the
-  notice beside the Done line, with the counts and every name and reason (a
-  decision by its file's relative path and its canonical id); a cancelled one
-  shows its partial record; one without skips shows nothing, and neither does
-  a mid-run snapshot that already carries skips; and zero rows through an
-  active filter with skips — a real run — shows the skip notice and not the
-  zero-match one.
+  halheinrich/backgammon#223, through real runs: a completed run with skips
+  shows the record beside the Done line, labelled "The last run", with the
+  counts and every name and reason (a decision by its file's relative path
+  and its canonical id); a cancelled and a failed run show theirs, labelled
+  with the ending; a run without skips shows nothing, and a run in flight
+  shows nothing until it ends; and zero rows through an active filter with
+  skips shows the skip record and not the zero-match notice.
+- `LocalModePanelRunRecordLifetimeTests` — §7.2's lifetime through real runs:
+  a filter change keeps the record and drops "Done" and the zero-match
+  notice; replacing or removing the source clears it; a run completing after
+  its source was replaced publishes none, with a run whose filter changed
+  instead as the control (its record, not its result); the next run replaces
+  it from its start.
+- `SkipListNoticeTests` — the one rendering: an empty record renders nothing,
+  a record is an assertive, non-dismissible warning carrying the marker and
+  the caller's classes, and the optional label sits above the headline.
 - `LocalModePanelFilterWireTests` — bUnit wire tests pinning the filter half of
   the `/api/process/start` POST (the sibling `LocalModePanelXgpAnonymizeTests`
   covers its format/anonymize half): the applied `FilterConfig` reaches the
@@ -1115,9 +1284,9 @@ records what a run was computed from when the run starts.
   before the first `Refilter`; build on the first; cache hit on an equal
   `FilterConfig` value in a new instance; rebuild on a different value, and
   on the handed-in instance mutated afterwards (the key is the cache's own
-  copy); `ReplaceRows`
-  re-projects through the set in effect without rebuilding; `Clear` empties
-  rows and projections but keeps the materialized filter. **One run, one
+  copy); `ReplaceRows` and `ReplaceRecords` each re-project through the set
+  in effect without rebuilding and leave the other set alone; `Clear` empties
+  rows, records and projections but keeps the materialized filter. **One run, one
   ranking**: over a decision whose best play differs by ranking, "erred by at
   least 0.1" admits the row and the record together under equity and neither
   under depth first — the second case is the one a record judged under the
@@ -1133,8 +1302,40 @@ records what a run was computed from when the run starts.
   an edit arrives in), observed through the panel's
   internal `RowCache` seam. Guards the migration failure mode of a panel
   that compiles but filters beside the cache instead of through it. And a
-  real file selection loads under `AppRanking.Ranking`: the cache's ranking,
-  every row's, and the same decisions in both projections.
+  real file selection with Diagram JSON selected loads under
+  `AppRanking.Ranking`: the cache's ranking, every row's, and the same
+  decisions in both projections.
+- `WebSessionTests` — the session's rules directly (§7.3), with a held
+  conversion (`ScriptedConverter`) for the late completions: a pick reads
+  each file once, names a failed read with the reader's message and converts
+  rows only; verbatim bytes are kept only where an export copies the file; an
+  all-failed pick still owns its failures; a superseded pick publishes
+  nothing; records convert only when asked and a completed result is reused;
+  a records conversion overlapped by a pick, a book change, a format switch
+  or a cancellation publishes nothing, or is cached, as its owner says; "this
+  selection" is the read skips and the selected key's conversion skips in
+  pick order, unchanged by refiltering; the last download is replaced from
+  the next attempt's start and refused after a newer attempt or pick.
+- `WebModePanelReadTests` — halheinrich/backgammon#364 through the panel: a
+  pick with one unreadable file loads the good ones and names the bad one in
+  "this selection"; an all-failed pick still shows its failures; the book's
+  re-extract handles a file per file (a decoded file whose rows the producer
+  refuses is named again under the new book).
+- `WebModePanelConversionTests` — halheinrich/backgammon#74 through the
+  panel: a CSV-only pick and download never call the records conversion (the
+  call itself counted, since a timing cannot show it); switching to Diagram
+  JSON converts records once and later switches reuse both results; a row
+  conversion failure keeps converted records downloadable; "not converted
+  yet" is never zero matches; a records conversion overlapped by a pick or a
+  book change publishes nothing; refiltering changes no skip and converts
+  nothing.
+- `WebModePanelDownloadTests` — a download attempt (§7.1, §7.3): an XGP
+  decision whose preparation fails is skipped, consumes no number, and is
+  named in "the last download", the host receiving the archive's commit, not
+  the selected count; a failed hand-off exports nothing and advances no
+  number, keeping its skips under a failed label; options changed while the
+  hand-off is pending leave the attempt's captured ones standing; the next
+  attempt replaces the record and a new pick clears it.
 - `WebModePanelBusyAffordanceTests` — the busy contract, pinned as two
   independent halves because the failure mode is ordering, not duration: the
   busy state is *rendered* before the body runs (drop the `StateHasChanged`
@@ -1175,9 +1376,10 @@ records what a run was computed from when the run starts.
   result, over a fixture and filter first proven to admit different
   decisions under `Equity`; and an undefined ranking is refused. See "The
   ranking" for which mutation each pathway catches.
-- `WebModeRankingTests` — the same in Web mode: extraction for the cache's
-  ranking and the cache's filtering, under `DepthFirst`, admit exactly the
-  producer's `DepthFirst` decisions in both projections.
+- `WebModeRankingTests` — the same in Web mode: the converter's two
+  conversions for the cache's ranking and the cache's filtering, under
+  `DepthFirst`, admit exactly the producer's `DepthFirst` decisions in both
+  projections.
 - `XgpNameTemplateTests` — the name-pattern grammar (every `TryParse`
   failure shape) and per-token rendering, including the counter-unification
   pin that `pos{n}` reproduces the old prefix naming, and `Sanitize`
@@ -1188,7 +1390,8 @@ records what a run was computed from when the run starts.
   as before.
 - `XgpNameAllocatorTests` — per-run uniquifier (`name.xgp`, `name (2).xgp`,
   …), Peek idempotence and the Peek-without-Commit slot reuse that keeps
-  failed decisions from consuming a number, `{n}` never uniquifying, and
+  failed decisions from consuming a number, `CommittedCount` counting commits
+  and not peeks, `{n}` never uniquifying, and
   `Create`'s per-shape `ArgumentException`s. The case-insensitivity of the
   bookkeeping is pinned by comparer reflection — no current token can render
   case-differing base names, so it isn't behaviorally observable yet.
@@ -1219,11 +1422,12 @@ records what a run was computed from when the run starts.
   counts. Enrichment correctness itself is owned by ConvertXgToJson_Lib.
 - `XgProcessingServiceOpeningBookTests` — the WASM counterpart: the bytes→book
   bridge (`TryLoadOpeningBook` loads valid `.ob` bytes, rejects garbage without
-  throwing) and that both extract entry points enrich the `ajhhBG0407` book
-  decision with a book and degrade without one.
+  throwing) and that `XgSourceConverter`'s two conversions enrich the
+  `ajhhBG0407` book decision with a book and degrade without one.
 - `WebModePanelOpeningBookTests` — bUnit wire tests for the `.ob` input: the
   status line reports a loaded / invalid book, and a book chosen after the `.xg`
-  files re-extracts the retained bytes (pick order doesn't affect enrichment).
+  files reconverts the retained decoded files (pick order doesn't affect
+  enrichment).
 - `WebModePanelRefilterOnLoadTests` — bUnit tests pinning the *panel-layer*
   projection rule: rows handed to the cache while a filter is held in effect
   are projected through the set in effect (`ReplaceRows`, no rebuild). End
@@ -1247,17 +1451,18 @@ POST /api/process/start
 GET  /api/process/{jobId}/status
   200 →  ProcessingProgress { Current, Total, Phase, FileName, TotalRows,
                               Complete, Cancelled, ElapsedSec, FilesPerSec,
-                              ErrorMessage?, Skipped[],
-                              PercentComplete, SkippedFileCount,
-                              SkippedDecisionCount (all three computed) }
+                              ErrorMessage?, Skipped[], XgpCommit?,
+                              PercentComplete (computed) }
          — PercentComplete is derived from Current/Total; ErrorMessage is
            non-null only on the catch path (terminal error state); Phase is
            the JobPhase discriminator the client picks its progress bar from
            (FileName is presentation and is never parsed for it); Skipped is
-           the run's skip record so far, SkippedItem { FileName, DecisionId?,
-           Reason } with FileName relative to the input folder, on every
-           snapshot including the error one; the two counts are derived
-           from it.
+           the run's skip record so far, the array of SkippedItem
+           { FileName, DecisionId?, Reason } with FileName relative to the
+           input folder, on every snapshot including the error one;
+           XgpCommit { Options, Count } is an XGP run's committed result so
+           far — null for every other format — on every snapshot, the
+           cancelled and error ones included, taken from the run's record.
 
 POST /api/process/{jobId}/cancel
   200 →  (empty)
@@ -1346,7 +1551,19 @@ project reference.
 - `XgpNameAllocator` — the naming engine's one public entry point: a stateful
   per-run name source created via `Create(options, filters)` (the single
   options-validation throw point for both export pathways). The server's
-  Local-mode processor and the WASM zip builder both name files through it.
+  Local-mode processor and the WASM archive builder both name files through
+  it; `CommittedCount` is the numbers a run has used.
+- `XgpExportCommit` — `sealed record XgpExportCommit(XgpExportOptions
+  Options, int Count)`: what one XGP export committed — the options it
+  captured and the files it committed — valid by construction (valid options,
+  a non-negative count), `NextNumber` derived and not serialized. Both modes'
+  accounting to Home (see "XGP export"); on the wire as
+  `ProcessingProgress.XgpCommit`.
+- `XgpPayload` — static: `Prepare(DecisionId, XgFile, ReadOnlyMemory<byte>?
+  sourceBytes, bool anonymize)` prepares one decision's `.xgp` payload from
+  its decoded source — the routing rule both modes share — and
+  `CopiesSourceVerbatim(DecisionId)` says whose payload is its source's
+  exact bytes. Public because the server's processor uses it.
 - Naming engine internals (`XgpNameTokens`, `XgpNameToken`, `XgpTokenSource`,
   `XgpNameContext`, `XgpNameTemplate`) — **`internal`** to the client assembly
   (test-reachable via the existing `InternalsVisibleTo`); reached only through
@@ -1355,32 +1572,38 @@ project reference.
   (`FilterConfig`, `DecisionRow`); the DTO stops at `XgpNameAllocator.Create`,
   so a future move into a library is relocation-only. `XgpNamePreview`
   (`internal`, the preview's sample row) sits beside the engine and not in
-  it, because it reads `AppRanking`, an app type. `XgProcessingService`
-  (the WASM extraction/zip service in `Client/Services`) is `internal` for the
-  same reason — a client-assembly implementation detail, not public surface.
+  it, because it reads `AppRanking`, an app type. `XgProcessingService`,
+  `WebSession` and their types (`Client/Services`) are `internal` for the
+  same reason — client-assembly implementation details, not public surface.
 - `ProcessRequest` — POST body for `/api/process/start`
   (`FolderPath`, `OutputPath`, `Filters` of type
   `XgFilter_Lib.Filtering.FilterConfig`, `OutputFormat`, `XgpOptions`).
 - `ProcessingProgress` — status-endpoint payload; a settable DTO the
-  processor fills and the panel reads. `Skipped`
-  (`IReadOnlyList<SkippedItem>`, empty by default) is the run's skip record as
-  of the snapshot. `SkippedFileCount` and `SkippedDecisionCount` are get-only
-  and derived from it, like `PercentComplete`: they serialize for any reader
-  of the wire but are never bound back, so they cannot disagree with the list.
-  Every snapshot gets its own copy of the list, so a reported snapshot never
-  changes afterwards; and setting `Skipped` takes an immutable copy, so what
-  it hands out is never a live list — on the client, not the `List<T>` the
-  JSON reader builds (the collection rider of halheinrich/backgammon#273).
+  processor fills and the panel reads. `Skipped` (`SkipRecord`, empty by
+  default, never null) is the run's skip record as of the snapshot;
+  `XgpCommit` (`XgpExportCommit?`) an XGP run's committed result.
+  `PercentComplete` is get-only and derived.
+- `SkipRecord` — the one record type of skipped units, both modes
+  (`SPEC-notices.md` §7.1): an immutable, ordered `IReadOnlyList<SkippedItem>`
+  with no null entry — `Empty`, `Of(items)`, collection expressions
+  (`Create`), and `With(item)` returning a new record — whose `FileCount` and
+  `DecisionCount` are derived from its entries, the one statement of "a file
+  skip names no decision". Value equality (the same entries in order). On the
+  wire it is the array of its entries, through its bundled converter, so a
+  holder can never change the record another reads (the collection rider of
+  halheinrich/backgammon#273).
 - `SkippedItem` — `sealed record SkippedItem(string FileName, DecisionId?
-  DecisionId, string Reason)`, one entry of that record. `FileName` is the
-  source file's path relative to the run's input folder, unambiguous under the
-  recursive search, whereas rows and logs keep the bare name (see Job
-  lifecycle for why the two differ);
-  `DecisionId` is null for a whole-file skip and set for the Xgp pathway's
-  per-decision skip, crossing in the library's canonical string form through
-  `DecisionId`'s own bundled converter; `Reason` is the exception's message.
-  A positional record like `AppModeResponse` and `OpeningBookStatus`: an entry
-  is a fact about what happened and has no reason to change.
+  DecisionId, string Reason)`, one entry of a `SkipRecord`: a file skip (read
+  or conversion) or a decision skip (an XGP payload whose preparation failed).
+  `FileName` is the file as the user named it — in Local mode its path
+  relative to the run's input folder, unambiguous under the recursive search,
+  whereas rows and logs keep the bare name (see Job lifecycle for why the two
+  differ); in Web mode the picked file's name. `DecisionId` is null for a
+  whole-file skip and set for a decision skip, crossing in the library's
+  canonical string form through `DecisionId`'s own bundled converter;
+  `Reason` is the failure's message. A positional record like
+  `AppModeResponse` and `OpeningBookStatus`: an entry is a fact about what
+  happened and has no reason to change.
 
 `FilterConfig` is **not** in `Client/Shared` — it lives in
 `XgFilter_Lib.Filtering` (lib-owned). Both client and server reference the
@@ -1481,11 +1704,16 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   that's meant to change freely. `LocalModePanelBusyAffordanceTests` pins the
   direction that catches it: the same snapshot with a "Rendering…" `FileName`
   but `Phase = Processing` keeps the determinate bar.
-- **A per-file exception is a recorded skip, never a swallowed cancellation.**
-  Skip catches go through `RecordSkip` and filter out
-  `OperationCanceledException`; a bare `catch (Exception)` in the processor
-  either hides a dropped file or turns a cancel into a skip (see Job
-  lifecycle).
+- **A unit that fails to be prepared is a recorded skip; a commit that fails
+  and a cancellation never are.** A failed read comes from the read's
+  outcome — don't wrap `XgSourceReader` in a catch, which would turn a usage
+  error into a skipped file and a cancellation into a completed run. A
+  file's contribution is staged whole (`.ToList()` inside its boundary):
+  enumerating the filtering operation lazily during the commit would write a
+  failing file's first rows and turn its failure into the run's. And keep
+  every write to the destination outside the skip boundaries — inside one, a
+  destination that refuses is reported as a skipped file or decision and the
+  run goes on (`LocalFolderProcessorBoundaryTests`; see Job lifecycle).
 - **The job runner's progress sink is inline — don't restore `Progress<T>`.**
   A posted report can land after the runner's catch and overwrite a terminal
   snapshot with a non-terminal one, so the client polls forever (see Job
@@ -1660,24 +1888,33 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   under test (the shared-pipeline contract). Don't "fix" the warning by
   switching to concrete types — you'd defeat the test.
 - **`.xgp`-sourced decisions export verbatim, not sliced.** In
-  `BuildXgpZip`, an `XgpDecisionId` decision copies its source file
-  byte-for-byte: the source already is a single-position analyzed `.xgp`,
-  so the verbatim copy is byte-identical, cheaper than a re-slice, and stays
-  strictly more faithful — a re-slice would clear the match-level comments
-  the copy preserves. Don't "unify" this branch through the slice surface —
-  byte equality with the source is pinned by `XgpExportServiceTests`.
-- **The XGP counter is client-owned.** The persisted numbering state
-  (`xg_xgpLastNumber` et al.) lives in `Home` and advances via the panels'
-  `OnXgpExported(count)` callback. Nothing scans previously exported files;
-  a user who bypasses the counter (edits "next number" backwards, exports
-  into the same place twice with a reset pattern) gets colliding names —
-  by design, the editable field is the escape hatch.
+  `XgpPayload.Prepare`, an `XgpDecisionId` decision with names kept is its
+  source file's exact bytes: the source already is a single-position analyzed
+  `.xgp`, so the verbatim copy is byte-identical, cheaper than a re-slice,
+  and stays strictly more faithful — a re-slice would clear the match-level
+  comments the copy preserves. Don't "unify" this branch through the slice
+  surface — byte equality with the source is pinned by
+  `XgpExportServiceTests`. The bytes must have been kept: Local mode reads
+  with them on the XGP pathway when not anonymizing; Web mode keeps them only
+  for a file whose rows the producer stamped as `.xgp` positions
+  (`CopiesSourceVerbatim`), or whose rows failed. Don't decide by the file's
+  extension: the stamping rule is the producer's.
+- **The XGP counter is client-owned, and fed only by commits.** The
+  persisted numbering state (`xg_xgpLastNumber` et al.) lives in `Home` and
+  advances only through `OnXgpExported(XgpExportCommit)`, from the commit's
+  captured options. Don't reconstruct a count from `TotalRows`, a progress
+  snapshot or the selected rows, don't persist from Home's current controls,
+  and don't overwrite a control the user changed while the export ran
+  (`HomeXgpAccountingTests`). Nothing scans previously exported files; a user
+  who bypasses the counter (edits "next number" backwards, exports into the
+  same place twice with a reset pattern) gets colliding names — by design,
+  the editable field is the escape hatch.
 - **The ranking is stated once, and always stated.** Every producer
   operation that takes a ranking gets `AppRanking.Ranking` (or, in Web mode,
   the cache's, which is built from it) — never a `PlayRanking` literal, and
   never nothing: a producer whose ranking is optional (`XgIteratorOptions`,
-  whose default is `Equity`) is still handed the app's, so `OptionsFor` and
-  the processor build options even with no book. That today's choice and
+  whose default is `Equity`) is still handed the app's, so
+  `XgSourceConverter` builds options even with no book. That today's choice and
   the producers' defaults are both `Equity` is not an agreement to lean on
   (Hal, 2026-09-29): one run's rows, filtering and diagrams must be one
   ranking because they were handed one, whatever the defaults become.
@@ -1690,12 +1927,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   there, never as a special case in the template parser or the UI. Token
   render functions must not fail: an unavailable value renders empty.
 - **The allocator's Peek/Commit split is load-bearing.** In
-  `ProcessXgpAsync`, a decision's name is Peeked before the write and the
-  slot Committed only after it succeeds — that's what keeps "failed
-  decisions don't consume a number" true, which the client's persisted
-  counter (advanced from the reported `TotalRows`) depends on. Collapsing
-  the split into an unconditional `Next` makes the next batch's numbers
-  collide with what's on disk.
+  `ProcessXgpAsync`, a decision's name is Peeked and the slot Committed only
+  after its file is written — that's what keeps "a skipped or unwritten
+  decision doesn't consume a number" true, and `CommittedCount` is what the
+  run's commit carries to the persisted counter. Collapsing the split into an
+  unconditional `Next` before the write makes the next batch's numbers
+  collide with what's on disk. In Web mode, take a name only once a payload
+  is prepared.
 - **The name uniquifier is per-run only.** `XgpNameAllocator` appends
   ` (2)`, ` (3)`, … within one export run; it never looks at the output
   folder, so cross-run overwrites in Local mode remain by design — the
@@ -1703,19 +1941,18 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   without `{n}` relies entirely on the uniquifier and will overwrite its own
   previous run's files.
 - **`xg_xgpPrefix` is a read-once legacy key.** It exists only as migration
-  input for a missing `xg_xgpPattern` and is removed on the next successful
-  export — never write it again.
+  input for a missing `xg_xgpPattern` and is removed on the next export that
+  commits a file — never write it again.
 - **The naming engine is deliberately lib-ready.** `XgpNameContext` carries
   primitives and lib types only; the app's `XgpExportOptions` DTO must not
   leak below `XgpNameAllocator.Create`. Keep it that way so a future move of
   the engine into a library stays relocation-only.
-- **`ProcessXgpAsync` reports progress on every file, deliberately.** The
-  siblings use `reportEvery = 10`, but the Xgp pathway's final/last-reported
-  `TotalRows` is what the client persists as its numbering counter — so the
-  processor reports before each per-file cancellation point and keeps
-  decision writes non-cancellable within a file. Reintroducing `reportEvery`
-  (or observing the token between a file's decision writes) makes a
-  cancelled run's counter drift from what's on disk.
+- **XGP accounting comes from the run's record, never from a progress
+  snapshot.** The pathways report every tenth file, so the last report can
+  trail what was written; the `RunRecord`'s commit is replaced as each file
+  is written, and the job runner's terminal snapshots take it from there.
+  (Until v1.12.2 the Xgp pathway reported on every file so its last
+  `TotalRows` could stand in for the count; that special case is gone.)
 - **Xgp `OutputPath` is a folder.** `ProcessXgpAsync` treats it as a
   directory (created if absent) and `LocalModePanel` skips the
   extension-swap logic for Xgp. Same-named files are overwritten; the
@@ -1740,11 +1977,32 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   UI-side `OpeningBook.Load(path)` call — components have neither a path nor any
   business touching the loader — and don't reach for the lib's internal image
   seam from here (that's an upstream change, out of scope).
-- **A late-chosen Web book must re-extract.** `WebModePanel` re-runs extraction
-  over the retained file bytes whenever the book changes, so the status line
-  ("Book loaded") never contradicts the data (enrichment applied). Dropping the
-  re-extract would silently leave files parsed before the book unenriched while
-  the UI claims otherwise.
+- **A late-chosen Web book must reconvert.** The book is part of every
+  conversion key, so publishing a new one drops the old book's results and
+  reconverts the retained decoded files, and the status line ("Book loaded")
+  never contradicts the data (enrichment applied). Keeping a result across a
+  book change would silently leave files converted before the book
+  unenriched while the UI claims otherwise.
+- **Records convert only when an output needs them.** Don't convert records
+  on a pick or a book change for every format "to keep the formats in sync":
+  that is halheinrich/backgammon#74's cost, and
+  `WebModePanelConversionTests.ACsvOnlyPick_NeverCallsTheRecordsConversion`
+  counts the calls. A format switch reuses a completed result and never
+  discards the other representation's.
+- **Every Web-mode completion publishes through its owner.** A pick, a book
+  load, a conversion and a download each carry a ticket from their start;
+  their completion publishes only while their owner says so
+  (`SPEC-notices.md` §7.3). Don't publish a result because the controls
+  still show the same values, and don't read the format, options or filter
+  at a download's end — capture them at its start. And don't gate readiness
+  on `Rows.Count`: Download, the counts and the zero-match notice read the
+  selected representation's state, so a row failure never hides converted
+  records and "not converted yet" is never zero matches.
+- **Local mode's result and its run record live by different rules.** The
+  Done line, the zero-match notice and the run error go on any source or
+  filter change; the run's skip record survives a filter change and goes
+  with the source (`SPEC-notices.md` §7.2). Don't fold the record back into
+  `DropResult`, and don't publish it only when the result is published.
 - **Enriched depth isn't in the Xgp/deck output.** The book only changes a
   decision's depth metadata, not the exported `.xgp` bytes or the rendered deck.
   So the Xgp and deck pathways' book wiring is pinned by a *filter differential*
