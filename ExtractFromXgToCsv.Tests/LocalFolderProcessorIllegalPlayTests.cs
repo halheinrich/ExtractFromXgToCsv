@@ -2,6 +2,7 @@ using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging;
 using QuestPDF.Infrastructure;
+using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
 
@@ -18,9 +19,11 @@ namespace ExtractFromXgToCsv.Tests;
 ///   <item>the file is not dropped wholesale (decisions still emit, nothing
 ///   on the run's skip record, no <c>"Skipping"</c> warning from the per-file
 ///   catch), and</item>
-///   <item>the illegal play surfaces as a contextual <c>Warning</c> — which
-///   only happens because <c>ProcessDeckAsync</c> passes its <c>_logger</c>
-///   into <c>IterateDiagramRequests</c>. Drop that argument and this fails.</item>
+///   <item>the illegal play surfaces as a contextual <c>Warning</c> on the
+///   filtering operation's logger — which only happens because the processor
+///   hands the run's <see cref="FilteredDecisionIterator"/> that logger, and
+///   the operation forwards it to the producer. Hand it a null logger and
+///   this fails.</item>
 /// </list>
 /// </summary>
 public class LocalFolderProcessorIllegalPlayTests
@@ -55,7 +58,8 @@ public class LocalFolderProcessorIllegalPlayTests
         try
         {
             var logger = new CapturingLogger<LocalFolderProcessor>();
-            var processor = new LocalFolderProcessor(logger, AppRanking.Ranking);
+            var iteratorLogger = new CapturingLogger<FilteredDecisionIterator>();
+            var processor = new LocalFolderProcessor(logger, iteratorLogger, AppRanking.Ranking);
 
             ProcessingProgress? lastProgress = null;
             var progress = new Progress<ProcessingProgress>(p => lastProgress = p);
@@ -72,14 +76,13 @@ public class LocalFolderProcessorIllegalPlayTests
             Assert.True(lastProgress.TotalRows > 0);
             Assert.Empty(lastProgress.Skipped);
 
-            // The per-file catch never fired — the file survived end to end.
+            // The skip seam never fired — the file survived end to end.
             Assert.DoesNotContain(logger.Entries,
                 e => e.Message.Contains("Skipping", StringComparison.Ordinal));
 
-            // The illegal play surfaced as a contextual one-liner. This is the
-            // assertion that fails if logger: _logger is dropped from the
-            // ProcessDeckAsync call.
-            Assert.Contains(logger.Entries, e =>
+            // The illegal play surfaced as a contextual one-liner, through the
+            // logger the filtering operation hands the producer.
+            Assert.Contains(iteratorLogger.Entries, e =>
                 e.Level == LogLevel.Warning
                 && e.Message.Contains("Illegal play", StringComparison.Ordinal)
                 && e.Message.Contains("game 6", StringComparison.Ordinal)

@@ -2,6 +2,7 @@ using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Infrastructure;
+using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
 
@@ -51,7 +52,7 @@ public class LocalFolderProcessorPhaseTests
             var reports = new List<ProcessingProgress>();
             var progress = new Progress<ProcessingProgress>(reports.Add);
 
-            await new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking)
+            await new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking)
                 .ProcessPptxAsync(folder, outputPath, NarrowFilter().Build(), progress);
 
             var rendering = Assert.Single(reports, r => r.Phase == JobPhase.Rendering);
@@ -81,7 +82,7 @@ public class LocalFolderProcessorPhaseTests
             var reports = new List<ProcessingProgress>();
             var progress = new Progress<ProcessingProgress>(reports.Add);
 
-            await new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking)
+            await new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking)
                 .ProcessAsync(
                     folder, Path.Combine(folder, "out.csv"), NarrowFilter().Build(), progress);
 

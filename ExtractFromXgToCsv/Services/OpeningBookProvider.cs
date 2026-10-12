@@ -5,7 +5,8 @@ namespace ExtractFromXgToCsv.Services;
 /// <summary>
 /// Resolves, loads, and holds XG's opening-book database
 /// (<c>OpeningBookV2.ob</c>) once for the Local-mode processing pipeline, which
-/// hands it to the iterators through <see cref="XgIteratorOptions"/>. Registered as a
+/// hands it to each run's filtering operation (XgFilter_Lib's
+/// <c>FilteredDecisionIterator</c>), the book alone. Registered as a
 /// singleton (Local mode only) so the ~13.6&#160;MB database is read and
 /// decoded a single time per process — the book is immutable after load and
 /// safe for the concurrent reads the iterators perform.

@@ -3,6 +3,7 @@ using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
+using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
 
@@ -19,7 +20,7 @@ public class LocalFolderProcessorPptxTests
     [Fact]
     public async Task ProcessPptxAsync_WritesValidPptxFromFixtureFolder()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);
         var outputPath = Path.Combine(Path.GetTempPath(),
             $"pptx-test-{Guid.NewGuid():N}.pptx");
 

@@ -6,6 +6,7 @@ using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Infrastructure;
+using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
 
@@ -31,10 +32,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// fails loudly rather than letting the test pass for the wrong reason.
 /// </para>
 /// <para>
-/// What each pathway would lose to a default: the CSV and Xgp pathways filter
-/// rows, which the iterator builds for the options' ranking; the Diagram JSON
-/// and deck pathways filter records through their views for the processor's
-/// ranking.
+/// What each pathway would lose to a default: every pathway filters through
+/// the run's filtering operation, built for the processor's ranking — the CSV
+/// and Xgp pathways its rows, which it builds for that ranking, and the
+/// Diagram JSON and deck pathways its records, through their views for it.
 /// </para>
 /// </remarks>
 public class LocalFolderProcessorRankingTests
@@ -45,7 +46,7 @@ public class LocalFolderProcessorRankingTests
     private static FilterConfig Filter() => new() { ErrorMin = 0.001 };
 
     private static LocalFolderProcessor Processor() =>
-        new(NullLogger<LocalFolderProcessor>.Instance, Ranking);
+        new(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, Ranking);
 
     private static XgFile Read() =>
         XgFileReader.ReadFile(Path.Combine(FixtureHelper.FixtureDir, Fixture));
@@ -153,7 +154,7 @@ public class LocalFolderProcessorRankingTests
     public void Constructor_RefusesAnUndefinedRanking()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, (PlayRanking)99));
+            new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, (PlayRanking)99));
     }
 
     /// <summary>A temp input folder holding only the fixture, so the references cover the whole run.</summary>

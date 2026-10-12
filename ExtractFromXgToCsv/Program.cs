@@ -3,6 +3,7 @@ using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Components;
 using ExtractFromXgToCsv.Services;
 using QuestPDF.Infrastructure;
+using XgFilter_Lib;
 
 // BackgammonDiagram_Lib.ExportRaster.DiagramRasterRenderer.RenderPdf requires a
 // QuestPDF license to be configured before any call, or it throws. Community is
@@ -28,9 +29,12 @@ if (appMode.IsLocal)
     // client-side and offers the book through the browser file picker instead.
     builder.Services.AddSingleton<OpeningBookProvider>();
     // The processor runs under the application's one ranking, stated once in
-    // AppRanking and handed in here (halheinrich/backgammon#273).
+    // AppRanking and handed in here (halheinrich/backgammon#273). Its second
+    // logger is the filtering operation's, which also carries the producer's
+    // per-decision warnings.
     builder.Services.AddScoped(sp => new LocalFolderProcessor(
         sp.GetRequiredService<ILogger<LocalFolderProcessor>>(),
+        sp.GetRequiredService<ILogger<FilteredDecisionIterator>>(),
         AppRanking.Ranking,
         sp.GetRequiredService<OpeningBookProvider>()));
     builder.Services.AddSingleton<JobStore>();

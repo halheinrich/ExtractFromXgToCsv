@@ -2,6 +2,7 @@ using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Infrastructure;
+using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
 
@@ -23,7 +24,7 @@ public class LocalFolderProcessorPdfTests
     [Fact]
     public async Task ProcessPdfAsync_WritesValidPdfFromFixtureFolder()
     {
-        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, AppRanking.Ranking);
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);
         var outputPath = Path.Combine(Path.GetTempPath(),
             $"pdf-test-{Guid.NewGuid():N}.pdf");
 

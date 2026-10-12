@@ -2,53 +2,97 @@ using BackgammonDiagram_Lib;
 using BackgammonDiagram_Lib.ExportRaster;
 using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
+using ConvertXgToJson_Lib.Models;
 using ExtractFromXgToCsv.Client.Shared;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 
 namespace ExtractFromXgToCsv.Services;
 
 /// <summary>
-/// Server-side processor for local mode.
-/// Streams through .xg/.xgp files in a folder one at a time,
-/// applies a DecisionFilterSet, and writes CSV rows as it goes.
-/// Never holds more than one file's rows in memory at a time.
+/// Server-side processor for local mode: one output run over the
+/// <c>.xg</c>/<c>.xgp</c> files of a folder, in four pathways (CSV, Diagram
+/// JSON, XGP positions, and the PPTX/PDF deck).
+/// </summary>
+/// <remarks>
 /// <para>
-/// A file that fails (and, on the Xgp pathway, a decision whose write fails)
-/// is skipped, not fatal, and every skip is recorded through one seam,
-/// <see cref="RecordSkip"/>, onto the run's <see cref="RunRecord"/>, which
-/// every snapshot carries as <see cref="ProcessingProgress.Skipped"/>. A
-/// caller passes its own record to read it after a run-ending failure.
-/// Cancellation is never a skip: every skip catch excludes
+/// <b>Each file is read once and filtered by the producer</b>
+/// (halheinrich/backgammon#319, item 1). A run reads each discovered file
+/// with ConvertXgToJson_Lib's <see cref="XgSourceReader"/>, the one read of
+/// one source, and filters each decoded file through XgFilter_Lib's filtering
+/// operation — a <see cref="FilteredDecisionIterator"/> built with the run's
+/// filters, ranking and opening book, and its
+/// <see cref="FilteredDecisionIterator.IterateFile"/> or
+/// <see cref="FilteredDecisionIterator.IterateFileDiagrams"/>. No pathway
+/// iterates the producer or evaluates the filters itself.
+/// </para>
+/// <para>
+/// <b>Every file passes the same boundaries</b> (the umbrella's
+/// <c>SPEC-notices.md</c> §7.1), in one loop all four pathways share:
+/// </para>
+/// <list type="bullet">
+/// <item>a failed read is a <i>read skip</i>;</item>
+/// <item>the file's contribution to the output — its rows, records or deck
+/// pairs — is staged whole, and a failure converting it is a <i>conversion
+/// skip</i>, so a file that fails midway contributes nothing;</item>
+/// <item>the staged contribution is then committed, outside that boundary. A
+/// failure committing — the output file or folder, the CSV writer, the JSON
+/// write, the deck build, an XGP file write — is the destination's: it fails
+/// the run and is never a skip.</item>
+/// </list>
+/// <para>
+/// On the XGP pathway a decision's payload is prepared within its own
+/// boundary (a failure is an <i>export skip</i> of that decision, and consumes
+/// no number) and written outside it.
+/// </para>
+/// <para>
+/// Every skip is recorded through one seam, <see cref="RecordSkip"/>, onto
+/// the run's <see cref="RunRecord"/>, whose skips every snapshot carries as
+/// <see cref="ProcessingProgress.Skipped"/>; a caller passes its own record to
+/// read it after a run-ending failure. Cancellation is never a skip: the read
+/// propagates it, and every skip catch excludes
 /// <see cref="OperationCanceledException"/>.
 /// </para>
-/// </summary>
+/// </remarks>
 public class LocalFolderProcessor
 {
+    /// <summary>The streaming cadence: the client polls once a second, so every file need not report.</summary>
+    private const int ReportEvery = 10;
+
     private readonly ILogger<LocalFolderProcessor> _logger;
 
+    /// <summary>
+    /// The filtering operation's logger, which it also hands the producer, so
+    /// the producer's per-decision warnings (an illegal play, say) surface on
+    /// every pathway.
+    /// </summary>
+    private readonly ILogger<FilteredDecisionIterator> _iteratorLogger;
+
     // The run's one ranking, as the composition root hands it in (the
-    // application's, AppRanking). Every producer operation below whose meaning
-    // depends on a ranking is handed this value: the iterator options (so every
-    // row is built for it), each record's filter view, and each diagram. No
+    // application's, AppRanking). It is stated once per run, to the filtering
+    // operation, which builds every row for it and filters every record
+    // through its view for it; the deck draws each diagram for it too. No
     // producer default stands in.
     private readonly PlayRanking _ranking;
 
-    // The iterator options, passed to every XgDecisionIterator call: the run's
-    // ranking, and the opening book OpeningBookProvider resolved once, so
-    // book-analysed decisions are enriched consistently across all pathways.
-    // The book is null when none is available (provider absent, disabled, or
-    // the file was missing/unreadable) — book hits then stamp the unenriched
-    // "Book V2" / level Unknown form. Single field, single source: every
-    // extraction pathway below passes this same value.
-    private readonly XgIteratorOptions _iteratorOptions;
+    // The opening book OpeningBookProvider resolved once, handed to every
+    // run's filtering operation, so book-analysed decisions are enriched
+    // consistently across all pathways. Null when none is available (provider
+    // absent, disabled, or the file missing or unreadable) — book hits then
+    // state the unenriched "Book V2" / level Unknown form.
+    private readonly OpeningBook? _openingBook;
+
+    private readonly XgpPayloadPreparation _preparePayload;
 
     /// <summary>
     /// Creates the processor. <paramref name="logger"/> records per-file skip
-    /// warnings; <paramref name="ranking"/> is the ranking every run is
-    /// interpreted under — the application passes its one ranking,
+    /// warnings; <paramref name="iteratorLogger"/> is the filtering
+    /// operation's, which carries the producer's per-decision warnings;
+    /// <paramref name="ranking"/> is the ranking every run is interpreted
+    /// under — the application passes its one ranking,
     /// <see cref="AppRanking.Ranking"/>, from the composition root;
     /// <paramref name="bookProvider"/> supplies the loaded opening book
     /// (optional — a null provider, like a provider that loaded no book, runs
@@ -56,22 +100,46 @@ public class LocalFolderProcessor
     /// </summary>
     /// <remarks>
     /// The ranking is a required argument, not read here, so that no pathway
-    /// can silently run under a default: the producer's
-    /// <see cref="XgIteratorOptions"/> would take <see cref="PlayRanking.Equity"/>
-    /// if none were stated. Stating it also lets a test run a pathway under
-    /// another ranking and see that the pathway honours the one it was given.
+    /// can silently run under a default. Stating it also lets a test run a
+    /// pathway under another ranking and see that the pathway honours the one
+    /// it was given.
     /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="logger"/> or <paramref name="iteratorLogger"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="ranking"/> is not a defined ranking.</exception>
     public LocalFolderProcessor(
         ILogger<LocalFolderProcessor> logger,
+        ILogger<FilteredDecisionIterator> iteratorLogger,
         PlayRanking ranking,
         OpeningBookProvider? bookProvider = null)
+        : this(logger, iteratorLogger, ranking, bookProvider, XgpPayload.Prepare)
     {
+    }
+
+    /// <summary>
+    /// Creates the processor with the XGP pathway's payload preparation
+    /// supplied: <see cref="XgpPayload.Prepare"/> in the application, or a
+    /// test's stand-in that fails a chosen decision's preparation. No real
+    /// input is known to fail it, and the export-skip boundary is pinned
+    /// through this.
+    /// </summary>
+    /// <inheritdoc cref="LocalFolderProcessor(ILogger{LocalFolderProcessor}, ILogger{FilteredDecisionIterator}, PlayRanking, OpeningBookProvider?)"/>
+    internal LocalFolderProcessor(
+        ILogger<LocalFolderProcessor> logger,
+        ILogger<FilteredDecisionIterator> iteratorLogger,
+        PlayRanking ranking,
+        OpeningBookProvider? bookProvider,
+        XgpPayloadPreparation preparePayload)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(iteratorLogger);
+        ArgumentNullException.ThrowIfNull(preparePayload);
         if (!Enum.IsDefined(ranking))
             throw new ArgumentOutOfRangeException(nameof(ranking), ranking, "Not a defined ranking.");
         _logger = logger;
+        _iteratorLogger = iteratorLogger;
         _ranking = ranking;
-        _iteratorOptions = new XgIteratorOptions(bookProvider?.Book, ranking);
+        _openingBook = bookProvider?.Book;
+        _preparePayload = preparePayload;
     }
 
     /// <summary>
@@ -118,11 +186,27 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
-    /// The one skip seam: every per-file and per-decision catch in this
-    /// processor calls it, and none logs on its own. Logs the skip and appends
-    /// it to <paramref name="record"/>, the run's record, which every snapshot
-    /// the run reports carries as it stands (<see cref="ProcessingProgress.Skipped"/>).
-    /// The exception's message is the recorded reason.
+    /// The run's filtering operation: its filters, under its one ranking, with
+    /// the opening book, logging through the operation's own logger.
+    /// </summary>
+    private FilteredDecisionIterator FilteringFor(DecisionFilterSet filterSet) =>
+        new(filterSet, _ranking, _iteratorLogger, _openingBook);
+
+    /// <summary>Creates the folder an output file goes into, if it has one.</summary>
+    private static void CreateParentFolder(string outputPath)
+    {
+        var outputDir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(outputDir))
+            Directory.CreateDirectory(outputDir);
+    }
+
+    /// <summary>
+    /// The one skip seam: every read, conversion and payload failure in this
+    /// processor comes here, and nothing logs a skip on its own. Logs the skip
+    /// and appends it to <paramref name="record"/>, the run's record, which
+    /// every snapshot the run reports carries as it stands
+    /// (<see cref="ProcessingProgress.Skipped"/>). The exception's message is
+    /// the recorded reason.
     /// <para>
     /// The two names differ on purpose. The record names the file by its path
     /// relative to <paramref name="folderPath"/>, because discovery is
@@ -135,7 +219,7 @@ public class LocalFolderProcessor
     /// </para>
     /// </summary>
     /// <param name="record">The current run's record.</param>
-    /// <param name="ex">What skipped the input; never an <see cref="OperationCanceledException"/> — the catches exclude it.</param>
+    /// <param name="ex">What skipped the input; never an <see cref="OperationCanceledException"/>.</param>
     /// <param name="folderPath">The run's input folder, which the recorded name is relative to.</param>
     /// <param name="file">The source file's full path, as discovered.</param>
     /// <param name="decisionId">The skipped decision, or <see langword="null"/> when the whole file was skipped.</param>
@@ -156,12 +240,100 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
-    /// CSV pathway: streams the folder's <c>.xg</c>/<c>.xgp</c> files one at a
-    /// time, applies <paramref name="filterSet"/>, and writes matching
-    /// <see cref="DecisionRow"/>s to <paramref name="outputPath"/> as CSV,
-    /// reporting through <paramref name="progress"/>. Pass
-    /// <paramref name="runRecord"/> (fresh) to read what the run skipped after
-    /// a failure has ended it; the snapshots carry the record either way.
+    /// The one walk every pathway runs: for each file, the read, the staged
+    /// conversion within the file's boundary, and the commit outside it (see
+    /// the class remarks).
+    /// </summary>
+    /// <param name="folderPath">The run's input folder.</param>
+    /// <param name="files">The discovered files, in discovery order.</param>
+    /// <param name="record">The run's record.</param>
+    /// <param name="run">The run's progress, reported as the walk goes.</param>
+    /// <param name="retainBytes">Whether the read keeps each file's exact bytes, for a pathway that copies a source verbatim.</param>
+    /// <param name="reportEachFileBeforeCancellation">
+    /// Whether to report before every file and before its cancellation check
+    /// (the XGP pathway, whose last report the client's numbering reads),
+    /// rather than every tenth file after it.
+    /// </param>
+    /// <param name="stage">
+    /// Converts a decoded file, by its bare name, to its whole contribution.
+    /// A failure is the file's conversion skip.
+    /// </param>
+    /// <param name="commit">
+    /// Commits a staged contribution, given the file's full path. A failure is
+    /// the destination's and propagates.
+    /// </param>
+    /// <param name="cancellationToken">Ends the run between files and during a read.</param>
+    private async Task ForEachFileAsync<TStaged>(
+        string folderPath,
+        IReadOnlyList<string> files,
+        RunRecord record,
+        RunProgress run,
+        bool retainBytes,
+        bool reportEachFileBeforeCancellation,
+        Func<XgSourceDecoded, string, TStaged> stage,
+        Func<TStaged, string, Task> commit,
+        CancellationToken cancellationToken)
+    {
+        for (int i = 0; i < files.Count; i++)
+        {
+            var file = files[i];
+            var fileName = Path.GetFileName(file);
+
+            if (reportEachFileBeforeCancellation)
+            {
+                run.Report(i, fileName);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            else
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (i % ReportEvery == 0)
+                    run.Report(i, fileName);
+            }
+
+            // The one read of this file. A failed read is the file's read
+            // skip; a cancellation propagates out of the read, which no catch
+            // here encloses.
+            var read = await XgSourceReader.ReadFileAsync(
+                file, XgSourceFormat.Xg, retainBytes, cancellationToken);
+            var decoded = read.Match<XgSourceDecoded?>(
+                decoded => decoded,
+                failed =>
+                {
+                    RecordSkip(record, failed.Exception, folderPath, file);
+                    return null;
+                });
+            if (decoded is null)
+                continue;
+
+            // The file's whole contribution, staged within its boundary: a
+            // file that fails midway contributes nothing.
+            TStaged staged;
+            try
+            {
+                staged = stage(decoded, fileName);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                RecordSkip(record, ex, folderPath, file);
+                continue;
+            }
+
+            // The commit, outside the boundary: a destination failure fails
+            // the run.
+            await commit(staged, file);
+        }
+    }
+
+    /// <summary>
+    /// CSV pathway: reads the folder's <c>.xg</c>/<c>.xgp</c> files one at a
+    /// time, filters each through the run's filtering operation, and appends
+    /// each file's matching <see cref="DecisionRow"/>s to
+    /// <paramref name="outputPath"/> as CSV once the whole file has converted,
+    /// reporting through <paramref name="progress"/>. Never holds more than
+    /// one file's rows in memory at a time. Pass <paramref name="runRecord"/>
+    /// (fresh) to read what the run skipped after a failure has ended it; the
+    /// snapshots carry the record either way.
     /// </summary>
     public async Task ProcessAsync(
         string folderPath,
@@ -173,80 +345,36 @@ public class LocalFolderProcessor
     {
         var record = RecordFor(runRecord);
         var files = DiscoverInputFiles(folderPath);
+        var filtering = FilteringFor(filterSet);
 
-        var outputDir = Path.GetDirectoryName(outputPath);
-        if (!string.IsNullOrEmpty(outputDir))
-            Directory.CreateDirectory(outputDir);
-
+        // The destination, opened before any file is read; it and every write
+        // below are outside the files' boundaries.
+        CreateParentFolder(outputPath);
         await using var writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
         await writer.WriteLineAsync(DecisionRow.CsvHeader);
 
-        int totalRows = 0;
-        var stopwatch = Stopwatch.StartNew();
-        const int reportEvery = 10; // client polls every second; no need to update on every file
-
-        for (int i = 0; i < files.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var file = files[i];
-            var fileName = Path.GetFileName(file);
-
-            if (i % reportEvery == 0)
+        var run = new RunProgress(files.Count, progress, record);
+        await ForEachFileAsync(
+            folderPath, files, record, run,
+            retainBytes: false,
+            reportEachFileBeforeCancellation: false,
+            stage: (decoded, fileName) => filtering.IterateFile(decoded.File, fileName).ToList(),
+            commit: async (rows, _) =>
             {
-                var elapsed = stopwatch.Elapsed.TotalSeconds;
-                var filesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0;
-
-                progress.Report(new ProcessingProgress
-                {
-                    Current = i + 1,
-                    Total = files.Count,
-                    FileName = fileName,
-                    TotalRows = totalRows,
-                    ElapsedSec = elapsed,
-                    FilesPerSec = filesPerSec,
-                    Skipped = record.Skips
-                });
-            }
-
-            try
-            {
-                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
-                using var ms = new MemoryStream(bytes);
-                var xgFile = XgFileReader.ReadStream(ms);
-                var rows = XgDecisionIterator.Iterate(xgFile, fileName, options: _iteratorOptions);
-
-                foreach (var row in rows.Where(r => filterSet.Matches(r)))
-                {
+                foreach (var row in rows)
                     await writer.WriteLineAsync(row.ToCsvLine());
-                    totalRows++;
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                RecordSkip(record, ex, folderPath, file);
-            }
-        }
+                run.Add(rows.Count);
+            },
+            cancellationToken);
 
-        var totalElapsed = stopwatch.Elapsed.TotalSeconds;
-        var finalFilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0;
-
-        progress.Report(new ProcessingProgress
-        {
-            Current = files.Count,
-            Total = files.Count,
-            FileName = "Done",
-            TotalRows = totalRows,
-            Complete = true,
-            ElapsedSec = totalElapsed,
-            FilesPerSec = finalFilesPerSec,
-            Skipped = record.Skips
-        });
+        run.ReportDone();
     }
+
     /// <summary>
-    /// Diagram-JSON pathway: same per-file streaming as <see cref="ProcessAsync"/>,
-    /// but buffers matching decisions and writes them to
-    /// <paramref name="outputPath"/> as a single indented JSON array.
+    /// Diagram-JSON pathway: the same per-file walk as
+    /// <see cref="ProcessAsync"/>, but each file's matching decisions are
+    /// collected, and all of them are written to <paramref name="outputPath"/>
+    /// as a single indented JSON array once every file has been read.
     /// <paramref name="runRecord"/> as on <see cref="ProcessAsync"/>.
     /// </summary>
     public async Task ProcessDiagramAsync(
@@ -259,79 +387,31 @@ public class LocalFolderProcessor
     {
         var record = RecordFor(runRecord);
         var files = DiscoverInputFiles(folderPath);
-
-        var outputDir = Path.GetDirectoryName(outputPath);
-        if (!string.IsNullOrEmpty(outputDir))
-            Directory.CreateDirectory(outputDir);
+        var filtering = FilteringFor(filterSet);
+        CreateParentFolder(outputPath);
 
         var allItems = new List<BgDecisionData>();
-        int totalRows = 0;
-        var stopwatch = Stopwatch.StartNew();
-        const int reportEvery = 10;
-
-        for (int i = 0; i < files.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var file = files[i];
-            var fileName = Path.GetFileName(file);
-
-            if (i % reportEvery == 0)
+        var run = new RunProgress(files.Count, progress, record);
+        await ForEachFileAsync(
+            folderPath, files, record, run,
+            retainBytes: false,
+            reportEachFileBeforeCancellation: false,
+            stage: (decoded, fileName) => filtering.IterateFileDiagrams(decoded.File, fileName).ToList(),
+            commit: (items, _) =>
             {
-                var elapsed = stopwatch.Elapsed.TotalSeconds;
-                var filesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0;
+                allItems.AddRange(items);
+                run.Add(items.Count);
+                return Task.CompletedTask;
+            },
+            cancellationToken);
 
-                progress.Report(new ProcessingProgress
-                {
-                    Current = i + 1,
-                    Total = files.Count,
-                    FileName = fileName,
-                    TotalRows = totalRows,
-                    ElapsedSec = elapsed,
-                    FilesPerSec = filesPerSec,
-                    Skipped = record.Skips
-                });
-            }
-
-            try
-            {
-                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
-                using var ms = new MemoryStream(bytes);
-                var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(
-                    xgFile, fileName, options: _iteratorOptions);
-
-                foreach (var item in items.Where(r => filterSet.Matches(r.ViewFor(_ranking))))
-                {
-                    allItems.Add(item);
-                    totalRows++;
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                RecordSkip(record, ex, folderPath, file);
-            }
-        }
-
+        // The commit to the destination.
         await File.WriteAllTextAsync(
             outputPath,
             JsonSerializer.Serialize(allItems, new JsonSerializerOptions { WriteIndented = true }),
             cancellationToken);
 
-        var totalElapsed = stopwatch.Elapsed.TotalSeconds;
-        var finalFilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0;
-
-        progress.Report(new ProcessingProgress
-        {
-            Current = files.Count,
-            Total = files.Count,
-            FileName = "Done",
-            TotalRows = totalRows,
-            Complete = true,
-            ElapsedSec = totalElapsed,
-            FilesPerSec = finalFilesPerSec,
-            Skipped = record.Skips
-        });
+        run.ReportDone();
     }
 
     /// <summary>
@@ -342,24 +422,16 @@ public class LocalFolderProcessor
     /// an <see cref="XgpNameAllocator"/>: batch-constant tokens draw from
     /// <paramref name="filters"/>, per-item tokens from each decision, and
     /// duplicate rendered names within the run get Windows-style
-    /// <c>" (2)"</c> suffixes. The allocator's Peek/Commit split keeps the
-    /// counter honest: a decision's name is computed before the write and its
-    /// slot consumed only after the write succeeds, so failed decisions don't
-    /// burn a number. Decisions from .xg sources are sliced via
-    /// <see cref="XgpExporter"/> (analysis carried through); decisions from
-    /// .xgp sources are copied verbatim, mirroring the Web-mode rule in
-    /// <c>XgProcessingService.BuildXgpZip</c>.
+    /// <c>" (2)"</c> suffixes. Each payload is prepared by
+    /// <see cref="XgpPayload"/> — sliced from an .xg source, an .xgp source
+    /// copied verbatim, both anonymized when <paramref name="anonymize"/> is
+    /// set — within the decision's own boundary, and written outside it.
     /// <para>
-    /// When <paramref name="anonymize"/> is <see langword="true"/>, every
-    /// written position has its player names rewritten to the anonymize preset
-    /// (<see cref="XgpSliceOptions.Anonymized"/> — the producer's SSOT): an
-    /// .xg slice takes the options-bearing overload, an .xgp source takes the
-    /// whole-file anonymize-copy (comments and rollouts preserved, only the
-    /// header names change), so the toggle covers every entry. Every written
-    /// position is a single decision, so the preset names by role — "On-roll"
-    /// for the decision-maker (a cube decision's doubler), "Opponent" for the
-    /// other — with the producer resolving which header slot each role lands
-    /// in, per position.
+    /// The allocator's Peek/Commit split keeps the counter honest: a
+    /// decision's slot is consumed only once its file is written, so a
+    /// decision whose preparation failed — an export skip — burns no number,
+    /// and a write that fails ends the run with the files already written
+    /// counted.
     /// </para>
     /// <para>
     /// <paramref name="runRecord"/> as on <see cref="ProcessAsync"/>.
@@ -385,118 +457,51 @@ public class LocalFolderProcessor
         // point shared with the Web-mode pathway.
         var allocator = XgpNameAllocator.Create(options, filters);
         var record = RecordFor(runRecord);
-
         var files = DiscoverInputFiles(folderPath);
+        var filtering = FilteringFor(filterSet);
 
         Directory.CreateDirectory(outputPath);
 
-        // The service owns the bool -> producer-type mapping: the request
-        // carries only intent. null keeps the current byte-for-byte behaviour;
-        // the preset is the producer's single source of "anonymized".
-        var nameOverrides = anonymize ? XgpSliceOptions.Anonymized : null;
-
-        int totalRows = 0;
-        var stopwatch = Stopwatch.StartNew();
-
-        for (int i = 0; i < files.Count; i++)
-        {
-            // Unlike the siblings' reportEvery=10, this pathway reports on
-            // EVERY file, and reports before the cancellation check: the
-            // client persists its numbering counter from the last reported
-            // TotalRows, so a cancelled job must leave an exact count behind.
-            var elapsed = stopwatch.Elapsed.TotalSeconds;
-            progress.Report(new ProcessingProgress
+        var run = new RunProgress(files.Count, progress, record);
+        await ForEachFileAsync(
+            folderPath, files, record, run,
+            // A source copied verbatim needs its exact bytes; an anonymized
+            // copy is re-emitted from the decoded file instead.
+            retainBytes: !anonymize,
+            // The client persists its numbering counter from the last
+            // reported row count, so a cancelled job must leave an exact
+            // count behind: report on every file, before its cancellation
+            // check, and keep a file's decision writes non-cancellable.
+            reportEachFileBeforeCancellation: true,
+            stage: (decoded, fileName) => (Source: decoded, Rows: filtering.IterateFile(decoded.File, fileName).ToList()),
+            commit: async (staged, file) =>
             {
-                Current = i + 1,
-                Total = files.Count,
-                FileName = Path.GetFileName(files[i]),
-                TotalRows = totalRows,
-                ElapsedSec = elapsed,
-                FilesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0,
-                Skipped = record.Skips
-            });
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var file = files[i];
-            var fileName = Path.GetFileName(file);
-
-            try
-            {
-                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
-                using var ms = new MemoryStream(bytes);
-                var xgFile = XgFileReader.ReadStream(ms);
-                var rows = XgDecisionIterator.Iterate(xgFile, fileName, options: _iteratorOptions);
-
-                foreach (var row in rows.Where(r => filterSet.Matches(r)))
+                foreach (var row in staged.Rows)
                 {
-                    // Peek, don't consume: the slot is committed only after
-                    // the write succeeds, so a failed decision doesn't burn
-                    // a name (the client persists its numbering counter from
-                    // the reported TotalRows).
-                    var target = Path.Combine(outputPath, allocator.Peek(row));
+                    // The decision's payload, prepared within its own
+                    // boundary: a failure skips this decision alone.
+                    ReadOnlyMemory<byte> payload;
                     try
                     {
-                        switch (row.Id)
-                        {
-                            case XgpDecisionId:
-                                // Already a single-position analyzed .xgp.
-                                // Not anonymizing: copy verbatim (same rule as
-                                // Web mode). Anonymizing: whole-file re-emit
-                                // with only the header names rewritten
-                                // (comments and rollouts preserved). Both are
-                                // deliberately not cancellable: cancel
-                                // granularity is the file boundary, so the
-                                // reported TotalRows never lags a partial
-                                // batch of written decisions.
-                                if (nameOverrides is null)
-                                    await File.WriteAllBytesAsync(target, bytes);
-                                else
-                                    XgpExporter.WriteFile(xgFile, nameOverrides, target);
-                                break;
-                            case XgDecisionId xgId:
-                                // Pass the typed Id straight to the producer's
-                                // Id overload (coordinates destructured
-                                // internally; Filename ignored — the source is
-                                // already resolved). Without overrides this is
-                                // byte-identical to the coordinate overload.
-                                if (nameOverrides is null)
-                                    XgpExporter.WriteFile(xgFile, xgId, target);
-                                else
-                                    XgpExporter.WriteFile(xgFile, xgId, nameOverrides, target);
-                                break;
-                            default:
-                                throw new NotSupportedException(
-                                    $"Unsupported DecisionId shape '{row.Id.GetType().Name}' for .xgp export.");
-                        }
-                        allocator.Commit(row);
-                        totalRows++; // failed decisions don't consume a number
+                        payload = _preparePayload(row.Id, staged.Source.File, staged.Source.Bytes, anonymize);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         RecordSkip(record, ex, folderPath, file, row.Id);
+                        continue;
                     }
+
+                    // The commit: the write, outside the decision's boundary,
+                    // so a failure fails the run. The slot is consumed only
+                    // once the file is written.
+                    await File.WriteAllBytesAsync(Path.Combine(outputPath, allocator.Peek(row)), payload);
+                    allocator.Commit(row);
+                    run.Add(1);
                 }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                RecordSkip(record, ex, folderPath, file);
-            }
-        }
+            },
+            cancellationToken);
 
-        var totalElapsed = stopwatch.Elapsed.TotalSeconds;
-
-        progress.Report(new ProcessingProgress
-        {
-            Current = files.Count,
-            Total = files.Count,
-            FileName = "Done",
-            TotalRows = totalRows,
-            Complete = true,
-            ElapsedSec = totalElapsed,
-            FilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0,
-            Skipped = record.Skips
-        });
+        run.ReportDone();
     }
 
     /// <summary>
@@ -549,90 +554,45 @@ public class LocalFolderProcessor
     {
         var record = RecordFor(runRecord);
         var files = DiscoverInputFiles(folderPath);
-
-        var outputDir = Path.GetDirectoryName(outputPath);
-        if (!string.IsNullOrEmpty(outputDir))
-            Directory.CreateDirectory(outputDir);
+        var filtering = FilteringFor(filterSet);
+        CreateParentFolder(outputPath);
 
         var requests = new List<DiagramRequest>();
-        int totalRows = 0;
-        var stopwatch = Stopwatch.StartNew();
-        const int reportEvery = 10;
-
-        for (int i = 0; i < files.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var file = files[i];
-            var fileName = Path.GetFileName(file);
-
-            if (i % reportEvery == 0)
+        var run = new RunProgress(files.Count, progress, record);
+        await ForEachFileAsync(
+            folderPath, files, record, run,
+            retainBytes: false,
+            reportEachFileBeforeCancellation: false,
+            // Each decision becomes a Problem/Solution pair — the reader
+            // considers the problem slide, then advances to the solution
+            // slide for the answer. The diagram orders and scores the
+            // candidates by the ranking the decision was just filtered under.
+            stage: (decoded, fileName) => filtering.IterateFileDiagrams(decoded.File, fileName)
+                .Select(item => DiagramRequest.ForDecision(item, _ranking).ToProblemSolutionPair())
+                .ToList(),
+            commit: (pairs, _) =>
             {
-                var elapsed = stopwatch.Elapsed.TotalSeconds;
-                var filesPerSec = elapsed > 0 ? (int)(i / elapsed) : 0;
-
-                progress.Report(new ProcessingProgress
+                foreach (var (problem, solution) in pairs)
                 {
-                    Current = i + 1,
-                    Total = files.Count,
-                    FileName = fileName,
-                    TotalRows = totalRows,
-                    ElapsedSec = elapsed,
-                    FilesPerSec = filesPerSec,
-                    Skipped = record.Skips
-                });
-            }
-
-            try
-            {
-                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
-                using var ms = new MemoryStream(bytes);
-                var xgFile = XgFileReader.ReadStream(ms);
-                var items = XgDecisionIterator.IterateDiagramRequests(
-                    xgFile, fileName, options: _iteratorOptions, logger: _logger);
-
-                foreach (var item in items.Where(r => filterSet.Matches(r.ViewFor(_ranking))))
-                {
-                    // Each decision becomes a Problem/Solution pair — the
-                    // reader considers the problem slide, then advances to the
-                    // solution slide for the answer. The diagram orders and
-                    // scores the candidates by the ranking the decision was
-                    // just filtered under.
-                    var (problem, solution) = DiagramRequest
-                        .ForDecision(item, _ranking)
-                        .ToProblemSolutionPair();
                     requests.Add(problem);
                     requests.Add(solution);
-                    totalRows++;
                 }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                RecordSkip(record, ex, folderPath, file);
-            }
-        }
+                run.Add(pairs.Count);
+                return Task.CompletedTask;
+            },
+            cancellationToken);
 
         // Render and write are atomic — the renderer returns the full byte[]
         // and mid-render cancellation isn't supported. Cancellation gating
-        // happens during the per-file collect loop above.
+        // happens during the per-file walk above. Both are the commit: a
+        // failure fails the run.
         //
         // This is the last snapshot the client sees until the run finishes, and
         // the render dominates the wall clock (minutes, at corpus scale), so it
         // is stamped JobPhase.Rendering: the counter and the elapsed/throughput
-        // figures below have stopped advancing, and the phase is what tells the
+        // figures have stopped advancing, and the phase is what tells the
         // client to stop presenting them as live.
-        progress.Report(new ProcessingProgress
-        {
-            Current = files.Count,
-            Total = files.Count,
-            Phase = JobPhase.Rendering,
-            FileName = $"Rendering {formatLabel} ({totalRows} decisions, {requests.Count} slides)…",
-            TotalRows = totalRows,
-            ElapsedSec = stopwatch.Elapsed.TotalSeconds,
-            FilesPerSec = stopwatch.Elapsed.TotalSeconds > 0
-                ? (int)(files.Count / stopwatch.Elapsed.TotalSeconds) : 0,
-            Skipped = record.Skips
-        });
+        run.ReportRendering($"Rendering {formatLabel} ({run.Rows} decisions, {requests.Count} slides)…");
 
         if (requests.Count == 0)
             throw new InvalidOperationException(
@@ -641,19 +601,68 @@ public class LocalFolderProcessor
         var deckBytes = renderer(requests, new DiagramOptions());
         await File.WriteAllBytesAsync(outputPath, deckBytes, cancellationToken);
 
-        var totalElapsed = stopwatch.Elapsed.TotalSeconds;
-        var finalFilesPerSec = totalElapsed > 0 ? (int)(files.Count / totalElapsed) : 0;
+        run.ReportDone();
+    }
 
-        progress.Report(new ProcessingProgress
+    /// <summary>
+    /// One run's progress: its clock and row count, and the snapshots it
+    /// reports, each carrying the run's skips as they stand.
+    /// </summary>
+    private sealed class RunProgress(int total, IProgress<ProcessingProgress> progress, RunRecord record)
+    {
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+
+        /// <summary>Rows or decisions the run has produced so far.</summary>
+        public int Rows { get; private set; }
+
+        /// <summary>Counts <paramref name="count"/> more rows or decisions.</summary>
+        public void Add(int count) => Rows += count;
+
+        /// <summary>Reports the run about to take file <paramref name="index"/> (0-based).</summary>
+        public void Report(int index, string fileName)
         {
-            Current = files.Count,
-            Total = files.Count,
-            FileName = "Done",
-            TotalRows = totalRows,
-            Complete = true,
-            ElapsedSec = totalElapsed,
-            FilesPerSec = finalFilesPerSec,
-            Skipped = record.Skips
-        });
+            var elapsed = _clock.Elapsed.TotalSeconds;
+            progress.Report(new ProcessingProgress
+            {
+                Current = index + 1,
+                Total = total,
+                FileName = fileName,
+                TotalRows = Rows,
+                ElapsedSec = elapsed,
+                FilesPerSec = elapsed > 0 ? (int)(index / elapsed) : 0,
+                Skipped = record.Skips,
+            });
+        }
+
+        /// <summary>Reports the deck's atomic render, under <paramref name="line"/>.</summary>
+        public void ReportRendering(string line) => progress.Report(Final(JobPhase.Rendering, line, complete: false));
+
+        /// <summary>Reports the run's successful end.</summary>
+        public void ReportDone() => progress.Report(Final(JobPhase.Processing, "Done", complete: true));
+
+        private ProcessingProgress Final(JobPhase phase, string line, bool complete)
+        {
+            var elapsed = _clock.Elapsed.TotalSeconds;
+            return new ProcessingProgress
+            {
+                Current = total,
+                Total = total,
+                Phase = phase,
+                FileName = line,
+                TotalRows = Rows,
+                Complete = complete,
+                ElapsedSec = elapsed,
+                FilesPerSec = elapsed > 0 ? (int)(total / elapsed) : 0,
+                Skipped = record.Skips,
+            };
+        }
     }
 }
+
+/// <summary>
+/// Prepares one decision's <c>.xgp</c> payload from its decoded source — the
+/// shape of <see cref="XgpPayload.Prepare"/>, which the application supplies,
+/// and a test's stand-in.
+/// </summary>
+internal delegate ReadOnlyMemory<byte> XgpPayloadPreparation(
+    DecisionId id, XgFile source, ReadOnlyMemory<byte>? sourceBytes, bool anonymize);
