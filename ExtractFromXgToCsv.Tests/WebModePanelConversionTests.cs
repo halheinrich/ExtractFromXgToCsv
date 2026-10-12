@@ -146,7 +146,7 @@ public class WebModePanelConversionTests : BunitContext
         Assert.True(DownloadButton(cut).HasAttribute("disabled"));
 
         _converter.ReleaseRecords();
-        await switching;
+        await switching.WaitAsync(TimeSpan.FromSeconds(10));
         WaitForIdle(cut);
         Assert.Single(cut.FindAll(".zero-match-notice"));
     }
@@ -168,7 +168,7 @@ public class WebModePanelConversionTests : BunitContext
 
         Pick(cut, B);
         _converter.ReleaseRecords();
-        await first;
+        await first.WaitAsync(TimeSpan.FromSeconds(10));
         WaitForIdle(cut);
 
         Assert.Equal([A, B], _converter.RecordsCalls.Select(c => c.File));
@@ -193,7 +193,7 @@ public class WebModePanelConversionTests : BunitContext
         cut.FindComponents<InputFile>()[1].UploadFiles(
             InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture("OpeningBookV2.ob"), "OpeningBookV2.ob"));
         _converter.ReleaseRecords();
-        await pick;
+        await pick.WaitAsync(TimeSpan.FromSeconds(10));
         WaitForIdle(cut);
 
         Assert.Equal(2, _converter.RecordsCalls.Count);

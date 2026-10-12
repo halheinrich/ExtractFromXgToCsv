@@ -29,6 +29,9 @@ public class WebSessionTests
 
     private readonly ScriptedConverter _converter = new();
 
+    /// <summary>The bound on waiting for a held conversion to arrive: it only guards against one that never does.</summary>
+    private static readonly TimeSpan HoldBound = TimeSpan.FromSeconds(10);
+
     private WebSession NewSession() => new(_converter, AppRanking.Ranking);
 
     private static PickedFile Picked(string name, byte[] bytes) =>
@@ -137,13 +140,13 @@ public class WebSessionTests
         _converter.HoldRecordsCall(1);
         var selected = Representation.Records;
         var converting = session.EnsureConversionsAsync(() => selected, CancellationToken.None);
-        await _converter.RecordsHeld;
+        await _converter.RecordsHeld.WaitAsync(HoldBound);
         Assert.Equal(ConversionState.Running, session.StateOf(Representation.Records));
 
         await PickedAsync(session, Fixture(OtherXg));
         selected = Representation.Rows;
         _converter.ReleaseRecords();
-        await converting;
+        await converting.WaitAsync(HoldBound);
 
         Assert.Equal(ConversionState.NotRequested, session.StateOf(Representation.Records));
         Assert.Empty(session.Projections.Records);
@@ -161,12 +164,12 @@ public class WebSessionTests
         var session = await PickedAsync(NewSession(), Fixture(OtherXg));
         _converter.HoldRecordsCall(1);
         var converting = session.EnsureConversionsAsync(() => Representation.Records, CancellationToken.None);
-        await _converter.RecordsHeld;
+        await _converter.RecordsHeld.WaitAsync(HoldBound);
 
         var book = LoadBook();
         Assert.True(session.CompleteBookLoad(session.BeginBookLoad(), book, loadFailed: false));
         _converter.ReleaseRecords();
-        await converting;
+        await converting.WaitAsync(HoldBound);
 
         // The held conversion ran under no book; what is shown is the one that
         // ran under the new book, which the loop requested after it.
@@ -188,12 +191,12 @@ public class WebSessionTests
         var session = await PickedAsync(NewSession(), Fixture(Xg));
         _converter.HoldRecordsCall(1);
         var converting = session.EnsureConversionsAsync(() => Representation.Records, CancellationToken.None);
-        await _converter.RecordsHeld;
+        await _converter.RecordsHeld.WaitAsync(HoldBound);
 
         // The format goes back to CSV: nothing more is needed for it.
         Assert.False(session.Needs(Representation.Rows));
         _converter.ReleaseRecords();
-        await converting;
+        await converting.WaitAsync(HoldBound);
 
         Assert.Equal(ConversionState.Completed, session.StateOf(Representation.Records));
         Assert.False(session.Needs(Representation.Records));
@@ -207,13 +210,13 @@ public class WebSessionTests
         using var cts = new CancellationTokenSource();
         _converter.HoldRecordsCall(1);
         var converting = session.EnsureConversionsAsync(() => Representation.Records, cts.Token);
-        await _converter.RecordsHeld;
+        await _converter.RecordsHeld.WaitAsync(HoldBound);
 
         cts.Cancel();
         _converter.ReleaseRecords();
 
         // The real conversion observes the token after the hold.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => converting);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => converting.WaitAsync(HoldBound));
         Assert.Equal(ConversionState.NotRequested, session.StateOf(Representation.Records));
         Assert.Empty(session.Projections.Records);
     }

@@ -151,7 +151,7 @@ public class WebModePanelDownloadTests : BunitContext
         cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
         cut.Render(p => p.Add(c => c.XgpOptions, Options with { NamePattern = "later{n}", StartNumber = 50 }));
         handOff.SetVoidResult();
-        await click;
+        await click.WaitAsync(NoticeTesting.OperationBound);
 
         Assert.Equal("pos001.xgp", EntryNames((byte[])JSInterop.VerifyInvoke("downloadFile").Arguments[2]!)[0]);
         Assert.Equal(new XgpExportCommit(Options, selected), Assert.Single(_committed));
