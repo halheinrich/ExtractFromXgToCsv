@@ -1270,7 +1270,9 @@ records what a run was computed from when the run starts.
   it from its start.
 - `SkipListNoticeTests` — the one rendering: an empty record renders nothing,
   a record is an assertive, non-dismissible warning carrying the marker and
-  the caller's classes, and the optional label sits above the headline.
+  the caller's classes, the headline counts only the kinds of unit skipped
+  (no "0 files", no "0 decisions"), and the optional label sits above the
+  headline.
 - `LocalModePanelFilterWireTests` — bUnit wire tests pinning the filter half of
   the `/api/process/start` POST (the sibling `LocalModePanelXgpAnonymizeTests`
   covers its format/anonymize half): the applied `FilterConfig` reaches the
