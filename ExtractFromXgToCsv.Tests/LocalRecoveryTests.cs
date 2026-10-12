@@ -431,6 +431,105 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Empty(OwedIds(Record!.Value));
     }
 
+    // ── Stop ────────────────────────────────────────────────────────────────
+
+    private static AngleSharp.Dom.IElement StopButton(LocalPage page) =>
+        page.Home.FindAll("button").Single(b => b.TextContent.Trim() == "Stop");
+
+    // A second match, so a cancel is seen between the files: a file is the
+    // cancellation's granularity.
+    private void AddASecondMatch() =>
+        File.Copy(Path.Combine(FixtureHelper.FixtureDir, "MTCH4064.xg"), Path.Combine(_server.InputFolder, "second.xg"));
+
+    /// <summary>
+    /// Stop before the start is answered settles the job's identity. Here the
+    /// start reaches the server first: settling answers admitted, so Stop
+    /// cancels the job, and the page follows it to its stopped result.
+    /// </summary>
+    [Fact]
+    public async Task StopBeforeTheAnswer_WithTheStartWinning_CancelsTheJob_AndFollowsItToItsStoppedResult()
+    {
+        AddASecondMatch();
+        var page = Open();
+        _server.Gate.Close();
+        var heldStart = _server.Wire.Hold(ProtocolWire.Start);
+        var heldSettle = _server.Wire.Hold(ProtocolWire.Settle);
+        var run = page.RunAsync();
+        await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        await heldSettle.Reached.WaitAsync(NoticeTesting.OperationBound);
+        heldStart.Release();
+        await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        heldSettle.Release();
+        page.WaitFor(() => _server.Wire.Requests.Contains("POST /api/process/job-1/cancel"));
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        var entry = Assert.Single((await LedgerAsync()).Entries);
+        Assert.False(entry.Running);
+        Assert.Equal(1, MarkNumber(Record!.Value));
+        Assert.Equal(entry.Commit!.Count, LastNumber(Record!.Value));
+        Assert.Empty(OwedIds(Record!.Value));
+    }
+
+    /// <summary>
+    /// The converse: settling reaches the server before the held start, so
+    /// the identity is retired — nothing ran — and the start, arriving after,
+    /// is refused. No job runs, no file is written, and the job is not owed.
+    /// </summary>
+    [Fact]
+    public async Task StopBeforeTheAnswer_WithSettlingWinning_RetiresTheIdentity_AndNothingRuns()
+    {
+        var page = Open();
+        var heldStart = _server.Wire.Hold(ProtocolWire.Start);
+        var run = page.RunAsync();
+        await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        heldStart.Release();
+        await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Empty((await LedgerAsync()).Entries);
+        Assert.Empty(_server.XgpFiles());
+        Assert.Empty(OwedIds(Record!.Value));
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        page.WaitFor(() => page.StartState.XgpBlock is null);
+    }
+
+    /// <summary>
+    /// A cancel the server answers with an error, or refuses, was not
+    /// delivered: the page says so, and keeps following. The run then ends
+    /// as it would have — here completed — never shown as stopped.
+    /// </summary>
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.InternalServerError,
+        "Stop didn't reach the server, so the run may still be going. Press Stop to try again.")]
+    [InlineData(System.Net.HttpStatusCode.NotFound,
+        "The server didn't stop the run: it had already ended, or the server no longer has it.")]
+    public async Task ACancelNotDelivered_IsShown_AndFollowingContinues(System.Net.HttpStatusCode answer, string shown)
+    {
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => _server.Wire.Requests.Any(r => r.EndsWith("/status", StringComparison.Ordinal)));
+        _server.Wire.Respond(ProtocolWire.Cancel, answer);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+
+        page.WaitForScreen(() => Assert.Equal(shown,
+            Assert.Single(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error).Content.TextContent.Trim()));
+        Assert.False(run.IsCompleted);
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        Assert.Contains("Done", page.Home.Markup);
+        Assert.DoesNotContain("Stopped", page.Home.Markup);
+    }
+
     // ── What counts as an edit ──────────────────────────────────────────────
 
     /// <summary>

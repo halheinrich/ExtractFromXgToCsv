@@ -526,19 +526,33 @@
         _runError = null;
     }
 
-    // Stop cancels the job once the server has admitted it; before that, it
-    // stops sending the start. A start that may yet have arrived is the host's
-    // to find, by reconciling.
+    // Stop (SPEC-notices.md §7.5): once the server has admitted the job, it
+    // cancels it; before the start is answered, it stops sending the start,
+    // and the run settles the identity (RunLocalAsync).
     private async Task StopLocalAsync()
     {
         if (_currentJobId is { } jobId)
-        {
-            try { await Jobs.CancelAsync(jobId); }
-            catch (Exception ex) when (IsUnreachable(ex)) { /* the run goes on; Stop can be pressed again */ }
-        }
+            await DeliverStopAsync(jobId);
         else
-        {
             _abandonStart?.Cancel();
+    }
+
+    /// <summary>
+    /// Asks the server to cancel the admitted job. Delivered, the page goes on
+    /// following the job to its stopped result, which says so. Refused, or not
+    /// answered, the page says so — Stop is never shown as delivered when it
+    /// was not — and goes on following; Stop can be pressed again.
+    /// </summary>
+    private async Task DeliverStopAsync(string jobId)
+    {
+        try
+        {
+            if (!await Jobs.CancelAsync(jobId, _lifetime.Token))
+                _runError = StopRefusedMessage;
+        }
+        catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
+        {
+            _runError = StopFailedMessage;
         }
     }
 
@@ -556,8 +570,9 @@
     /// One Local run (SPEC-notices.md §7.5): its identity minted before
     /// anything is sent, an XGP job recorded as owed by the host before its
     /// start, the start sent — and retried under the same identity — until the
-    /// server answers, the job followed to its terminal result, its ended XGP
-    /// entry applied by the host, and only then the job acknowledged.
+    /// server answers, or, Stop pressed first, its identity settled; the job
+    /// followed to its terminal result, its ended XGP entry applied by the
+    /// host, and only then the job acknowledged.
     /// </summary>
     private async Task RunLocalAsync()
     {
@@ -629,7 +644,24 @@
                     break;
                 default:
                     // Stopped before the server answered: the start may yet
-                    // have arrived, which the host finds by reconciling.
+                    // arrive, so Stop settles its identity.
+                    switch (await SettleAsync(jobId, instance))
+                    {
+                        case SettleOutcome.Retired:
+                            // It never ran, and now never can.
+                            if (xgp)
+                                await OnXgpJobNeverStarted.InvokeAsync(jobId);
+                            break;
+                        case SettleOutcome.Admitted:
+                            // It arrived: Stop cancels it, and the page
+                            // follows it to its stopped result.
+                            _currentJobId = jobId;
+                            await DeliverStopAsync(jobId);
+                            terminal = await FollowAsync(jobId);
+                            if (terminal is null && !_lifetime.IsCancellationRequested)
+                                failure = UnknownJobMessage;
+                            break;
+                    }
                     reconcile = xgp;
                     break;
             }
@@ -743,6 +775,31 @@
         }
     }
 
+    /// <summary>
+    /// Settles the identity of a start Stop ended before the server answered
+    /// it, in one server step: retired — it never ran, and now never can — or
+    /// admitted — it arrived. Retried until answered, as a start is; a failure
+    /// that persists shows as the run error, and settling goes on.
+    /// </summary>
+    /// <returns>The outcome; <see langword="null"/> when the server is another instance now, and refused.</returns>
+    private async Task<SettleOutcome?> SettleAsync(string jobId, string instance)
+    {
+        for (var failures = 0; ; )
+        {
+            try
+            {
+                var outcome = await Jobs.SettleAsync(jobId, instance, _lifetime.Token);
+                ContactReturned();
+                return outcome;
+            }
+            catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
+            {
+                StillTryingAfter(++failures);
+            }
+            await Task.Delay(Timing.RetryDelay, _lifetime.Token);
+        }
+    }
+
     /// <summary>What sending a start came to: the server's answer, and whether it answered every attempt.</summary>
     /// <param name="Answer">The answer; <see langword="null"/> when Stop ended the start first.</param>
     /// <param name="EveryAttemptAnswered">Whether no attempt went unanswered: a refusal then settles every attempt.</param>
@@ -831,6 +888,14 @@
 
     private const string UnknownJobMessage =
         "The server no longer has this run — it may have restarted — so its result can't be shown.";
+
+    // Stop that the server refused: it holds no running job of that identity.
+    private const string StopRefusedMessage =
+        "The server didn't stop the run: it had already ended, or the server no longer has it.";
+
+    // Stop that never reached the server, or got no answer.
+    private const string StopFailedMessage =
+        "Stop didn't reach the server, so the run may still be going. Press Stop to try again.";
 
     // The page says why a refused start started nothing.
     private static string RefusedMessage(RefusalReason reason) => reason switch

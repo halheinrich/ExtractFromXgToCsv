@@ -44,11 +44,19 @@ internal sealed class LocalJobsClient(HttpClient http)
         return await ReadAsync<ProcessingProgress>(response, cancellationToken);
     }
 
-    /// <summary>Asks the server to cancel the job; whether it was still running is not the caller's concern.</summary>
-    /// <exception cref="HttpRequestException">The server could not be reached.</exception>
-    public async Task CancelAsync(string jobId)
+    /// <summary>
+    /// Asks the server to cancel the job: <see langword="true"/> when it
+    /// signalled the running job, <see langword="false"/> when it refused —
+    /// the job had ended, or the server does not hold it.
+    /// </summary>
+    /// <exception cref="HttpRequestException">The server could not be reached, or answered neither way.</exception>
+    public async Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken)
     {
-        using var _ = await http.PostAsync($"/api/process/{jobId}/cancel", content: null);
+        using var response = await http.PostAsync($"/api/process/{jobId}/cancel", content: null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return false;
+        response.EnsureSuccessStatusCode();
+        return true;
     }
 
     /// <summary>Acknowledges the job's terminal result, releasing it on the server.</summary>
