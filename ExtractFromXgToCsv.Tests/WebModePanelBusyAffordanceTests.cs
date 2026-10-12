@@ -105,6 +105,28 @@ public class WebModePanelBusyAffordanceTests : BunitContext
         Assert.DoesNotContain("busy-notice", cut.Markup);
     }
 
+    /// <summary>
+    /// A failure in the wrapper itself, before the body runs — here its own
+    /// render request, made off the renderer's dispatcher, where Blazor
+    /// refuses it — still releases the busy state. Before the correction the
+    /// depth was raised before the <c>try</c>, so such a failure left the
+    /// panel busy for good.
+    /// </summary>
+    [Fact]
+    public async Task RunBusy_ReleasesTheBusyStateWhenTheWrapperFailsBeforeTheBody()
+    {
+        var cut = RenderPanel();
+        var bodyRan = false;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            cut.Instance.RunBusyForTest("Working on it…", () => { bodyRan = true; return Task.CompletedTask; }));
+
+        Assert.False(bodyRan);
+        cut.Render();
+        Assert.DoesNotContain("busy-notice", cut.Markup);
+        Assert.DoesNotContain("is-busy", cut.Markup);
+    }
+
     [Fact]
     public void FileSelection_RunsThroughTheBusyWrapper()
     {

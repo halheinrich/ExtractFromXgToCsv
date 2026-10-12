@@ -570,20 +570,22 @@
     /// Every slow Web-mode gesture goes through here, so the discipline lives in
     /// one place rather than being re-derived per handler. Each body keeps its
     /// own error handling; this wrapper owns only the busy state, and releases
-    /// it in a <c>finally</c> so a throwing body can't strand the notice on
-    /// screen. The same render that paints the notice puts <c>is-busy</c> on the
-    /// panel root, so the busy cursor is on screen before the body takes the
-    /// thread — the yield is what buys both.
+    /// it in a <c>finally</c> that covers everything after the depth is raised
+    /// — its own render request and yield as well as the body — so nothing
+    /// that throws can strand the notice on screen. The same render that
+    /// paints the notice puts <c>is-busy</c> on the panel root, so the busy
+    /// cursor is on screen before the body takes the thread — the yield is
+    /// what buys both.
     /// </para>
     /// </remarks>
     private async Task RunBusyAsync(string message, Func<Task> body)
     {
-        _busyDepth++;
-        _busyMessage = message;
-        StateHasChanged();
-        await Task.Yield();
         try
         {
+            _busyDepth++;
+            _busyMessage = message;
+            StateHasChanged();
+            await Task.Yield();
             await body();
         }
         finally
