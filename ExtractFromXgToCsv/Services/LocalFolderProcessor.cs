@@ -221,6 +221,87 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
+    /// Writes <paramref name="payload"/> as a new file at
+    /// <paramref name="path"/>, which no file of its name may precede — Local
+    /// XGP files are never overwritten (the umbrella's <c>SPEC-notices.md</c>
+    /// §7.5) — and closes it before returning, so the caller counts it only
+    /// once it is written and closed. Not cancellable: a file is the
+    /// cancellation's granularity.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The file belongs to the run only once its create-new succeeds. A
+    /// collision, or any other failure to create the file, removes nothing.
+    /// </para>
+    /// <para>
+    /// If writing or closing it fails, the run removes it, so it never blocks
+    /// a later export as an existing file, and the run fails with that
+    /// failure; a failure to close or remove it is reported beside that one,
+    /// never in its place (<see cref="UnfinishedFileException"/>). Every
+    /// failure here is the destination's, never a skip.
+    /// </para>
+    /// </remarks>
+    /// <param name="path">The file to create.</param>
+    /// <param name="payload">Its whole content.</param>
+    /// <param name="written">The files the run has written before this one, for a collision's message.</param>
+    /// <exception cref="XgpFileExistsException">A file of that name exists.</exception>
+    /// <exception cref="UnfinishedFileException">The file was created, and writing or closing it failed.</exception>
+    private async Task WriteNewFileAsync(string path, ReadOnlyMemory<byte> payload, int written)
+    {
+        Stream file;
+        try
+        {
+            file = _destination.CreateNew(path);
+        }
+        // Which refusal this is decides only the wording of the run's error:
+        // asked after the create has refused, it guards no write.
+        catch (IOException ex) when (File.Exists(path))
+        {
+            throw new XgpFileExistsException(Path.GetFileName(path), written, ex);
+        }
+
+        var writing = true;
+        Exception primary;
+        try
+        {
+            await file.WriteAsync(payload);
+            writing = false;
+            await file.DisposeAsync();
+            return;
+        }
+        catch (Exception ex)
+        {
+            primary = ex;
+        }
+
+        // Unfinished: close it if its write failed, then remove it.
+        Exception? closeFailure = null;
+        if (writing)
+        {
+            try
+            {
+                await file.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                closeFailure = ex;
+            }
+        }
+
+        Exception? removalFailure = null;
+        try
+        {
+            _destination.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            removalFailure = ex;
+        }
+
+        throw new UnfinishedFileException(Path.GetFileName(path), primary, closeFailure, removalFailure);
+    }
+
+    /// <summary>
     /// The one skip seam: every read, conversion and payload failure in this
     /// processor comes here, and nothing logs a skip on its own. Logs the skip
     /// and appends it to <paramref name="record"/>, the run's record, which
@@ -423,9 +504,12 @@ public class LocalFolderProcessor
 
     /// <summary>
     /// Xgp pathway: writes one .xgp position file per filtered decision into
-    /// the <paramref name="outputPath"/> <b>folder</b> (created if absent;
-    /// same-named files are overwritten — counter discipline is the
-    /// client's). Filenames come from <paramref name="options"/>' pattern via
+    /// the <paramref name="outputPath"/> <b>folder</b> (created if absent).
+    /// A file is never overwritten: each is created only if no file of its
+    /// name exists, and an existing one stops the run there — a destination
+    /// failure naming the file, with the files written before it committed
+    /// and counted (the umbrella's <c>SPEC-notices.md</c> §7.5). Filenames
+    /// come from <paramref name="options"/>' pattern via
     /// an <see cref="XgpNameAllocator"/>: batch-constant tokens draw from
     /// <paramref name="filters"/>, per-item tokens from each decision, and
     /// duplicate rendered names within the run get Windows-style
@@ -498,12 +582,12 @@ public class LocalFolderProcessor
                         continue;
                     }
 
-                    // The commit: the write, outside the decision's boundary,
-                    // so a failure fails the run. The slot is consumed, and
-                    // the run's commit counts the file, only once it is
-                    // written. Not cancellable: a file is the cancellation's
-                    // granularity.
-                    await ReplaceWithAsync(Path.Combine(outputPath, allocator.Peek(row)), payload, CancellationToken.None);
+                    // The commit: the file, created new, written and closed
+                    // outside the decision's boundary, so a failure fails the
+                    // run. The slot is consumed, and the run's commit counts
+                    // the file, only once it is written and closed. Not
+                    // cancellable: a file is the cancellation's granularity.
+                    await WriteNewFileAsync(Path.Combine(outputPath, allocator.Peek(row)), payload, allocator.CommittedCount);
                     allocator.Commit(row);
                     record.Commit(new XgpExportCommit(options, allocator.CommittedCount));
                     run.Add(1);
