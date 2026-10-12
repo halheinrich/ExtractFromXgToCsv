@@ -490,7 +490,7 @@
                 if (await _session.CompletePickAsync(pick, token!.Value, picked, _lifetime.Token))
                     await _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token);
             },
-            ownsTheOutcome: () => _session.IsLatest(pick)));
+            gestureOwns: () => _session.IsLatest(pick)));
     }
 
     private async Task HandleOpeningBookSelectionAsync(InputFileChangeEventArgs e)
@@ -531,20 +531,21 @@
             if (_session.CompleteBookLoad(load, book, failed))
                 await _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token);
         },
-        ownsTheOutcome: () => _session.IsLatest(load)));
+        gestureOwns: () => _session.IsLatest(load)));
     }
 
     /// <summary>
     /// Runs a gesture's work: a cancellation from this panel's own lifetime
     /// ends it silently, since the panel has gone; anything else that escapes
-    /// — never a file's failure, which is a skip — is the gesture's failure,
-    /// the run error, while the gesture still owns its outcome
-    /// (<paramref name="ownsTheOutcome"/>, asked when it fails). A failure is
-    /// published by the same owner rules as a result and a skip record
-    /// (SPEC-notices.md §7.3): a superseded gesture publishes nothing, its
-    /// failure included, and the failure is logged instead.
+    /// — never a file's failure, which is a skip — is a failure, the run
+    /// error, while its owner still owns it. A failure is published by the
+    /// same owner rules as a result and a skip record (SPEC-notices.md §7.3):
+    /// a conversion's by the selection and book it converted for, whichever
+    /// gesture asked for it (<see cref="WebSession.Owns"/>); anything else by
+    /// its gesture (<paramref name="gestureOwns"/>, asked when it fails). A
+    /// superseded failure publishes nothing, and is logged instead.
     /// </summary>
-    private async Task GuardedAsync(Func<Task> work, Func<bool> ownsTheOutcome)
+    private async Task GuardedAsync(Func<Task> work, Func<bool> gestureOwns)
     {
         try
         {
@@ -553,7 +554,7 @@
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
         }
-        catch (Exception ex) when (ownsTheOutcome())
+        catch (Exception ex) when (ex is ConversionFailedException conversion ? _session.Owns(conversion) : gestureOwns())
         {
             _runError = $"Error: {ex.Message}";
         }
@@ -563,14 +564,15 @@
         }
     }
 
-    // A conversion belongs to the selection it converts for: its failure is
-    // the run error only while that selection is current.
+    // Converting what the selected output needs, for the format switch that
+    // asked: a conversion's failure is owned by its selection and book, and
+    // anything else by the selection it was asked for.
     private Task EnsureConversionsAsync()
     {
         var selection = _session.Selection;
         return GuardedAsync(
             () => _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token),
-            ownsTheOutcome: () => ReferenceEquals(selection, _session.Selection));
+            gestureOwns: () => ReferenceEquals(selection, _session.Selection));
     }
 
     /// <summary>
@@ -764,18 +766,23 @@
     /// has taken over; what a successful XGP hand-off committed reaches the
     /// host's numbering whatever is shown.
     /// </summary>
+    /// <remarks>
+    /// The hand-off ends the attempt. Recording what it committed comes after,
+    /// outside the attempt's failure handling: a failure there is shown as the
+    /// run error, and the download stays completed — it was delivered.
+    /// </remarks>
     private async Task DownloadCoreAsync(DownloadAttempt attempt)
     {
         _runError = null;
 
         var (ticket, format, fileName) = (attempt.Ticket, attempt.Format, attempt.FileName);
         var exportSkips = SkipRecord.Empty;
+        XgpExportCommit? numbering = null;
         try
         {
             byte[] bytes;
             string mimeType;
             int committed;
-            XgpExportCommit? numbering = null;
 
             if (format == OutputFormat.Xgp)
             {
@@ -805,16 +812,12 @@
 
             _session.CompleteDownload(ticket, new WebDownload(
                 format, fileName, DownloadStatus.Completed, committed, numbering, exportSkips));
-
-            // The archive was delivered, so the numbers it used are recorded,
-            // whatever is now shown — from the options it captured.
-            if (numbering is not null)
-                await OnXgpExported.InvokeAsync(numbering);
         }
         catch (OperationCanceledException)
         {
             _session.CompleteDownload(ticket, new WebDownload(
                 format, fileName, DownloadStatus.Cancelled, 0, null, exportSkips));
+            return;
         }
         catch (Exception ex)
         {
@@ -827,6 +830,23 @@
                 _runError = $"Error: {ex.Message}";
             else
                 Logger.LogWarning(ex, "A superseded Web-mode download failed; its failure is not shown.");
+            return;
+        }
+
+        // The archive was delivered, so the numbers it used are recorded,
+        // whatever is now shown — from the options it captured. The host's
+        // accounting, not the attempt's: its failure is the run error, and the
+        // download stays completed.
+        if (numbering is not null)
+        {
+            try
+            {
+                await OnXgpExported.InvokeAsync(numbering);
+            }
+            catch (Exception ex)
+            {
+                _runError = $"Error: {ex.Message}";
+            }
         }
     }
 }

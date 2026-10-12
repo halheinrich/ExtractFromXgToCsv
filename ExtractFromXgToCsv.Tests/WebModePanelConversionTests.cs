@@ -258,6 +258,57 @@ public class WebModePanelConversionTests : BunitContext
     }
 
     /// <summary>
+    /// A conversion's failure is owned as its result is — by the selection and
+    /// the book it converted for — whichever gesture asked for it. A book
+    /// load's reconversion overtaken by a pick fails: the book load is still
+    /// the newest, but the selection it converted for is gone, so nothing is
+    /// shown.
+    /// </summary>
+    [Fact]
+    public async Task AFailureOfABookLoadsConversion_OvertakenByAPick_IsNotShown()
+    {
+        var cut = RenderPanel(OutputFormat.Csv);
+        Pick(cut, A);
+        _converter.HoldRowsCall(2);
+        var load = Task.Run(() => cut.FindComponents<InputFile>()[1].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture("OpeningBookV2.ob"), "OpeningBookV2.ob")));
+        await _converter.RowsHeld.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Pick(cut, B);
+        _converter.FailRows = (source, _) => source.Name == A ? new OperationCanceledException("Interrupted.") : null;
+        _converter.ReleaseRows();
+        await load.WaitAsync(TimeSpan.FromSeconds(10));
+        WaitForIdle(cut);
+
+        Assert.DoesNotContain("Interrupted.", cut.Markup);
+        Assert.All(cut.Instance.RowCache.Rows, r => Assert.Equal(B, r.Id.Filename));
+    }
+
+    /// <summary>
+    /// The converse: a records conversion under a book a later load has
+    /// replaced fails. Its pick is still the newest, but the book it converted
+    /// under is not current, so nothing is shown.
+    /// </summary>
+    [Fact]
+    public async Task AFailureOfARecordsConversionUnderAReplacedBook_IsNotShown()
+    {
+        var cut = RenderPanel(OutputFormat.DiagramJson);
+        _converter.HoldRecordsCall(1);
+        var pick = Task.Run(() => Pick(cut, B));
+        await _converter.RecordsHeld.WaitAsync(TimeSpan.FromSeconds(10));
+
+        cut.FindComponents<InputFile>()[1].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture("OpeningBookV2.ob"), "OpeningBookV2.ob"));
+        _converter.FailRecords = (_, book) => book is null ? new OperationCanceledException("Interrupted.") : null;
+        _converter.ReleaseRecords();
+        await pick.WaitAsync(TimeSpan.FromSeconds(10));
+        WaitForIdle(cut);
+
+        Assert.DoesNotContain("Interrupted.", cut.Markup);
+        Assert.NotEmpty(cut.Instance.RowCache.Records);
+    }
+
+    /// <summary>
     /// A book change while records convert: the conversion's key is no longer
     /// current, so its completion publishes nothing, and the records shown are
     /// the ones converted under the new book.

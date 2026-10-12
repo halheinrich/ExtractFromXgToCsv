@@ -130,6 +130,32 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
         Assert.Contains("broken.xg", Assert.Single(notice.QuerySelectorAll("li")).TextContent);
     }
 
+    /// <summary>
+    /// A stopped run whose output file then failed to close is still stopped
+    /// (SPEC-notices.md §7.1): its line and its record say so, and the close
+    /// failure is shown beside them, never as the run's error.
+    /// </summary>
+    [Fact]
+    public async Task AStoppedRunWhoseCloseFailed_IsShownStopped_WithTheCloseFailureBesideIt()
+    {
+        const string closeFailure = "Closing the unfinished out.csv failed: The network name is no longer available.";
+        var cut = PanelOver(new CapturingProcessHandler(new ProcessingProgress
+        {
+            Current = 2,
+            Total = 9,
+            Complete = true,
+            Cancelled = true,
+            CloseFailureMessage = closeFailure,
+            Skipped = OneFile,
+        }));
+        await cut.RunToCompletionAsync();
+
+        Assert.Contains("Stopped", cut.Find("span.text-warning").TextContent);
+        Assert.Equal(closeFailure, cut.Find("#closeFailure").TextContent.Trim());
+        Assert.Empty(cut.FindAll("span.text-danger"));
+        Assert.Equal("The last run (stopped)", cut.Find($"{Notice} .skip-list-label").TextContent);
+    }
+
     [Fact]
     public async Task FailedRunWithSkips_ShowsItsErrorAndItsRecord_LabelledFailed()
     {

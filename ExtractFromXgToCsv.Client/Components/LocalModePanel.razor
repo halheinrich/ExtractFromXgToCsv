@@ -208,6 +208,13 @@
                             — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
                             (@_progress.FilesPerSec files/sec)
                         </span>
+                        @if (_progress.CloseFailureMessage is { } closeFailure)
+                        {
+                            // The stop stands (SPEC-notices.md §7.1); a failure
+                            // closing the file it left unfinished is reported
+                            // beside it, never in its place.
+                            <div class="text-danger" id="closeFailure">@closeFailure</div>
+                        }
                     }
                     else
                     {

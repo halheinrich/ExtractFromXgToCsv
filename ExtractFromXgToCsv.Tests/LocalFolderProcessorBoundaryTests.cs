@@ -220,6 +220,63 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
     }
 
     /// <summary>
+    /// A cancellation stands (SPEC-notices.md §7.1): when closing the CSV file
+    /// it left unfinished then fails, the run is still a cancelled one — the
+    /// job runner's catch for a cancellation takes it — with the close failure
+    /// reported beside it, and its terminal snapshot is stopped, not failed.
+    /// </summary>
+    [Fact]
+    public async Task Csv_ACancellationWhoseCloseFails_IsStillStopped_WithTheCloseFailureBesideIt()
+    {
+        Copy(GoodName);
+        Copy(FailingName);
+        Copy(ThirdName);
+        var good = FixtureRows(GoodName);
+        var record = new RunRecord();
+        using var cts = new CancellationTokenSource();
+        var processor = new LocalFolderProcessor(
+            NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance,
+            AppRanking.Ranking, bookProvider: null, XgpPayload.Prepare,
+            new ScriptedDestination { FailCloseOf = "out.csv" });
+
+        var stopped = await Assert.ThrowsAsync<CancelledWithUnfinishedOutputException>(() => processor.ProcessAsync(
+            _folder, Path.Combine(_folder, "out.csv"), CancelAtCall.Set(good.Count + 1, cts), new RecordingProgress(), record,
+            cts.Token));
+
+        Assert.Equal($"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}", stopped.CloseFailureMessage);
+        var terminal = record.CancelledSnapshot(new ProcessingProgress(), stopped.CloseFailureMessage);
+        Assert.True(terminal.Cancelled);
+        Assert.Null(terminal.ErrorMessage);
+        Assert.Equal(stopped.CloseFailureMessage, terminal.CloseFailureMessage);
+        Assert.Empty(record.Skips);
+    }
+
+    /// <summary>
+    /// A failed write stays the run's error when closing the file then fails
+    /// too: the close failure is reported beside the write's, never in its
+    /// place — the one Diagram JSON file here, as for every output file.
+    /// </summary>
+    [Fact]
+    public async Task DiagramJson_AFailedWriteWhoseCloseFails_KeepsTheWritesError_WithTheCloseFailureBesideIt()
+    {
+        Copy(GoodName);
+        var record = new RunRecord();
+        var processor = new LocalFolderProcessor(
+            NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance,
+            AppRanking.Ranking, bookProvider: null, XgpPayload.Prepare,
+            new ScriptedDestination { FailWriteOf = "out.json", FailCloseOf = "out.json" });
+
+        var failure = await Assert.ThrowsAsync<UnfinishedOutputException>(() => processor.ProcessDiagramAsync(
+            _folder, Path.Combine(_folder, "out.json"), new DecisionFilterSet(), new RecordingProgress(), record));
+
+        Assert.Equal(
+            $"{ScriptedDestination.WriteFailure} Closing the unfinished out.json failed too: {ScriptedDestination.CloseFailure}",
+            failure.Message);
+        Assert.Equal(ScriptedDestination.WriteFailure, failure.InnerException!.Message);
+        Assert.Empty(record.Skips);
+    }
+
+    /// <summary>
     /// The write of one position is the commit. Before this leg the write sat
     /// inside the per-decision catch, so a destination that refused one file
     /// was recorded as a skipped decision and the run went on.

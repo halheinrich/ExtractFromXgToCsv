@@ -46,6 +46,15 @@ public class ProcessingProgress
     public string? ErrorMessage { get; set; }
 
     /// <summary>
+    /// On a cancelled terminal snapshot, a failure closing the output file the
+    /// cancellation left unfinished, as the run reports it: beside the
+    /// cancellation, which stands, never in its place. <see langword="null"/>
+    /// otherwise; a failed run reports such a failure within
+    /// <see cref="ErrorMessage"/>.
+    /// </summary>
+    public string? CloseFailureMessage { get; set; }
+
+    /// <summary>
     /// Every unit the run has skipped so far, in the order skipped — a file it
     /// could not read or convert, or a decision whose payload it could not
     /// prepare; on a terminal snapshot, the run's whole record. Empty when

@@ -51,9 +51,11 @@ public sealed class RunRecord
     /// from <paramref name="lastReported"/>, its last report; what it skipped
     /// and committed comes from this record, which the last report can trail.
     /// An XGP run's row count is its commit's, so the line the client shows
-    /// agrees with the accounting.
+    /// agrees with the accounting. A failure closing the output file the
+    /// cancellation left unfinished is reported beside it
+    /// (<paramref name="closeFailureMessage"/>); the run is still stopped.
     /// </summary>
-    internal ProcessingProgress CancelledSnapshot(ProcessingProgress lastReported)
+    internal ProcessingProgress CancelledSnapshot(ProcessingProgress lastReported, string? closeFailureMessage = null)
     {
         ArgumentNullException.ThrowIfNull(lastReported);
         return new ProcessingProgress
@@ -67,6 +69,7 @@ public sealed class RunRecord
             FilesPerSec = lastReported.FilesPerSec,
             Complete = true,
             Cancelled = true,
+            CloseFailureMessage = closeFailureMessage,
             Skipped = Skips,
             XgpCommit = XgpCommit,
         };

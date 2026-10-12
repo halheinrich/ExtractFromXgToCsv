@@ -5,6 +5,7 @@ using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
 using ExtractFromXgToCsv.Client.Shared;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using XgFilter_Lib;
@@ -214,10 +215,67 @@ public class LocalFolderProcessor
     /// names, replacing one of that name, and closes it before returning — so
     /// a failure finishing the file is the caller's, before it reports success.
     /// </summary>
-    private async Task ReplaceWithAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    private Task ReplaceWithAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
     {
-        await using var file = _destination.Replace(path);
-        await file.WriteAsync(bytes, cancellationToken);
+        var file = _destination.Replace(path);
+        return WriteThenCloseAsync(file, path, () => file.WriteAsync(bytes, cancellationToken).AsTask());
+    }
+
+    /// <summary>
+    /// Writes the one output file <paramref name="path"/> names with
+    /// <paramref name="write"/>, then closes <paramref name="file"/> whatever
+    /// the write did — so the file is finished, or the failure to finish it
+    /// is known, before the caller reports anything.
+    /// </summary>
+    /// <remarks>
+    /// The write's own ending stands. A cancellation stays a cancellation and
+    /// a failure stays that failure, with a failure closing the file reported
+    /// beside it, never in its place (the umbrella's <c>SPEC-notices.md</c>
+    /// §7.1). A close that fails after a write that succeeded is the run's
+    /// error. Every failure here is the destination's, never a skip.
+    /// </remarks>
+    /// <exception cref="CancelledWithUnfinishedOutputException">The write was cancelled, and closing the file failed.</exception>
+    /// <exception cref="UnfinishedOutputException">The write failed, and closing the file failed.</exception>
+    private static async Task WriteThenCloseAsync(IAsyncDisposable file, string path, Func<Task> write)
+    {
+        Exception? ending = null;
+        try
+        {
+            await write();
+        }
+        catch (Exception ex)
+        {
+            ending = ex;
+        }
+
+        Exception? closeFailure = null;
+        try
+        {
+            await file.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            closeFailure = ex;
+        }
+
+        if (closeFailure is null)
+        {
+            if (ending is not null)
+                ExceptionDispatchInfo.Throw(ending);
+            return;
+        }
+
+        var fileName = Path.GetFileName(path);
+        switch (ending)
+        {
+            case null:
+                ExceptionDispatchInfo.Throw(closeFailure);
+                break;
+            case OperationCanceledException cancellation:
+                throw new CancelledWithUnfinishedOutputException(fileName, cancellation, closeFailure);
+            default:
+                throw new UnfinishedOutputException(fileName, ending, closeFailure);
+        }
     }
 
     /// <summary>
@@ -437,10 +495,13 @@ public class LocalFolderProcessor
         // The destination, opened before any file is read; it and every write
         // below are outside the files' boundaries. It is finished — flushed
         // whole and closed — before the run reports success, so a failure
-        // finishing it is the run's error, never a success already published.
+        // finishing it is the run's error, never a success already published;
+        // and a failure finishing it after a cancellation or a failure is
+        // reported beside that ending, never in its place.
         CreateParentFolder(outputPath);
         var run = new RunProgress(files.Count, progress, record);
-        await using (var writer = new StreamWriter(_destination.Replace(outputPath), Encoding.UTF8))
+        var writer = new StreamWriter(_destination.Replace(outputPath), Encoding.UTF8);
+        await WriteThenCloseAsync(writer, outputPath, async () =>
         {
             await writer.WriteLineAsync(DecisionRow.CsvHeader);
             await ForEachFileAsync(
@@ -454,7 +515,7 @@ public class LocalFolderProcessor
                     run.Add(rows.Count);
                 },
                 cancellationToken);
-        }
+        });
 
         run.ReportDone();
     }

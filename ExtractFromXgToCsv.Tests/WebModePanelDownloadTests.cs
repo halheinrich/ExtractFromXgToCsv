@@ -56,14 +56,15 @@ public class WebModePanelDownloadTests : BunitContext
     private void AddADecisionWhosePreparationFails() =>
         _converter.RewriteRows = (_, rows) => [rows[0], Nowhere, .. rows.Skip(1)];
 
-    private IRenderedComponent<WebModePanel> RenderPicked(OutputFormat format = OutputFormat.Xgp)
+    private IRenderedComponent<WebModePanel> RenderPicked(
+        OutputFormat format = OutputFormat.Xgp, Action<XgpExportCommit>? onExported = null)
     {
         var cut = Render<WebModePanel>(p => p
             .Add(c => c.OutputFormat, format)
             .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, Options)
             .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.OnXgpExported, (XgpExportCommit c) => _committed.Add(c)));
+            .Add(c => c.OnXgpExported, onExported ?? (c => _committed.Add(c))));
         Pick(cut);
         return cut;
     }
@@ -272,6 +273,47 @@ public class WebModePanelDownloadTests : BunitContext
 
         Assert.DoesNotContain(NoticeBox.AllIn(cut), b => b.Kind == NoticeKind.Error);
         Assert.Null(cut.Instance.Session.LastDownload);
+    }
+
+    /// <summary>
+    /// A successful XGP hand-off whose record a newer pick has made obsolete
+    /// still reaches the host's numbering: the archive was delivered, so the
+    /// numbers it used are recorded, whatever is shown (SPEC-notices.md §7.1,
+    /// §7.2).
+    /// </summary>
+    [Fact]
+    public async Task AnObsoleteAttemptsSuccessfulHandOff_StillReachesTheHostsNumbering()
+    {
+        var handOff = JSInterop.SetupVoid("downloadFile", _ => true);
+        var cut = RenderPicked();
+
+        var click = DownloadButton(cut).ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
+        Pick(cut);
+        handOff.SetVoidResult();
+        await click.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Null(cut.Instance.Session.LastDownload);
+        var commit = Assert.Single(_committed);
+        Assert.Equal(Options, commit.Options);
+        Assert.True(commit.Count > 0);
+    }
+
+    /// <summary>
+    /// Recording what a delivered archive committed is the host's accounting,
+    /// after the hand-off, not the attempt's: when it fails, the failure is
+    /// the run error, and the download stays completed.
+    /// </summary>
+    [Fact]
+    public async Task AnAccountingFailureAfterTheHandOff_IsShown_AndTheDownloadStaysCompleted()
+    {
+        var cut = RenderPicked(onExported: _ => throw new InvalidOperationException("The numbering could not be recorded."));
+
+        await DownloadButton(cut).ClickAsync(new MouseEventArgs());
+
+        Assert.Contains("The numbering could not be recorded.",
+            Assert.Single(NoticeBox.AllIn(cut), b => b.Kind == NoticeKind.Error).Content.TextContent);
+        Assert.Equal(DownloadStatus.Completed, cut.Instance.Session.LastDownload!.Status);
     }
 
     [Fact]

@@ -31,7 +31,9 @@ internal sealed class LocalServer : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("xg-protocol-").FullName;
     private readonly WebApplicationFactory<AppModeService> _factory;
 
-    public LocalServer()
+    /// <summary>A server over a fresh input folder holding one fixture match.</summary>
+    /// <param name="configure">Anything more the test's host needs — a logger, say.</param>
+    public LocalServer(Action<IWebHostBuilder>? configure = null)
     {
         InputFolder = Directory.CreateDirectory(Path.Combine(_root, "matches")).FullName;
         OutputFolder = Path.Combine(_root, "positions");
@@ -49,6 +51,7 @@ internal sealed class LocalServer : IDisposable
                 bookProvider: null,
                 XgpPayload.Prepare,
                 new GatedDestination(Gate))));
+            configure?.Invoke(builder);
         });
         Wire = new ProtocolWire(_factory.Server.CreateHandler());
     }

@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using ExtractFromXgToCsv.Client.Shared;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -13,7 +16,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// response is found again by its retry, and no second job runs; a delayed
 /// start loses to settling — retired, refused — or wins it — admitted; a
 /// duplicate start after the acknowledgement runs nothing; the ledger admits
-/// one XGP job at a time; and a collision's run error names the file.
+/// one XGP job at a time; a collision's run error names the file; and a job
+/// ends — its ledger entry with it — when it is cancelled, and when it fails
+/// even if logging the failure throws.
 /// </summary>
 public class LocalJobEndpointTests : IDisposable
 {
@@ -59,12 +64,14 @@ public class LocalJobEndpointTests : IDisposable
         return (await response.Content.ReadFromJsonAsync<T>())!;
     }
 
-    private async Task<ProcessingProgress> TerminalAsync(string jobId)
+    private Task<ProcessingProgress> TerminalAsync(string jobId) => TerminalAsync(_client, jobId);
+
+    private static async Task<ProcessingProgress> TerminalAsync(HttpClient client, string jobId)
     {
         var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
         while (DateTime.UtcNow < deadline)
         {
-            var snapshot = await _client.GetFromJsonAsync<ProcessingProgress>($"/api/process/{jobId}/status");
+            var snapshot = await client.GetFromJsonAsync<ProcessingProgress>($"/api/process/{jobId}/status");
             if (snapshot is { Complete: true })
                 return snapshot;
             await Task.Delay(20);
@@ -258,5 +265,89 @@ public class LocalJobEndpointTests : IDisposable
         Assert.Equal(new XgpExportCommit(new XgpExportOptions(), 1), terminal.XgpCommit);
         Assert.Equal(terminal.XgpCommit, Assert.Single((await LedgerAsync())!.Entries).Commit);
         Assert.Equal([7], File.ReadAllBytes(Path.Combine(_server.OutputFolder, "pos002.xgp")));
+    }
+
+    // ── How a job ends ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A cancel through the controller ends the job: its terminal result is a
+    /// stopped one, and its ledger entry ends with it, carrying what the job
+    /// committed — so the next XGP start is not refused as running.
+    /// </summary>
+    [Fact]
+    public async Task ACancel_EndsTheJob_AndItsLedgerEntry()
+    {
+        // A second match: a file is the cancellation's granularity, so the
+        // cancel is seen before the second is read.
+        File.Copy(Path.Combine(FixtureHelper.FixtureDir, "MTCH4064.xg"), Path.Combine(_server.InputFolder, "second.xg"));
+        var instance = await InstanceAsync();
+        _server.Gate.Close();
+        await ReadAsync<StartResponse>(
+            await StartAsync(new StartRequest("job-1", instance, Mark: null, XgpRun())), HttpStatusCode.OK);
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(HttpStatusCode.OK, (await _client.PostAsync("/api/process/job-1/cancel", content: null)).StatusCode);
+        _server.Gate.Open();
+
+        var terminal = await TerminalAsync("job-1");
+        Assert.True(terminal.Cancelled);
+        Assert.Null(terminal.ErrorMessage);
+        var entry = Assert.Single((await LedgerAsync())!.Entries);
+        Assert.False(entry.Running);
+        Assert.Equal(terminal.XgpCommit, entry.Commit);
+        await ReadAsync<StartResponse>(
+            await StartAsync(new StartRequest("job-2", instance, new LedgerMark(instance, 1), XgpRun())), HttpStatusCode.OK);
+    }
+
+    /// <summary>
+    /// A failed job records its terminal result before it logs the failure: a
+    /// logger that throws cannot keep the job from ending, nor its ledger entry
+    /// — which, left running, would refuse every later XGP start.
+    /// </summary>
+    [Fact]
+    public async Task AFailedJob_EndsWithItsLedgerEntry_EvenWhenLoggingTheFailureThrows()
+    {
+        using var server = new LocalServer(builder => builder.ConfigureLogging(logging =>
+            logging.AddProvider(new ThrowingLoggerProvider("ExtractFromXgToCsv.Controllers.ProcessController"))));
+        using var client = server.Client();
+        var instance = (await client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger"))!.Instance;
+        var run = new ProcessRequest
+        {
+            FolderPath = Path.Combine(server.InputFolder, "missing"),
+            OutputPath = server.OutputFolder,
+            OutputFormat = OutputFormat.Xgp,
+        };
+        await ReadAsync<StartResponse>(
+            await client.PostAsJsonAsync("/api/process/start", new StartRequest("job-1", instance, Mark: null, run)),
+            HttpStatusCode.OK);
+
+        var terminal = await TerminalAsync(client, "job-1");
+
+        Assert.NotNull(terminal.ErrorMessage);
+        Assert.False(Assert.Single((await client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger"))!.Entries).Running);
+    }
+
+    /// <summary>A logger that throws on every error logged under one category.</summary>
+    private sealed class ThrowingLoggerProvider(string category) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) =>
+            categoryName == category ? new Throwing() : NullLogger.Instance;
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Throwing : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel >= LogLevel.Error)
+                    throw new InvalidOperationException("The log is unavailable.");
+            }
+        }
     }
 }

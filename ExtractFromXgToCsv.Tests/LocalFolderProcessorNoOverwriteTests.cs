@@ -232,4 +232,27 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
         Assert.Equal(new XgpExportCommit(Options, 1), record.XgpCommit);
         Assert.Empty(record.Skips);
     }
+
+    /// <summary>
+    /// A write that fails, then a close that fails too: the write's failure is
+    /// the run's error, with the close failure reported beside it, never in
+    /// its place, and the unfinished file is still removed.
+    /// </summary>
+    [Fact]
+    public async Task ACloseThatAlsoFails_AfterAFailedWrite_IsReportedBesideTheWritesFailure()
+    {
+        var destination = new ScriptedDestination { FailWriteOf = "pos002.xgp", FailCloseOf = "pos002.xgp" };
+        var record = new RunRecord();
+
+        var failure = await Assert.ThrowsAsync<UnfinishedFileException>(() => RunAsync(record, destination));
+
+        Assert.Equal(
+            $"{ScriptedDestination.WriteFailure} Closing the unfinished pos002.xgp failed too: {ScriptedDestination.CloseFailure}",
+            failure.Message);
+        Assert.Equal(ScriptedDestination.CloseFailure, failure.CloseFailure!.Message);
+        Assert.Equal(["pos002.xgp"], destination.Removed);
+        Assert.False(File.Exists(OutputFile("pos002.xgp")));
+        Assert.Equal(new XgpExportCommit(Options, 1), record.XgpCommit);
+        Assert.Empty(record.Skips);
+    }
 }

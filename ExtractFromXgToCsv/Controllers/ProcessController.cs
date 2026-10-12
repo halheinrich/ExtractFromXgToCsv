@@ -163,17 +163,21 @@ public partial class ProcessController(
                     break;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
             // A new snapshot, recorded whole and built from the last report
             // in the same step: a status read never sees one half-made
-            // terminal result.
-            jobs.Complete(job, record.CancelledSnapshot);
+            // terminal result. The cancellation stands; a failure closing the
+            // output it left unfinished is reported beside it.
+            var closeFailure = (ex as CancelledWithUnfinishedOutputException)?.CloseFailureMessage;
+            jobs.Complete(job, last => record.CancelledSnapshot(last, closeFailure));
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Job {JobId} failed", job.JobId);
+            // The terminal result first: the job ends, and its ledger entry
+            // with it, whatever logging then does.
             jobs.Complete(job, record.FailedSnapshot(ex.Message));
+            logger.LogError(ex, "Job {JobId} failed", job.JobId);
         }
     });
 

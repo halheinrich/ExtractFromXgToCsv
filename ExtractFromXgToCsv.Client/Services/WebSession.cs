@@ -37,10 +37,11 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <b>Ownership decides publication.</b> Every asynchronous operation carries
 /// what it started with — a ticket — and its completion publishes only while
 /// its owner says so: a pick or a book load while no newer one has begun; a
-/// conversion while its selection, and its key's book, are still current. A
-/// result for a key that is no longer the selected output's is cached, not
-/// shown, because what is shown is read from the selected key's state. A
-/// superseded completion publishes nothing.
+/// conversion while its selection, and its key's book, are still current —
+/// and a conversion's failure by that same owner, whichever gesture asked for
+/// the conversion (<see cref="Owns"/>). A result for a key that is no longer
+/// the selected output's is cached, not shown, because what is shown is read
+/// from the selected key's state. A superseded completion publishes nothing.
 /// </para>
 /// <para>
 /// Not thread-safe: Blazor WebAssembly runs it on one thread, and its awaits
@@ -257,6 +258,7 @@ internal sealed class WebSession
     /// are current.
     /// </summary>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the conversion in hand published nothing.</exception>
+    /// <exception cref="ConversionFailedException">A conversion failed; whether its failure is shown is <see cref="Owns"/>'s.</exception>
     public async Task EnsureConversionsAsync(Func<Representation> selected, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(selected);
@@ -385,8 +387,10 @@ internal sealed class WebSession
     /// One key's conversion over the current selection's decoded files, owned
     /// by its ticket: it publishes into <paramref name="slot"/> only while that
     /// selection and that book are still current, and is abandoned — back to
-    /// not requested — if it ends any other way.
+    /// not requested — if it ends any other way. Its failure carries the same
+    /// owner (<see cref="ConversionFailedException"/>).
     /// </summary>
+    /// <exception cref="ConversionFailedException">Anything but a cancellation of <paramref name="cancellationToken"/> ended it.</exception>
     private async Task ConvertAsync<T>(
         ConversionSlot<T> slot,
         Func<DecodedSource, OpeningBook?, CancellationToken, Task<IReadOnlyList<T>>> convert,
@@ -403,10 +407,25 @@ internal sealed class WebSession
             if (ReferenceEquals(selection, Selection) && ReferenceEquals(book, Book))
                 slot.Complete(ticket, results, publish);
         }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            throw new ConversionFailedException(selection, book, ex);
+        }
         finally
         {
             slot.Abandon(ticket);
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="failure"/> is still its gesture's to show: while
+    /// the selection and the book it converted for are current — the owner its
+    /// result would have published under (SPEC-notices.md §7.3).
+    /// </summary>
+    public bool Owns(ConversionFailedException failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        return ReferenceEquals(failure.Selection, Selection) && ReferenceEquals(failure.Book, Book);
     }
 
     /// <summary>
@@ -501,6 +520,28 @@ internal sealed class WebSession
             return skips;
         }
     }
+}
+
+/// <summary>
+/// A conversion's failure — anything that ended it but a cancellation of its
+/// caller — with the owner its result would have published under: the
+/// selection and the book it converted for. <see cref="WebSession.Owns"/> says
+/// whether that owner is still current. Its message is the failure's own.
+/// </summary>
+internal sealed class ConversionFailedException : Exception
+{
+    internal ConversionFailedException(WebSelection selection, OpeningBook? book, Exception failure)
+        : base(failure.Message, failure)
+    {
+        Selection = selection;
+        Book = book;
+    }
+
+    /// <summary>The selection the conversion converted for.</summary>
+    internal WebSelection Selection { get; }
+
+    /// <summary>The book it converted under; <see langword="null"/> for none.</summary>
+    internal OpeningBook? Book { get; }
 }
 
 /// <summary>A pick's ownership of its completion: valid until a newer pick begins.</summary>

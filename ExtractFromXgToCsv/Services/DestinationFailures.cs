@@ -61,11 +61,72 @@ internal sealed class UnfinishedFileException : IOException
 
     private static string MessageFor(string fileName, Exception primary, Exception? closeFailure, Exception? removalFailure)
     {
-        var message = primary.Message;
-        if (closeFailure is not null)
-            message += $" Closing the unfinished {fileName} failed too: {closeFailure.Message}";
+        var message = DestinationFailureText.Beside(primary, fileName, closeFailure);
         if (removalFailure is not null)
             message += $" The unfinished {fileName} could not be removed: {removalFailure.Message}";
         return message;
     }
+}
+
+/// <summary>
+/// The one output file a CSV, Diagram JSON or deck run writes could not be
+/// finished: its write failed, and closing it failed too. The file is the one
+/// the user named, which the run replaces, so nothing is removed. A
+/// destination failure (the umbrella's <c>SPEC-notices.md</c> §7.1), never a
+/// skip. The write's failure is the run's error, with the close failure
+/// reported beside it, never in its place, as an XGP file's are
+/// (<see cref="UnfinishedFileException"/>).
+/// </summary>
+internal sealed class UnfinishedOutputException : IOException
+{
+    /// <summary>Writing <paramref name="fileName"/> failed with <paramref name="primary"/>, and closing it with <paramref name="closeFailure"/>.</summary>
+    public UnfinishedOutputException(string fileName, Exception primary, Exception closeFailure)
+        : base(DestinationFailureText.Beside(primary, fileName, closeFailure), primary)
+    {
+        FileName = fileName;
+        CloseFailure = closeFailure;
+    }
+
+    /// <summary>The unfinished file's name.</summary>
+    public string FileName { get; }
+
+    /// <summary>The failure closing the file after its write failed.</summary>
+    public Exception CloseFailure { get; }
+}
+
+/// <summary>
+/// A run was cancelled while it wrote its one output file, and closing the
+/// file failed. The cancellation stands, so the run is stopped, never failed
+/// (the umbrella's <c>SPEC-notices.md</c> §7.1: a cancellation's record stands,
+/// marked cancelled). The close failure is reported beside it
+/// (<see cref="CloseFailureMessage"/>), never in its place.
+/// </summary>
+internal sealed class CancelledWithUnfinishedOutputException : OperationCanceledException
+{
+    /// <summary><paramref name="cancellation"/> ended the run, and closing <paramref name="fileName"/> then failed with <paramref name="closeFailure"/>.</summary>
+    public CancelledWithUnfinishedOutputException(string fileName, OperationCanceledException cancellation, Exception closeFailure)
+        : base(cancellation.Message, closeFailure, cancellation.CancellationToken)
+    {
+        FileName = fileName;
+        CloseFailureMessage = $"Closing the unfinished {fileName} failed: {closeFailure.Message}";
+    }
+
+    /// <summary>The unfinished file's name.</summary>
+    public string FileName { get; }
+
+    /// <summary>What the stopped run reports beside its cancellation.</summary>
+    public string CloseFailureMessage { get; }
+}
+
+/// <summary>The wording a destination failure shares, stated once.</summary>
+internal static class DestinationFailureText
+{
+    /// <summary>
+    /// <paramref name="primary"/>'s message, with a failure closing the
+    /// unfinished <paramref name="fileName"/> after it reported beside it.
+    /// </summary>
+    public static string Beside(Exception primary, string fileName, Exception? closeFailure) =>
+        closeFailure is null
+            ? primary.Message
+            : $"{primary.Message} Closing the unfinished {fileName} failed too: {closeFailure.Message}";
 }
