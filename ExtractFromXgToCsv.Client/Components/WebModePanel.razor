@@ -416,12 +416,21 @@
         // A format switch selects the new format's representation, and
         // requests its conversion when nobody has — so records convert when
         // Diagram JSON is first selected, and only then
-        // (halheinrich/backgammon#74). While another gesture is busy it is
-        // that gesture's to do: each ends by converting what the selected
-        // output needs, reading the format afresh.
-        if (!IsBusy && _session.Needs(SelectedRepresentation))
-            await RunBusyAsync(ConvertingMessage, EnsureConversionsAsync);
+        // (halheinrich/backgammon#74).
+        await ConvertWhatTheSelectedOutputNeedsAsync();
     }
+
+    /// <summary>
+    /// Converts what the selected output needs and nobody has requested. While
+    /// a gesture is busy this does nothing: it is that gesture's to do, and
+    /// every gesture ends by converting what the selected output needs, reading
+    /// the format afresh — a pick and a book load inside their work, a
+    /// download once its attempt has ended.
+    /// </summary>
+    private Task ConvertWhatTheSelectedOutputNeedsAsync() =>
+        !IsBusy && _session.Needs(SelectedRepresentation)
+            ? RunBusyAsync(ConvertingMessage, EnsureConversionsAsync)
+            : Task.CompletedTask;
 
     private async Task HandleFileSelectionAsync(InputFileChangeEventArgs e)
     {
@@ -588,6 +597,14 @@
     internal Task RunBusyForTest(string message, Func<Task> body) =>
         RunBusyAsync(message, body);
 
+    /// <summary>
+    /// Test seam for a click that reaches the download gesture past its gate —
+    /// a stale click, made against a render the state has since moved past —
+    /// which a disabled button's click cannot express. Sibling of
+    /// <see cref="RunBusyForTest"/>; not a production entry point.
+    /// </summary>
+    internal Task DownloadForTest() => DownloadAsync();
+
     private async Task OnCsvFileNameChanged(ChangeEventArgs e)
     {
         _csvFileName = e.Value?.ToString() ?? string.Empty;
@@ -597,8 +614,10 @@
     // ── The selected output's representation ────────────────────────────────
 
     // Rows for CSV and XGP, records for Diagram JSON (SPEC-notices.md §7.1).
-    private Representation SelectedRepresentation =>
-        OutputFormat == OutputFormat.DiagramJson ? Representation.Records : Representation.Rows;
+    private static Representation RepresentationOf(OutputFormat format) =>
+        format == OutputFormat.DiagramJson ? Representation.Records : Representation.Rows;
+
+    private Representation SelectedRepresentation => RepresentationOf(OutputFormat);
 
     // The selected key's converted count, or null while it is not converted
     // yet — "not converted yet" is never zero.
@@ -647,7 +666,7 @@
         _                        => "Download CSV",
     };
 
-    private string BuildingMessage => OutputFormat switch
+    private static string BuildingMessage(OutputFormat format) => format switch
     {
         OutputFormat.DiagramJson => "Building JSON…",
         OutputFormat.Xgp         => "Building ZIP…",
@@ -656,40 +675,74 @@
 
     // ── The download ────────────────────────────────────────────────────────
 
-    // Not format-gated: CSV is the fast one today, but the builders share this
-    // one path and the yield costs a single frame, so gating it would buy a
-    // special case and nothing else.
-    private Task DownloadAsync() => RunBusyAsync(BuildingMessage, DownloadCoreAsync);
+    /// <summary>
+    /// What one download attempt captured at its start (SPEC-notices.md §7.3):
+    /// its ticket — its ownership of its record, and the projection it builds
+    /// from — and the format, filter, options and file name it depends on. A
+    /// change to any of them while the attempt runs neither discards nor
+    /// reinterprets it.
+    /// </summary>
+    private sealed record DownloadAttempt(
+        DownloadTicket Ticket,
+        OutputFormat Format,
+        FilterConfig Filter,
+        XgpExportOptions Options,
+        bool Anonymize,
+        string FileName);
 
     /// <summary>
-    /// One download attempt (SPEC-notices.md §7.3): it captures at its start
-    /// everything it depends on, builds its file from what is retained,
-    /// prepares each XGP decision within its own boundary, and commits once —
-    /// the finalized file's hand-off to the browser. Its record becomes "the
-    /// last download" unless a newer attempt or selection has taken over; what
-    /// a successful XGP hand-off committed reaches the host's numbering
-    /// whatever is shown.
+    /// The download gesture. Its attempt begins at the click, before the busy
+    /// wrapper's yield hands the thread back, so a format switch, a filter
+    /// change or an options edit in that window belongs to a later attempt,
+    /// never this one; and it begins only from a converted representation. The
+    /// gesture then ends as every gesture does, by converting what the
+    /// selected output now needs: a format switch while it was busy was left
+    /// to it.
     /// </summary>
-    private async Task DownloadCoreAsync()
+    /// <remarks>
+    /// The busy notice is not format-gated: CSV is the fast one today, but the
+    /// builders share this one path and the yield costs a single frame, so
+    /// gating it would buy a special case and nothing else.
+    /// </remarks>
+    private async Task DownloadAsync()
     {
-        // The gate guarantees a filter in effect and a converted selection; a
-        // stale click past it has nothing to build.
-        if (FilterInEffect is not { } filter || _session.BeginDownload() is not { } attempt) return;
+        if (BeginAttempt() is { } attempt)
+            await RunBusyAsync(BuildingMessage(attempt.Format), () => DownloadCoreAsync(attempt));
+        await ConvertWhatTheSelectedOutputNeedsAsync();
+    }
 
-        _runError = null;
-
-        // Captured at the start: a change to the filter, format, book or
-        // export options while the attempt runs neither discards nor
-        // reinterprets it.
+    /// <summary>
+    /// Begins an attempt for the selected output, capturing what it depends
+    /// on; <see langword="null"/>, beginning nothing, for a stale click past
+    /// the gate — no filter in effect, or the selected representation not
+    /// converted.
+    /// </summary>
+    private DownloadAttempt? BeginAttempt()
+    {
+        if (FilterInEffect is not { } filter)
+            return null;
         var format = OutputFormat;
-        var options = XgpOptions;
-        var anonymize = XgpAnonymize;
+        if (_session.BeginDownload(RepresentationOf(format)) is not { } ticket)
+            return null;
         var fileName = string.IsNullOrWhiteSpace(_csvFileName)
             ? format switch { OutputFormat.DiagramJson => "decisions.json", OutputFormat.Xgp => "decisions.zip", _ => "decisions.csv" }
             : _csvFileName;
-        var rows = Projections.FilteredRows;
-        var records = Projections.FilteredDiagramRows;
+        return new DownloadAttempt(ticket, format, filter, XgpOptions, XgpAnonymize, fileName);
+    }
 
+    /// <summary>
+    /// One download attempt (SPEC-notices.md §7.3): it builds its file from
+    /// what it captured, prepares each XGP decision within its own boundary,
+    /// and commits once — the finalized file's hand-off to the browser. Its
+    /// record becomes "the last download" unless a newer attempt or selection
+    /// has taken over; what a successful XGP hand-off committed reaches the
+    /// host's numbering whatever is shown.
+    /// </summary>
+    private async Task DownloadCoreAsync(DownloadAttempt attempt)
+    {
+        _runError = null;
+
+        var (ticket, format, fileName) = (attempt.Ticket, attempt.Format, attempt.FileName);
         var exportSkips = SkipRecord.Empty;
         try
         {
@@ -701,7 +754,7 @@
             if (format == OutputFormat.Xgp)
             {
                 var archive = Processor.BuildXgpArchive(
-                    _session.XgpDecisionsFor(rows), options, filter, anonymize,
+                    ticket.Decisions, attempt.Options, attempt.Filter, attempt.Anonymize,
                     skipped => exportSkips = exportSkips.With(skipped));
                 bytes = archive.Bytes;
                 mimeType = "application/zip";
@@ -710,21 +763,21 @@
             }
             else if (format == OutputFormat.DiagramJson)
             {
-                bytes = System.Text.Encoding.UTF8.GetBytes(Processor.BuildDiagramJson(records));
+                bytes = System.Text.Encoding.UTF8.GetBytes(Processor.BuildDiagramJson(ticket.Records));
                 mimeType = "application/json";
-                committed = records.Count;
+                committed = ticket.Records.Count;
             }
             else
             {
-                bytes = System.Text.Encoding.UTF8.GetBytes(Processor.BuildCsv(rows));
+                bytes = System.Text.Encoding.UTF8.GetBytes(Processor.BuildCsv(ticket.Rows));
                 mimeType = "text/csv";
-                committed = rows.Count;
+                committed = ticket.Rows.Count;
             }
 
             // The commit: the hand-off to the browser.
             await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
 
-            _session.CompleteDownload(attempt, new WebDownload(
+            _session.CompleteDownload(ticket, new WebDownload(
                 format, fileName, DownloadStatus.Completed, committed, numbering, exportSkips));
 
             // The archive was delivered, so the numbers it used are recorded,
@@ -734,14 +787,14 @@
         }
         catch (OperationCanceledException)
         {
-            _session.CompleteDownload(attempt, new WebDownload(
+            _session.CompleteDownload(ticket, new WebDownload(
                 format, fileName, DownloadStatus.Cancelled, 0, null, exportSkips));
         }
         catch (Exception ex)
         {
             // Nothing was handed over, so nothing counts as exported; the
             // attempt keeps the skips it found.
-            _session.CompleteDownload(attempt, new WebDownload(
+            _session.CompleteDownload(ticket, new WebDownload(
                 format, fileName, DownloadStatus.Failed, 0, null, exportSkips));
             _runError = $"Error: {ex.Message}";
         }

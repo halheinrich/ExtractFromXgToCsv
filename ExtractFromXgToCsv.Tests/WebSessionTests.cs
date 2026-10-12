@@ -251,13 +251,13 @@ public class WebSessionTests
     public async Task TheLastDownload_IsReplacedFromTheNextAttemptsStart_AndANewerAttemptOrPickRefusesALateRecord()
     {
         var session = await PickedAsync(NewSession(), Fixture(Xg));
-        var first = session.BeginDownload()!;
+        var first = session.BeginDownload(Representation.Rows)!;
         Assert.True(session.CompleteDownload(first, Completed()));
         Assert.NotNull(session.LastDownload);
 
-        var second = session.BeginDownload()!;
+        var second = session.BeginDownload(Representation.Rows)!;
         Assert.Null(session.LastDownload);
-        var third = session.BeginDownload()!;
+        var third = session.BeginDownload(Representation.Rows)!;
         Assert.False(session.CompleteDownload(second, Completed()));
         Assert.Null(session.LastDownload);
 
@@ -266,16 +266,45 @@ public class WebSessionTests
         Assert.Null(session.LastDownload);
     }
 
+    /// <summary>
+    /// An attempt begins only from a converted representation, and builds from
+    /// what it captured when it began. A refused begin is no attempt: it leaves
+    /// the last download standing. A refilter after the begin reaches a later
+    /// attempt, never this one.
+    /// </summary>
+    [Fact]
+    public async Task ADownload_BeginsOnlyFromAConvertedRepresentation_AndBuildsFromWhatItCaptured()
+    {
+        var session = await PickedAsync(NewSession(), Fixture(Xg));
+        session.Refilter(new FilterConfig());
+        Assert.True(session.CompleteDownload(session.BeginDownload(Representation.Rows)!, Completed()));
+        var last = session.LastDownload;
+
+        Assert.Equal(ConversionState.NotRequested, session.StateOf(Representation.Records));
+        Assert.Null(session.BeginDownload(Representation.Records));
+        Assert.Same(last, session.LastDownload);
+
+        var ticket = session.BeginDownload(Representation.Rows)!;
+        var captured = session.Projections.FilteredRows;
+        Assert.NotEmpty(captured);
+        session.Refilter(new FilterConfig { Players = ["__nobody__"] });
+
+        Assert.Empty(session.Projections.FilteredRows);
+        Assert.Equal(captured, ticket.Rows);
+        Assert.Equal(captured, ticket.Decisions.Select(d => d.Row));
+        Assert.Empty(ticket.Records);
+    }
+
     [Fact]
     public async Task ANewPick_ClearsTheLastDownload()
     {
         var session = await PickedAsync(NewSession(), Fixture(Xg));
-        Assert.True(session.CompleteDownload(session.BeginDownload()!, Completed()));
+        Assert.True(session.CompleteDownload(session.BeginDownload(Representation.Rows)!, Completed()));
 
         session.BeginPick();
 
         Assert.Null(session.LastDownload);
-        Assert.Null(session.BeginDownload());
+        Assert.Null(session.BeginDownload(Representation.Rows));
     }
 
     [Fact]

@@ -158,6 +158,70 @@ public class WebModePanelDownloadTests : BunitContext
         Assert.Equal(new XgpExportCommit(Options, selected), cut.Instance.Session.LastDownload!.Numbering);
     }
 
+    /// <summary>
+    /// A switch to Diagram JSON while a CSV attempt's hand-off is pending: the
+    /// attempt builds and records the CSV it captured, and the gesture ends by
+    /// converting what the selected output now needs — so Diagram JSON is
+    /// converted and ready, never left unconverted with Download dark.
+    /// </summary>
+    [Fact]
+    public async Task AFormatSwitchDuringTheHandOff_TheAttemptKeepsItsFormat_AndTheGestureEndsConverted()
+    {
+        var handOff = JSInterop.SetupVoid("downloadFile", _ => true);
+        var cut = RenderPicked(OutputFormat.Csv);
+        var rows = cut.Instance.RowCache.FilteredRows.Count;
+
+        var click = DownloadButton(cut).ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
+        cut.Render(p => p.Add(c => c.OutputFormat, OutputFormat.DiagramJson));
+        Assert.Equal(ConversionState.NotRequested, cut.Instance.Session.StateOf(Representation.Records));
+
+        handOff.SetVoidResult();
+        await click.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal("text/csv", JSInterop.VerifyInvoke("downloadFile").Arguments[1]);
+        var record = cut.Instance.Session.LastDownload!;
+        Assert.Equal(OutputFormat.Csv, record.Format);
+        Assert.Equal(rows, record.Committed);
+
+        Assert.Equal(ConversionState.Completed, cut.Instance.Session.StateOf(Representation.Records));
+        Assert.Empty(cut.FindAll(".busy-notice"));
+        Assert.False(DownloadButton(cut).HasAttribute("disabled"));
+        Assert.Contains("decisions match current filters", cut.Find("#matchCount").TextContent);
+    }
+
+    /// <summary>
+    /// A click that reaches the download while the selected format is not
+    /// converted — Diagram JSON's records still converting — begins no
+    /// attempt: nothing is built or handed over, and no record is made. Before
+    /// the correction it built "[]" from the unconverted records and recorded
+    /// it as a completed download.
+    /// </summary>
+    [Fact]
+    public async Task AClickWhileTheSelectedFormatIsNotConverted_BuildsNothing()
+    {
+        var cut = Render<WebModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.DiagramJson)
+            .Add(c => c.FilterInEffect, new FilterConfig())
+            .Add(c => c.XgpOptions, Options)
+            .Add(c => c.XgpAnonymize, false)
+            .Add(c => c.OnXgpExported, (XgpExportCommit c) => _committed.Add(c)));
+        _converter.HoldRecordsCall(1);
+        var pick = Task.Run(() => Pick(cut));
+        await _converter.RecordsHeld.WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(ConversionState.Running, cut.Instance.Session.StateOf(Representation.Records));
+
+        await cut.InvokeAsync(() => cut.Instance.DownloadForTest());
+
+        Assert.Empty(JSInterop.Invocations["downloadFile"]);
+        Assert.Null(cut.Instance.Session.LastDownload);
+
+        _converter.ReleaseRecords();
+        await pick.WaitAsync(NoticeTesting.OperationBound);
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".busy-notice")), NoticeTesting.OperationBound);
+        Assert.Equal(ConversionState.Completed, cut.Instance.Session.StateOf(Representation.Records));
+    }
+
     [Fact]
     public async Task TheNextAttempt_ReplacesTheLastDownload()
     {

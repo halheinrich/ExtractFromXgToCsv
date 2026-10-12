@@ -276,15 +276,25 @@ internal sealed class WebSession
     // ── Downloads ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Begins a download attempt over the current selection, which supersedes
-    /// any earlier one: the last download's record is replaced from this
-    /// attempt's start. Null when there is no selection to download from.
+    /// Begins a download attempt from <paramref name="representation"/>, which
+    /// supersedes any earlier attempt: the last download's record is replaced
+    /// from this attempt's start. The ticket captures what the attempt builds
+    /// from — that representation's filtered projection as it stands now — so
+    /// nothing that changes while the attempt runs reaches its file.
     /// </summary>
-    public DownloadTicket? BeginDownload()
+    /// <returns>
+    /// The attempt's ticket; <see langword="null"/>, beginning nothing, when
+    /// there is no selection or <paramref name="representation"/>'s conversion
+    /// has not completed — an attempt never builds from a representation that
+    /// is not converted.
+    /// </returns>
+    public DownloadTicket? BeginDownload(Representation representation)
     {
-        if (Selection is not { } selection)
+        if (Selection is not { } selection || SlotStateOf(representation) != ConversionState.Completed)
             return null;
-        var ticket = new DownloadTicket(selection);
+        var ticket = representation == Representation.Records
+            ? new DownloadTicket(selection, representation, [], Projections.FilteredDiagramRows)
+            : new DownloadTicket(selection, representation, XgpDecisionsFor(Projections.FilteredRows), []);
         _downloadOwner = ticket;
         LastDownload = null;
         return ticket;
@@ -480,12 +490,41 @@ internal sealed class PickTicket;
 internal sealed class BookTicket;
 
 /// <summary>
-/// A download attempt's ownership of its record: valid until a newer attempt
+/// A download attempt's ownership of its record — valid until a newer attempt
 /// begins or <see cref="Selection"/>, the selection it started from, is
-/// replaced or removed.
+/// replaced or removed — and what the attempt builds from, captured when it
+/// began.
 /// </summary>
-internal sealed class DownloadTicket(WebSelection selection)
+internal sealed class DownloadTicket
 {
+    internal DownloadTicket(
+        WebSelection selection,
+        Representation representation,
+        IReadOnlyList<XgpDecision> decisions,
+        IReadOnlyList<BgDecisionData> records)
+    {
+        Selection = selection;
+        Representation = representation;
+        Decisions = decisions;
+        Rows = [.. decisions.Select(decision => decision.Row)];
+        Records = records;
+    }
+
     /// <summary>The selection the attempt started from.</summary>
-    public WebSelection Selection { get; } = selection;
+    public WebSelection Selection { get; }
+
+    /// <summary>The representation the attempt builds from: completed when it began.</summary>
+    public Representation Representation { get; }
+
+    /// <summary>
+    /// For a rows attempt, the filtered rows when it began, each with the
+    /// decoded file it came from; empty for a records attempt.
+    /// </summary>
+    public IReadOnlyList<XgpDecision> Decisions { get; }
+
+    /// <summary>The rows of <see cref="Decisions"/>, in order.</summary>
+    public IReadOnlyList<DecisionRow> Rows { get; }
+
+    /// <summary>For a records attempt, the filtered records when it began; empty for a rows attempt.</summary>
+    public IReadOnlyList<BgDecisionData> Records { get; }
 }
