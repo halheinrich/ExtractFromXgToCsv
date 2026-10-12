@@ -191,6 +191,36 @@ public class WebModePanelDownloadTests : BunitContext
     }
 
     /// <summary>
+    /// A switch to Diagram JSON in the window between the click and the
+    /// attempt's work — the busy wrapper's yield, which hands the thread back
+    /// so the busy notice can paint. The attempt began at the click, so it
+    /// builds the CSV it was clicked for. Before the correction it read the
+    /// format after the yield and built "[]" from the unconverted records.
+    /// The switch is made in the same dispatcher turn as the click, after the
+    /// gesture has yielded and before its work resumes.
+    /// </summary>
+    [Fact]
+    public async Task AFormatSwitchBeforeTheAttemptRuns_TheAttemptBuildsTheFormatItWasClickedFor()
+    {
+        var cut = RenderPicked(OutputFormat.Csv);
+        var rows = cut.Instance.RowCache.FilteredRows.Count;
+
+        Task click = Task.CompletedTask;
+        await cut.InvokeAsync(() =>
+        {
+            click = cut.Instance.DownloadForTest();
+            cut.Render(p => p.Add(c => c.OutputFormat, OutputFormat.DiagramJson));
+        });
+        await click.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal("text/csv", JSInterop.VerifyInvoke("downloadFile").Arguments[1]);
+        var record = cut.Instance.Session.LastDownload!;
+        Assert.Equal(OutputFormat.Csv, record.Format);
+        Assert.Equal(rows, record.Committed);
+        Assert.Equal(ConversionState.Completed, cut.Instance.Session.StateOf(Representation.Records));
+    }
+
+    /// <summary>
     /// A click that reaches the download while the selected format is not
     /// converted — Diagram JSON's records still converting — begins no
     /// attempt: nothing is built or handed over, and no record is made. Before
