@@ -268,8 +268,13 @@ public class LocalRecoveryTests : IAsyncLifetime
         using (var client = _server.Client())
             Assert.True((await client.GetFromJsonAsync<ProcessingProgress>("/api/process/job-1/status"))!.Complete);
 
+        // A reconciliation that finds both entries again, the first behind the
+        // mark: the replay changes nothing — not even for a moment, so the
+        // record is not written at all — and the newer choice stands.
         await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "77" });
+        var writes = _storage.Writes.Count(write => write.Key == NumberingKey);
         await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        Assert.Equal(writes, _storage.Writes.Count(write => write.Key == NumberingKey));
         Assert.Equal(77, page.Options.StartNumber);
         Assert.Equal(2 * _decisions, LastNumber(Record!.Value));
         Assert.Equal(2, MarkNumber(Record!.Value));

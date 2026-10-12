@@ -250,6 +250,9 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
     /// <summary>Whether the browser refuses every write.</summary>
     public bool RefuseWrites { get; set; }
 
+    /// <summary>Every local write the browser stored, as (key, value), in order.</summary>
+    public List<(string Key, string Value)> Writes { get; } = [];
+
     /// <summary>Whether the browser refuses every read.</summary>
     public bool RefuseReads { get; set; }
 
@@ -286,6 +289,8 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
                 if (RefuseWrites)
                     throw new JSException("The browser refused the write.");
                 area[key] = (string)args[1]!;
+                if (ReferenceEquals(area, _local))
+                    Writes.Add((key, (string)args[1]!));
                 return default;
             case "removeItem":
                 if (RefuseWrites)
