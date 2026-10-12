@@ -104,7 +104,7 @@ public class WebModePanelDownloadTests : BunitContext
         Assert.Equal(Nowhere.Id, Assert.Single(record.ExportSkips).DecisionId);
 
         var list = cut.Find(DownloadList);
-        Assert.Equal("The last download", list.QuerySelector(".skip-list-label")!.TextContent);
+        Assert.Equal("The last download (XGP)", list.QuerySelector(".skip-list-label")!.TextContent);
         Assert.Contains("Skipped 1 decision", list.TextContent);
         Assert.Contains("decision " + Nowhere.Id, list.TextContent);
         Assert.DoesNotContain(NoticeBox.AllIn(cut), b => b.Kind == NoticeKind.Error);
@@ -130,7 +130,7 @@ public class WebModePanelDownloadTests : BunitContext
         Assert.Equal(0, record.Committed);
         Assert.Null(record.Numbering);
         Assert.Single(record.ExportSkips);
-        Assert.Equal("The last download (failed)", cut.Find($"{DownloadList} .skip-list-label").TextContent);
+        Assert.Equal("The last download (XGP, failed)", cut.Find($"{DownloadList} .skip-list-label").TextContent);
         Assert.Contains("The download was blocked.",
             Assert.Single(NoticeBox.AllIn(cut), b => b.Kind == NoticeKind.Error).Content.TextContent);
     }

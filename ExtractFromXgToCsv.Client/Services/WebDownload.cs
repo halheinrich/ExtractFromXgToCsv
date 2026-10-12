@@ -84,4 +84,19 @@ internal sealed record WebDownload
 
     /// <summary>The decisions this attempt skipped because their payload preparation failed.</summary>
     public SkipRecord ExportSkips { get; }
+
+    /// <summary>
+    /// The label of the list this record is shown as: the attempt it is the
+    /// record of — its captured format, by its short name, and how it ended
+    /// unless it completed — so it never reads as a verdict on the output
+    /// selected now. "The last download (XGP)", "The last download (XGP,
+    /// failed)", "The last download (CSV, stopped)" (Hal's ruling,
+    /// 2026-10-12).
+    /// </summary>
+    public string Label => Status switch
+    {
+        DownloadStatus.Failed => $"The last download ({Format.ShortName()}, failed)",
+        DownloadStatus.Cancelled => $"The last download ({Format.ShortName()}, stopped)",
+        _ => $"The last download ({Format.ShortName()})",
+    };
 }

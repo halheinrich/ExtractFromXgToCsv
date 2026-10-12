@@ -200,14 +200,15 @@
 
     @* "The last download" (SPEC-notices.md §7.3, projection B, ruled F1 and F2
        in §7.4): the decisions the last attempt skipped because their payload
-       could not be prepared, labelled as that attempt and with how it ended,
-       so it never reads as a verdict on a different output. The next
+       could not be prepared, labelled as that attempt — its format and how it
+       ended (WebDownload.Label) — so it never reads as a verdict on a
+       different output. The next
        attempt's start replaces it, and a new pick clears it. *@
     @if (_session.LastDownload is { } lastDownload)
     {
         <div style="max-width:800px">
             <SkipListNotice class="mb-3 download-skips" Record="lastDownload.ExportSkips"
-                            Label="@LastDownloadLabel(lastDownload)" />
+                            Label="@lastDownload.Label" />
         </div>
     }
 
@@ -683,13 +684,6 @@
     // "nothing matches" (SPEC-notices.md §7.3).
     private bool XgpNothingMatches =>
         OutputFormat == OutputFormat.Xgp && SelectedConverted > 0 && SelectedMatched == 0;
-
-    private static string LastDownloadLabel(WebDownload download) => download.Status switch
-    {
-        DownloadStatus.Failed => "The last download (failed)",
-        DownloadStatus.Cancelled => "The last download (stopped)",
-        _ => "The last download",
-    };
 
     private string DownloadButtonLabel => OutputFormat switch
     {
