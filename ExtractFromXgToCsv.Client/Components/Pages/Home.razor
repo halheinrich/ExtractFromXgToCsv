@@ -577,8 +577,8 @@
     /// Everything persisted comes from <paramref name="commit"/>, never from
     /// the controls: the user may have changed the pattern or the numbers while
     /// the export ran, and the files on disk were named by what it captured.
-    /// For the same reason the controls advance only while they still show
-    /// exactly those options; a newer choice in them stands.
+    /// The controls follow it control by control (<see cref="FollowsExport"/>):
+    /// a newer choice in one stands.
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
@@ -587,7 +587,7 @@
         var exported = commit.Options;
         _xgpPersistedLastNumber = commit.NextNumber - 1;
         _xgpPersistedPattern = exported.NamePattern;
-        if (_xgpOptions == exported)
+        if (FollowsExport(exported))
         {
             _xgpNextNumber = commit.NextNumber;
             RebuildXgpOptions();
@@ -601,4 +601,15 @@
         await Settings.RemoveAsync("xg_xgpPrefix");
         StateHasChanged();
     }
+
+    /// <summary>
+    /// Whether the next-number control follows an export that started from
+    /// <paramref name="exported"/>: unless the user has changed the next number
+    /// or the pattern since the export started, both of which the export
+    /// captured. A newer choice in either stands. The number length decides
+    /// nothing here: a length change says nothing about which number comes
+    /// next, so it never leaves the control on a number the export used.
+    /// </summary>
+    private bool FollowsExport(XgpExportOptions exported) =>
+        _xgpNextNumber == exported.StartNumber && _xgpPattern == exported.NamePattern;
 }

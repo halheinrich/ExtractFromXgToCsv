@@ -152,6 +152,66 @@ public class HomeXgpAccountingTests : BunitContext
     }
 
     /// <summary>
+    /// The control-by-control rule's other half: the user changes only the
+    /// number length while the run runs. That says nothing about which number
+    /// comes next, so the next number still follows the run. Before the
+    /// correction Home advanced it only while all three controls equalled the
+    /// run's options, so a length change left "next number" on 1 — a number
+    /// the run had used — and setting the length back made the next export
+    /// reuse pos001.
+    /// </summary>
+    [Fact]
+    public async Task ALengthChangeWhileTheRunRan_StillAdvancesTheNextNumber()
+    {
+        var processing = ServerAnswering(new ProcessingProgress
+        {
+            Complete = true,
+            TotalRows = 2,
+            XgpCommit = new XgpExportCommit(DefaultOptions, 2),
+        });
+        var cut = this.RenderHome();
+        processing.HoldStatus();
+        var run = cut.RunButton().ClickAsync(new MouseEventArgs());
+        await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        await cut.Find("#xgpSuffixLength").InputAsync(new ChangeEventArgs { Value = "4" });
+
+        ExpectTheNumberingPersisted("pos{n}", lastNumber: 2, suffixLength: 3);
+        processing.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 4 }, PanelOptions(cut));
+
+        // Back to the run's length: the next export continues after the run.
+        await cut.Find("#xgpSuffixLength").InputAsync(new ChangeEventArgs { Value = "3" });
+        Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 3 }, PanelOptions(cut));
+        Storage.Verify();
+    }
+
+    /// <summary>
+    /// The zero-count guard: an export that committed nothing changes no
+    /// number and persists nothing — the storage plan expects no write, so
+    /// any would fail it.
+    /// </summary>
+    [Fact]
+    public async Task ARunThatCommittedNothing_ChangesNoNumber_AndPersistsNothing()
+    {
+        ServerAnswering(new ProcessingProgress
+        {
+            Complete = true,
+            ErrorMessage = "pos001.xgp could not be written.",
+            XgpCommit = new XgpExportCommit(DefaultOptions, 0),
+        });
+        var cut = this.RenderHome();
+
+        await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Contains("✗ Error", cut.Markup);
+        Assert.Equal(DefaultOptions, PanelOptions(cut));
+        Storage.Verify();
+    }
+
+    /// <summary>
     /// Web mode through the same handler (<c>SPEC-notices.md</c> §7.3): a
     /// download's hand-off is pending while the user types a new next number.
     /// The archive committed what the attempt captured, so Home persists the
