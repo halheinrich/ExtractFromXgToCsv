@@ -170,11 +170,11 @@ internal static class HomeStoragePlan
 
     /// <summary>
     /// Home's first-render restore: each of its keys answered from
-    /// <paramref name="stored"/>, or absent. While no numbering document is
-    /// stored, the keys it replaced are read — the legacy prefix only when no
-    /// pattern is — and when they hold anything, the record they migrate to
-    /// is written as <paramref name="migratedDocument"/> and the keys that
-    /// held something are removed.
+    /// <paramref name="stored"/>, or absent. Only while no numbering document
+    /// is stored — not one that cannot be read — the keys it replaced are
+    /// read, and when they hold anything, the record they migrate to is
+    /// written as <paramref name="migratedDocument"/> and every key that held
+    /// something is removed.
     /// </summary>
     public static void ExpectHomeRestore(
         this BrowserStoragePlan plan, Dictionary<string, string>? stored = null, string? migratedDocument = null)
@@ -190,11 +190,7 @@ internal static class HomeStoragePlan
         plan.ExpectRead(BrowserStorageArea.Local, NumberingKey, Answer(NumberingKey));
         if (!Holds(NumberingKey))
         {
-            var legacy = new List<string> { XgpPatternKey };
-            if (!Holds(XgpPatternKey))
-                legacy.Add(XgpPrefixKey);
-            legacy.Add(XgpLastNumberKey);
-            legacy.Add(XgpSuffixLengthKey);
+            var legacy = new List<string> { XgpPatternKey, XgpPrefixKey, XgpLastNumberKey, XgpSuffixLengthKey };
             foreach (var key in legacy)
                 plan.ExpectRead(BrowserStorageArea.Local, key, Answer(key));
 
@@ -213,14 +209,13 @@ internal static class HomeStoragePlan
         plan.ExpectRead(BrowserStorageArea.Local, XgpAnonymizeKey, Answer(XgpAnonymizeKey));
     }
 
-    /// <summary>Home's first-render restore in a browser that refuses every read.</summary>
+    /// <summary>
+    /// Home's first-render restore in a browser that refuses every read. A
+    /// refused numbering read is not nothing stored, so nothing is migrated.
+    /// </summary>
     public static void ExpectHomeRestoreRefused(this BrowserStoragePlan plan)
     {
-        foreach (var key in new[]
-                 {
-                     OutputFormatKey, FolderPathKey, NumberingKey, XgpPatternKey, XgpPrefixKey,
-                     XgpLastNumberKey, XgpSuffixLengthKey, XgpAnonymizeKey,
-                 })
+        foreach (var key in new[] { OutputFormatKey, FolderPathKey, NumberingKey, XgpAnonymizeKey })
             plan.ExpectRead(BrowserStorageArea.Local, key, BrowserStorageReadAnswer.Refused);
     }
 

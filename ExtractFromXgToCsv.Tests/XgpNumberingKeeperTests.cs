@@ -147,4 +147,85 @@ public class XgpNumberingKeeperTests : BunitContext
         Assert.Equal(record, _keeper.Record);
         _storage.Verify();
     }
+
+    // ── A record that cannot be read ────────────────────────────────────────
+
+    private const string FreshDocument = "{\"version\":1,\"owed\":[]}";
+
+    /// <summary>
+    /// A malformed document, and one a newer version wrote, are unreadable:
+    /// the page starts from no numbering, and the document is kept — the
+    /// strict plan admits no migration read after it, and a checkpoint reads
+    /// it and writes nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("{\"version\":1,\"owed\":")]
+    [InlineData("{\"version\":2,\"numbering\":{\"pattern\":\"pos{n}\",\"lastNumber\":40,\"suffixLength\":3},\"owed\":[]}")]
+    public async Task AnUnreadableRecord_IsKept_NeitherMigrationNorACheckpointReplacesIt(string unreadable)
+    {
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, Stored(unreadable));
+        await _keeper.RestoreAsync();
+
+        Assert.True(_keeper.IsUnreadable);
+        Assert.Null(_keeper.Record.Numbering);
+
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, Stored(unreadable));
+        Assert.False(await _keeper.CheckpointAsync(r => r.WithCommit(new XgpExportCommit(Pos, 4)), Current));
+        Assert.True(_keeper.IsUnreadable);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// The user's resolution authorizes replacing the unreadable document with
+    /// a fresh record, and nothing more: the fresh record is written over it,
+    /// and the page no longer reads it as unreadable.
+    /// </summary>
+    [Fact]
+    public async Task TheResolution_ReplacesTheDocumentWithAFreshRecord_AndNothingMore()
+    {
+        const string unreadable = "not json";
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, Stored(unreadable));
+        await _keeper.RestoreAsync();
+
+        _storage.ExpectNumberingCheckpoint(Stored(unreadable), FreshDocument);
+        await _keeper.ResolveUnreadableAsync();
+
+        Assert.False(_keeper.IsUnreadable);
+        Assert.Equal(XgpNumberingRecord.Empty, _keeper.Record);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// The resolution authorizes replacing the document the user resolved,
+    /// not whatever is stored later: another unreadable document is unreadable
+    /// again, and kept.
+    /// </summary>
+    [Fact]
+    public async Task AnotherUnreadableDocument_AfterAResolution_IsUnreadableAgain()
+    {
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, Stored("not json"));
+        await _keeper.RestoreAsync();
+        _storage.ExpectNumberingCheckpoint(Stored("not json"), FreshDocument, BrowserStorageWriteAnswer.Refused);
+        await _keeper.ResolveUnreadableAsync();
+        Assert.False(_keeper.IsUnreadable);
+
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, Stored("{\"version\":3}"));
+        Assert.False(await _keeper.CheckpointAsync(r => r, Current));
+
+        Assert.True(_keeper.IsUnreadable);
+        _storage.Verify();
+    }
+
+    /// <summary>A refused read is not an unreadable record: it gates nothing, and migrates nothing.</summary>
+    [Fact]
+    public async Task ARefusedRead_IsNotUnreadable()
+    {
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, BrowserStorageReadAnswer.Refused);
+
+        await _keeper.RestoreAsync();
+
+        Assert.False(_keeper.IsUnreadable);
+        Assert.Equal(XgpNumberingRecord.Empty, _keeper.Record);
+        _storage.Verify();
+    }
 }

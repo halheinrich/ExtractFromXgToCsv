@@ -190,7 +190,9 @@
             else if (XgpDownloadBlocked)
             {
                 <small class="text-muted ms-2" id="xgpBlockedHint">
-                    @(XgpNothingMatches
+                    @(XgpNumberingUnreadable
+                        ? XgpNumberingHints.ResolveUnreadable
+                        : XgpNothingMatches
                         ? "No decisions match the filters"
                         : "Fix the XGP export options first")
                 </small>
@@ -286,6 +288,15 @@
 
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
+
+    /// <summary>
+    /// Whether the host's numbering record cannot be read and the user has not
+    /// resolved it (the umbrella's <c>SPEC-notices.md</c> §7.5): it may hold
+    /// exports this browser has not accounted for, so XGP download waits. The
+    /// host shows the gate reason and carries its resolution. EditorRequired:
+    /// a silently splatted binding would let an XGP download run over it.
+    /// </summary>
+    [Parameter, EditorRequired] public bool XgpNumberingUnreadable { get; set; }
 
     /// <summary>
     /// Raised with an XGP download's commit — the entries of the archive
@@ -681,7 +692,8 @@
         && !XgpDownloadBlocked;
 
     private bool XgpDownloadBlocked =>
-        OutputFormat == OutputFormat.Xgp && (XgpNothingMatches || !XgpOptions.TryValidate(out _));
+        OutputFormat == OutputFormat.Xgp
+        && (XgpNumberingUnreadable || XgpNothingMatches || !XgpOptions.TryValidate(out _));
 
     // The XGP output's rows are converted and the filter admits none of them.
     // Read off the selected key's state, so rows not converted yet are never

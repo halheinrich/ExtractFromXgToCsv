@@ -88,6 +88,31 @@ public class LocalRecoveryTests : IAsyncLifetime
     private static string Hint(LocalPage page) =>
         page.Home.FindAll("#startHint") is [var hint] ? hint.TextContent.Trim() : string.Empty;
 
+    private int Starts => _server.Wire.Requests.Count(r => r == "POST /api/process/start");
+
+    /// <summary>
+    /// One XGP job run straight against the server, as a page elsewhere would,
+    /// touching none of this browser's storage — into its own folder, so its
+    /// files never meet this test's pages' — and awaited to its end.
+    /// </summary>
+    private async Task ExportElsewhereAsync(string jobId, LedgerMark? mark)
+    {
+        using var client = _server.Client();
+        var run = new ProcessRequest
+        {
+            FolderPath = _server.InputFolder,
+            OutputPath = Path.Combine(_server.OutputFolder, jobId),
+            OutputFormat = OutputFormat.Xgp,
+        };
+        (await client.PostAsJsonAsync("/api/process/start", new StartRequest(jobId, _instance, mark, run))).EnsureSuccessStatusCode();
+        var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
+        while ((await client.GetFromJsonAsync<ProcessingProgress>($"/api/process/{jobId}/status")) is not { Complete: true })
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"{jobId} never ended.");
+            await Task.Delay(20);
+        }
+    }
+
     // ── A lost start response ───────────────────────────────────────────────
 
     [Fact]
@@ -388,6 +413,98 @@ public class LocalRecoveryTests : IAsyncLifetime
         failing.Stop();
         page.WaitFor(() => page.StartState.XgpBlock is null);
         Assert.Empty(OwedIds(Record!.Value));
+    }
+
+    // ── A record that cannot be read ────────────────────────────────────────
+
+    /// <summary>
+    /// A malformed record, and one a newer version wrote, each gate XGP: the
+    /// gate reason shows, suggesting no number; the document is kept — not
+    /// migrated over, though a key it replaced still holds a number, and not
+    /// written by a reconciliation that has an ended entry to apply — and only
+    /// the action replaces it, after which the entry is applied.
+    /// </summary>
+    [Theory]
+    [InlineData("{\"version\":1,\"owed\":")]
+    [InlineData("{\"version\":2,\"numbering\":{\"pattern\":\"pos{n}\",\"lastNumber\":40,\"suffixLength\":3},\"owed\":[]}")]
+    public async Task AnUnreadableRecord_GatesXgp_IsKept_AndOnlyTheActionReplacesIt(string unreadable)
+    {
+        await ExportElsewhereAsync("elsewhere-1", mark: null);
+        _storage[NumberingKey] = unreadable;
+        _storage[HomeStoragePlan.XgpLastNumberKey] = "40";
+        var page = Open();
+
+        Assert.Equal(XgpStartBlock.UnreadableRecord, page.StartState.XgpBlock);
+        page.WaitForScreen(() =>
+        {
+            Assert.Equal("Resolve the unreadable XGP numbering above first.", Hint(page));
+            Assert.True(page.RunButton.HasAttribute("disabled"));
+        });
+        var box = NoticeBox.ByMarkerClass(page.Home, "unreadable-numbering-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class", "style");
+        var text = System.Text.RegularExpressions.Regex.Replace(box.Content.TextContent, @"\s+", " ");
+        Assert.Contains("saved XGP numbering couldn't be read", text);
+        Assert.DoesNotMatch(@"\d", text);
+
+        await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        Assert.Equal(unreadable, _storage[NumberingKey]);
+        Assert.Equal("40", _storage[HomeStoragePlan.XgpLastNumberKey]);
+        Assert.Equal(1, page.Options.StartNumber);
+
+        await page.Home.FindAll(".unreadable-numbering-notice button").Single().ClickAsync(new MouseEventArgs());
+        page.WaitFor(() => page.StartState.XgpBlock is null);
+
+        Assert.Equal(1, MarkNumber(Record!.Value));
+        Assert.Equal(_decisions, LastNumber(Record!.Value));
+        page.WaitForScreen(() => Assert.Empty(page.Home.FindAll(".unreadable-numbering-notice")));
+    }
+
+    /// <summary>
+    /// Resolving waives nothing: with an ended entry the page has not applied,
+    /// no XGP start can be sent while the reconciliation's answer is held, and
+    /// once it arrives the entry is applied — the controls following it —
+    /// before admission is enabled.
+    /// </summary>
+    [Fact]
+    public async Task TheResolution_WithAnEntryOutstanding_AdmitsNoStart_UntilTheEntryIsApplied()
+    {
+        await ExportElsewhereAsync("elsewhere-1", mark: null);
+        _storage[NumberingKey] = "not json";
+        var page = Open();
+        var starts = Starts;
+        var held = _server.Wire.Hold(ProtocolWire.Ledger);
+
+        var resolving = page.Home.FindAll(".unreadable-numbering-notice button").Single().ClickAsync(new MouseEventArgs());
+        await held.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(XgpStartBlock.Checking, page.StartState.XgpBlock);
+        Assert.Equal("{\"version\":1,\"owed\":[]}", _storage[NumberingKey]);
+        page.WaitForScreen(() => Assert.True(page.RunButton.HasAttribute("disabled")));
+        // A click that reaches the run past the dark button sends nothing.
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(starts, Starts);
+
+        held.Release();
+        await resolving.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => page.StartState.XgpBlock is null);
+
+        Assert.Equal(new LedgerMark(_instance, 1), page.StartState.Mark);
+        Assert.Equal(_decisions + 1, page.Options.StartNumber);
+        Assert.Equal(starts, Starts);
+    }
+
+    [Fact]
+    public async Task ARefusedRead_DoesNotGate()
+    {
+        _storage[NumberingKey] = "not json";
+        _storage.RefuseReads = true;
+        var page = Open();
+
+        await page.Home.Find("#fmtXgp").ChangeAsync(new ChangeEventArgs { Value = true });
+
+        Assert.NotEqual(XgpStartBlock.UnreadableRecord, page.StartState.XgpBlock);
+        page.WaitForScreen(() => Assert.Empty(page.Home.FindAll(".unreadable-numbering-notice")));
+        Assert.Equal("not json", _storage[NumberingKey]);
     }
 
     // ── A status read that keeps failing ────────────────────────────────────

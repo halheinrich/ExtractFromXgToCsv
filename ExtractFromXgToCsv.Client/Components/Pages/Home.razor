@@ -98,6 +98,28 @@
 
 @if (_outputFormat == OutputFormat.Xgp)
 {
+    @* The saved numbering record cannot be read (SPEC-notices.md §7.5): it
+       may hold exports this browser has not accounted for, so it is never
+       read as nothing outstanding. A gate reason — XGP export is blocked, in
+       either mode, until the user resolves it — so not dismissible (§4), and
+       assertive. It suggests no number. Its action is the user's deliberate
+       resolution, which replaces the document with a fresh record and nothing
+       more: the page then reconciles before XGP is admitted. *@
+    @if (_numbering.IsUnreadable)
+    {
+        <Notice class="unreadable-numbering-notice mb-3" style="max-width:800px"
+                Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive">
+            <div>
+                This browser's saved XGP numbering couldn't be read: it may be damaged, or saved by
+                a newer version of this app. It may record exports that haven't been accounted for,
+                so XGP export waits until you decide. Continuing replaces it with a fresh record;
+                check the output folder and set the numbering yourself.
+            </div>
+            <button class="btn btn-sm btn-outline-dark mt-2" @onclick="ResolveUnreadableAsync">
+                Replace it and continue
+            </button>
+        </Notice>
+    }
     @* A Local XGP export lost with an earlier server instance
        (SPEC-notices.md §7.5): nothing still holds its accounting, and its
        files may be on disk. A gate reason — XGP export is blocked until the
@@ -228,6 +250,7 @@
                       OnSelectionChanged="OnWebSelectionChanged"
                       XgpOptions="_xgpOptions"
                       XgpAnonymize="_xgpAnonymize"
+                      XgpNumberingUnreadable="_numbering.IsUnreadable"
                       OnXgpExported="OnXgpExported" />
     }
 }
@@ -440,7 +463,9 @@
 
         // The numbering record — the one document, or, the first time, what
         // the keys it replaced held (XgpNumberingStore migrates them once,
-        // the legacy prefix included). The controls start from its numbering.
+        // the legacy prefix included). The controls start from its numbering;
+        // when what is stored cannot be read, they keep their defaults, no
+        // number is suggested, and XGP waits on the gate above.
         await _numbering.RestoreAsync();
         lifetime.ThrowIfCancellationRequested();
         if (_numbering.Record.Numbering is { } numbering)
@@ -649,6 +674,12 @@
 
     // The lost-export notice's action: the user's deliberate resolution.
     private Task ResolveLostAsync(string jobId) => _reconciler.ResolveLostAsync(jobId);
+
+    // The unreadable-record notice's action: the user's deliberate
+    // resolution. In Local mode the page then reconciles before XGP is
+    // admitted; Web mode has nothing to reconcile with.
+    private Task ResolveUnreadableAsync() =>
+        _appMode == "Local" ? _reconciler.ResolveUnreadableAsync() : _numbering.ResolveUnreadableAsync();
 
     /// <summary>
     /// Whether the next-number control follows an export that started from

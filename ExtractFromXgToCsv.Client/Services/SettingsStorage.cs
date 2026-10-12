@@ -13,9 +13,10 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <b>Access and reporting only.</b> Each caller names its own key and keeps
 /// its own parsing and default: a read answers the stored string, or
 /// <see langword="null"/> when nothing is stored <em>or</em> the browser
-/// refused, which every caller already reads as "use the default". The
+/// refused, which every caller but one reads as "use the default". The
 /// refusal is not lost by that: it has been reported before the result
-/// returns, so the condition knows of it whoever asked.
+/// returns, so the condition knows of it whoever asked. The numbering record
+/// tells the two apart (<see cref="ReadEntryAsync"/>).
 /// </para>
 /// <para>
 /// <b>Every call is made.</b> No latch: a refusal disables nothing, and the
@@ -39,13 +40,22 @@ internal sealed class SettingsStorage(BrowserStorage storage, BrowserStorageCond
     /// </summary>
     public async Task<string?> ReadAsync(string key)
     {
+        var read = await ReadEntryAsync(key);
+        return read.IsStored ? read.Value : null;
+    }
+
+    /// <summary>
+    /// Reads <paramref name="key"/> as the browser answered it — stored,
+    /// absent or refused (the refusal reported) — for the one caller that
+    /// must tell a refusal from nothing stored: Home's numbering record, whose
+    /// read has distinct outcomes (the umbrella's <c>SPEC-notices.md</c> §7.5).
+    /// </summary>
+    public async Task<BrowserStorageReadResult> ReadEntryAsync(string key)
+    {
         var read = await storage.ReadAsync(BrowserStorageArea.Local, key);
         if (read.IsRefused)
-        {
             condition.ReportRefused(read.Refusal);
-            return null;
-        }
-        return read.IsStored ? read.Value : null;
+        return read;
     }
 
     /// <summary>

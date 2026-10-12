@@ -108,8 +108,9 @@
         {
             @* What the page knows of the server (SPEC-notices.md §7.5): every
                start names the instance it reconciled with, and an XGP start
-               waits while the page checks, while an export runs, or while a
-               lost export is unresolved. *@
+               waits while the page checks, while an export runs, while a lost
+               export is unresolved, or while the saved numbering cannot be
+               read. *@
             <small class="text-muted" id="startHint">@startHint</small>
         }
     </div>
@@ -329,6 +330,7 @@
             XgpStartBlock.Checking => "Checking for earlier XGP exports…",
             XgpStartBlock.Running => "An XGP export is running; wait for it to finish.",
             XgpStartBlock.LostExport => "Resolve the lost XGP export above first.",
+            XgpStartBlock.UnreadableRecord => XgpNumberingHints.ResolveUnreadable,
             _ => null,
         };
 

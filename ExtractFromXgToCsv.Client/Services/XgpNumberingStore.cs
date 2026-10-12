@@ -16,17 +16,23 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <b>The document.</b> A JSON object: its <c>version</c>, the
 /// <c>numbering</c> (pattern, last number, length), the <c>mark</c> (instance
 /// and entry number) and the <c>owed</c> jobs, each with its identity,
-/// instance, captured options and folder. What cannot be read as one — not
-/// JSON, another version, a value out of range — reads as no record, and the
-/// next write replaces it.
+/// instance, captured options and folder.
+/// </para>
+/// <para>
+/// <b>Four read outcomes</b> (<see cref="NumberingRead"/>): nothing stored, a
+/// refused read, a record this version reads, and a document it cannot — not
+/// JSON, another version, a value out of range. An unreadable document may hold
+/// owed exports, so it is never read as nothing stored, and nothing here
+/// replaces it but a write its owner was authorized to make.
 /// </para>
 /// <para>
 /// <b>Migration.</b> Before this document, the numbering was three keys
 /// written separately — <c>xg_xgpPattern</c>, <c>xg_xgpLastNumber</c>,
 /// <c>xg_xgpSuffixLength</c> — and, before the pattern, a prefix
-/// (<c>xg_xgpPrefix</c>), migrated as the pattern <c>{prefix}{n}</c>. While
-/// no document is stored they are read, once: what they hold is written as
-/// the document, and once it is stored they are removed.
+/// (<c>xg_xgpPrefix</c>), migrated as the pattern <c>{prefix}{n}</c>. Only
+/// while no document is stored are they read, once: what they hold is
+/// written as the document, and once it is stored every one of them is
+/// removed, the prefix too where a pattern superseded it.
 /// </para>
 /// </remarks>
 internal sealed class XgpNumberingStore(SettingsStorage settings)
@@ -46,15 +52,15 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>
-    /// The stored record; <see langword="null"/> when none is stored, the
-    /// browser refused the read (reported), or what is stored cannot be read
-    /// as one.
-    /// </summary>
-    public async Task<XgpNumberingRecord?> ReadAsync()
+    /// <summary>Reads the stored document: one of its four outcomes; a refusal is reported.</summary>
+    public async Task<NumberingRead> ReadAsync()
     {
-        var text = await settings.ReadAsync(Key);
-        return text is null ? null : Parse(text);
+        var read = await settings.ReadEntryAsync(Key);
+        if (read.IsRefused)
+            return NumberingRead.Refused.Value;
+        if (read.Value is not { } text)
+            return NumberingRead.Missing.Value;
+        return Parse(text) is { } record ? new NumberingRead.Valid(record) : new NumberingRead.Unreadable(text);
     }
 
     /// <summary>Writes <paramref name="record"/> whole, in one storage write.</summary>
@@ -67,15 +73,17 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
     }
 
     /// <summary>
-    /// The record a page starts from: the stored document, or — while none is
-    /// stored — the numbering migrated from the keys it replaces, written as
-    /// the document; and once that is stored, the keys are removed.
+    /// Migrates the keys the document replaced: the numbering they hold,
+    /// written as the document, and once that is stored, every key that held
+    /// anything removed. For a record read as missing, and nothing else: never
+    /// over a refused read, nor over a document that cannot be read.
     /// </summary>
-    public async Task<XgpNumberingRecord> RestoreAsync()
+    /// <returns>
+    /// The migrated record, and whether storage stored it;
+    /// <see langword="null"/> when no key holds anything.
+    /// </returns>
+    public async Task<(XgpNumberingRecord Record, bool Stored)?> MigrateAsync()
     {
-        if (await ReadAsync() is { } stored)
-            return stored;
-
         var present = new List<string>(4);
         async Task<string?> ReadLegacyAsync(string key)
         {
@@ -86,17 +94,20 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
         }
 
         var pattern = await ReadLegacyAsync(LegacyPatternKey);
-        if (pattern is null && await ReadLegacyAsync(LegacyPrefixKey) is { } prefix)
-        {
-            // The legacy prefix named files as "{prefix}{n}" does; a prefix
-            // the pattern grammar rejects (braces) falls back to the default.
-            var migrated = prefix + "{n}";
-            pattern = XgpNameTemplate.TryParse(migrated, out _, out _) ? migrated : XgpExportOptions.DefaultNamePattern;
-        }
+        var prefix = await ReadLegacyAsync(LegacyPrefixKey);
         var lastNumber = await ReadLegacyAsync(LegacyLastNumberKey);
         var suffixLength = await ReadLegacyAsync(LegacySuffixLengthKey);
         if (present.Count == 0)
-            return XgpNumberingRecord.Empty;
+            return null;
+
+        // The legacy prefix named files as "{prefix}{n}" does, and counts only
+        // where no pattern superseded it; a prefix the pattern grammar rejects
+        // (braces) falls back to the default.
+        if (pattern is null && prefix is not null)
+        {
+            var migrated = prefix + "{n}";
+            pattern = XgpNameTemplate.TryParse(migrated, out _, out _) ? migrated : XgpExportOptions.DefaultNamePattern;
+        }
 
         var record = XgpNumberingRecord.Empty with
         {
@@ -105,12 +116,13 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
                 int.TryParse(lastNumber, out var last) && last >= 0 ? last : 0,
                 int.TryParse(suffixLength, out var length) && length is >= 1 and <= 9 ? length : 3),
         };
-        if (await WriteAsync(record))
+        var stored = await WriteAsync(record);
+        if (stored)
         {
             foreach (var key in present)
                 await settings.RemoveAsync(key);
         }
-        return record;
+        return (record, stored);
     }
 
     private static XgpNumberingRecord? Parse(string text)
@@ -126,7 +138,7 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
             return new XgpNumberingRecord { Numbering = document.Numbering, Mark = document.Mark, Owed = owed };
         }
         // Anything that is not this document — malformed JSON, or a value its
-        // types refuse — is no record. A refusal arrives wrapped when the
+        // types refuse — is unreadable. A refusal arrives wrapped when the
         // serializer builds the types by reflection rather than emitted code.
         catch (Exception ex) when (ex is JsonException or ArgumentException or NotSupportedException
                                        or System.Reflection.TargetInvocationException)
@@ -146,4 +158,41 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
     /// <summary>The stored shape: the record, under its version.</summary>
     private sealed record Document(
         int Version, XgpNumbering? Numbering, LedgerMark? Mark, ImmutableArray<OwedXgpJob> Owed);
+}
+
+/// <summary>
+/// What reading Home's numbering record found: one of the four outcomes of the
+/// umbrella's <c>SPEC-notices.md</c> §7.5.
+/// </summary>
+internal abstract record NumberingRead
+{
+    private NumberingRead()
+    {
+    }
+
+    /// <summary>Nothing is stored: the keys the document replaced are migrated.</summary>
+    public sealed record Missing : NumberingRead
+    {
+        /// <summary>The one value.</summary>
+        public static Missing Value { get; } = new();
+    }
+
+    /// <summary>The browser refused the read (reported). It establishes nothing: the page works from memory.</summary>
+    public sealed record Refused : NumberingRead
+    {
+        /// <summary>The one value.</summary>
+        public static Refused Value { get; } = new();
+    }
+
+    /// <summary>A record this version reads.</summary>
+    /// <param name="Record">The stored record.</param>
+    public sealed record Valid(XgpNumberingRecord Record) : NumberingRead;
+
+    /// <summary>
+    /// A document this version cannot read: malformed, or written by a version
+    /// it does not know. It may hold owed exports, so it is never read as
+    /// nothing outstanding, and it is kept until the user resolves it.
+    /// </summary>
+    /// <param name="Document">The stored text, as it is.</param>
+    public sealed record Unreadable(string Document) : NumberingRead;
 }

@@ -276,6 +276,23 @@ public class WebModePanelDownloadTests : BunitContext
     }
 
     /// <summary>
+    /// While the host's numbering record cannot be read, an XGP download waits
+    /// and says why; once the host has resolved it, the download is ready.
+    /// </summary>
+    [Fact]
+    public void WhileTheHostsRecordCannotBeRead_AnXgpDownloadWaits_SayingWhy()
+    {
+        var cut = RenderPicked();
+        cut.Render(p => p.Add(c => c.XgpNumberingUnreadable, true));
+
+        Assert.True(DownloadButton(cut).HasAttribute("disabled"));
+        Assert.Equal("Resolve the unreadable XGP numbering above first.", cut.Find("#xgpBlockedHint").TextContent.Trim());
+
+        cut.Render(p => p.Add(c => c.XgpNumberingUnreadable, false));
+        Assert.False(DownloadButton(cut).HasAttribute("disabled"));
+    }
+
+    /// <summary>
     /// A successful XGP hand-off whose record a newer pick has made obsolete
     /// still reaches the host's numbering: the archive was delivered, so the
     /// numbers it used are recorded, whatever is shown (SPEC-notices.md §7.1,

@@ -194,6 +194,35 @@ public class HomeXgpPatternTests : BunitContext
         _storage.Verify();
     }
 
+    /// <summary>
+    /// In Web mode too, a record that cannot be read gates XGP export
+    /// (SPEC-notices.md §7.5): it is kept — the keys it replaced are not
+    /// migrated over it — its gate reason shows, and the Web panel's download
+    /// waits, until the action replaces it with a fresh record.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableRecord_GatesWebXgp_UntilTheActionReplacesIt()
+    {
+        const string unreadable = "{\"version\":2,\"owed\":[]}";
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.NumberingKey] = unreadable,
+            [HomeStoragePlan.XgpLastNumberKey] = "40",
+        });
+        var web = cut.FindComponent<WebModePanel>();
+
+        Assert.True(web.Instance.XgpNumberingUnreadable);
+        NoticeBox.ByMarkerClass(cut, "unreadable-numbering-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class", "style");
+
+        _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Stored(unreadable), "{\"version\":1,\"owed\":[]}");
+        cut.Find(".unreadable-numbering-notice button").Click();
+
+        Assert.False(web.Instance.XgpNumberingUnreadable);
+        Assert.Empty(cut.FindAll(".unreadable-numbering-notice"));
+        _storage.Verify();
+    }
+
     [Fact]
     public async Task Export_RecordsTheNumbering_AsOneDocument_InOneWrite()
     {

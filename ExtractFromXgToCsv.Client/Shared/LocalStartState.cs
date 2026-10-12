@@ -33,6 +33,12 @@ public enum XgpStartBlock
 
     /// <summary>The page owes an XGP job from an earlier instance, which the user must resolve.</summary>
     LostExport,
+
+    /// <summary>
+    /// The stored numbering record cannot be read: it may hold owed exports,
+    /// so the user must resolve it before XGP export.
+    /// </summary>
+    UnreadableRecord,
 }
 
 /// <summary>

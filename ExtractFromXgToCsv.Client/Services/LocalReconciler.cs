@@ -159,6 +159,20 @@ internal sealed class LocalReconciler
         await ReconcileAsync();
     }
 
+    /// <summary>
+    /// The user's deliberate resolution of a numbering record that cannot be
+    /// read: the document is replaced with a fresh record, and the page
+    /// reconciles. That waives nothing: XGP stays blocked until the
+    /// reconciliation has followed or applied what the instance holds, as
+    /// anywhere else.
+    /// </summary>
+    public async Task ResolveUnreadableAsync()
+    {
+        Publish(State with { XgpBlock = XgpStartBlock.Checking });
+        await _numbering.ResolveUnreadableAsync();
+        await ReconcileAsync();
+    }
+
     private async Task PassesAsync()
     {
         do
@@ -194,6 +208,15 @@ internal sealed class LocalReconciler
             return;
         var instance = ledger.Instance;
 
+        // A record that cannot be read may hold owed exports: nothing is
+        // applied over it, and XGP waits on the user's resolution. A start of
+        // any other format may name the instance learned.
+        if (_numbering.IsUnreadable)
+        {
+            Publish(new LocalStartState(instance, _numbering.Record.Mark, XgpStartBlock.UnreadableRecord));
+            return;
+        }
+
         foreach (var entry in ledger.Entries.Where(entry => !entry.Running))
             await ApplyAsync(instance, entry);
 
@@ -223,7 +246,8 @@ internal sealed class LocalReconciler
         Publish(new LocalStartState(
             instance,
             _numbering.Record.Mark,
-            lost ? XgpStartBlock.LostExport
+            _numbering.IsUnreadable ? XgpStartBlock.UnreadableRecord
+            : lost ? XgpStartBlock.LostExport
             : running ? XgpStartBlock.Running
             : unresolved ? XgpStartBlock.Checking
             : null));
