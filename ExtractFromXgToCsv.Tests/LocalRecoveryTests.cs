@@ -461,6 +461,9 @@ public class LocalRecoveryTests : IAsyncLifetime
         await heldSettle.Reached.WaitAsync(NoticeTesting.OperationBound);
         heldStart.Release();
         await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        // The job is writing its first match's files when Stop's cancel
+        // arrives, so it commits them and stops before the second.
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
         heldSettle.Release();
         page.WaitFor(() => _server.Wire.Requests.Contains("POST /api/process/job-1/cancel"));
         _server.Gate.Open();
