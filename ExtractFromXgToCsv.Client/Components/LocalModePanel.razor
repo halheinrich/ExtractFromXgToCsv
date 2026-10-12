@@ -301,27 +301,44 @@
     private string? _runError;
 
     /// <summary>
-    /// What a run was computed from: the source it read, the filter values it
-    /// applied, and the output path it wrote to — plus whether that filter
-    /// restricted nothing, the zero-match box's premise. Captured when the
-    /// run starts, so the result on screen is read against its own run, never
-    /// against whatever is on screen now.
+    /// One visit to a source: the stretch of this panel's life over which it
+    /// shows one source. Replacing or removing the source ends the visit, and
+    /// a return to the same folder is a new one — a replacement is not undone
+    /// by coming back (SPEC-notices.md §7.2). Compared by reference: two
+    /// visits to one folder are different visits.
+    /// </summary>
+    private sealed class SourceVisit(FilterSourceToken? source)
+    {
+        /// <summary>The source this visit shows; <see langword="null"/> for none.</summary>
+        public FilterSourceToken? Source { get; } = source;
+    }
+
+    // The current visit. It only ever moves forward, so a run that has been
+    // superseded by a newer visit stays superseded.
+    private SourceVisit _visit = new(null);
+
+    /// <summary>
+    /// What a run was computed from: the source visit it started in, the
+    /// filter values it applied, and the output path it wrote to — plus
+    /// whether that filter restricted nothing, the zero-match box's premise.
+    /// Captured when the run starts, so the result on screen is read against
+    /// its own run, never against whatever is on screen now.
     /// </summary>
     private sealed record RunInputs(
-        FilterSourceToken? Source, FilterConfig Filter, bool FilterRestrictsNothing, string OutputPath);
+        SourceVisit Visit, FilterConfig Filter, bool FilterRestrictsNothing, string OutputPath);
 
     // The run whose progress, result or error is on screen; null when none is.
-    // A result stands only while its run's source and filter values are still
-    // the current ones (see OnParametersSet, and RunLocalAsync's judgement
-    // before it publishes a run's outcome).
+    // A result stands only while its run's source visit is the current one and
+    // its filter values are still the current ones (see OnParametersSet, and
+    // RunLocalAsync's judgement before it publishes a run's outcome).
     private RunInputs? _run;
 
     /// <summary>
-    /// A finished run's skip record, identified with its run: the source it
-    /// ran against — the record belongs to the run on that source — and how
-    /// it ended, which its label states.
+    /// A finished run's skip record, identified with its run: the source visit
+    /// it ran in — the record belongs to the run on that visit — and how it
+    /// ended, which its label states.
     /// </summary>
-    private sealed record LastRunRecord(FilterSourceToken? Source, SkipRecord Skips, RunEnding Ending)
+    private sealed record LastRunRecord(SourceVisit Visit, SkipRecord Skips, RunEnding Ending)
     {
         /// <summary>The list's label: the run it is the history of, and how that run ended.</summary>
         public string Label => Ending switch
@@ -331,9 +348,9 @@
             _ => "The last run",
         };
 
-        /// <summary>The record <paramref name="terminal"/> carries, for a run on <paramref name="source"/>.</summary>
-        public static LastRunRecord Of(FilterSourceToken? source, ProcessingProgress terminal) =>
-            new(source, terminal.Skipped,
+        /// <summary>The record <paramref name="terminal"/> carries, for a run in <paramref name="visit"/>.</summary>
+        public static LastRunRecord Of(SourceVisit visit, ProcessingProgress terminal) =>
+            new(visit, terminal.Skipped,
                 terminal.ErrorMessage is not null ? RunEnding.Failed
                 : terminal.Cancelled ? RunEnding.Cancelled
                 : RunEnding.Completed);
@@ -376,6 +393,11 @@
 
     protected override void OnParametersSet()
     {
+        // A different source — replaced or removed — ends the visit; a return
+        // to a folder shown before starts a new one.
+        if (Source != _visit.Source)
+            _visit = new SourceVisit(Source);
+
         // Update output path extension when output format changes.
         // Xgp is excluded: its output path is a folder, so no extension is
         // forced onto (or stripped from) whatever the user typed.
@@ -406,19 +428,19 @@
         if (!_busy && _run is { } run && !DescribesCurrentInputs(run))
             DropResult();
 
-        // The skip record belongs to the run on the source it ran against:
+        // The skip record belongs to the run on the source visit it ran in:
         // replacing or removing the source clears it, and a filter change
         // does not — it is that run's history, never a verdict on the new
         // filter.
-        if (_lastRun is { } lastRun && lastRun.Source != Source)
+        if (_lastRun is { } lastRun && !ReferenceEquals(lastRun.Visit, _visit))
             _lastRun = null;
     }
 
-    // Whether the current source and filter values are still the ones the run
-    // was computed from. Values, not references: the host hands a new config
-    // on every render.
+    // Whether the run started in the current source visit and the current
+    // filter values are still the ones it was computed from. The filter by
+    // value: the host hands a new config on every render.
     private bool DescribesCurrentInputs(RunInputs run) =>
-        run.Source == Source && FilterInEffect is { } current && current.Equals(run.Filter);
+        ReferenceEquals(run.Visit, _visit) && FilterInEffect is { } current && current.Equals(run.Filter);
 
     private void DropResult()
     {
@@ -448,7 +470,7 @@
         // nothing to run.
         if (FilterInEffect is not { } filter) return;
 
-        var run = new RunInputs(Source, filter, filter.Build().IsEmpty, _outputPath);
+        var run = new RunInputs(_visit, filter, filter.Build().IsEmpty, _outputPath);
         _run = run;
         _busy = true; _runError = null;
         _progress = null; _currentJobId = null;
@@ -519,13 +541,13 @@
         _busy = false;
         _currentJobId = null;
 
-        // Judge before publishing: the outcome is shown only while the source
-        // and filter values on screen are still the ones the run was computed
-        // from. A run that completes after its inputs were superseded — the
-        // folder changed, or the filter, while it ran — is never shown as the
-        // new inputs' result, not even for the length of the bookkeeping
-        // below. Once published, OnParametersSet drops it the moment the
-        // inputs move on.
+        // Judge before publishing: the outcome is shown only while the run's
+        // source visit is the current one and the filter values on screen are
+        // still the ones it was computed from. A run that completes after its
+        // inputs were superseded — the folder changed, even and back again,
+        // or the filter, while it ran — is never shown as the new inputs'
+        // result, not even for the length of the bookkeeping below. Once
+        // published, OnParametersSet drops it the moment the inputs move on.
         if (DescribesCurrentInputs(run))
         {
             _progress = terminal ?? _progress;
@@ -537,11 +559,11 @@
         }
 
         // The run's skip record is published by its own rule: only while the
-        // source it ran against is still the current one, whatever the filter
-        // now is. A run from a former source publishes none, and cannot
-        // restore one.
-        _lastRun = terminal is not null && run.Source == Source
-            ? LastRunRecord.Of(run.Source, terminal)
+        // source visit it ran in is still the current one, whatever the filter
+        // now is. A run from a former visit publishes none, and cannot restore
+        // one — a return to its folder included.
+        _lastRun = terminal is not null && ReferenceEquals(run.Visit, _visit)
+            ? LastRunRecord.Of(run.Visit, terminal)
             : null;
         StateHasChanged();
 

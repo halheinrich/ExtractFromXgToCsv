@@ -40,17 +40,22 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         Services.AddClientServices();
     }
 
-    private IRenderedComponent<LocalModePanel> PanelOver(CapturingProcessHandler server, FilterConfig filter)
+    private IRenderedComponent<LocalModePanel> PanelOver(
+        CapturingProcessHandler server,
+        FilterConfig filter,
+        OutputFormat format = OutputFormat.Csv,
+        List<XgpExportCommit>? exported = null)
     {
         Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
         var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
+            .Add(c => c.OutputFormat, format)
             .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
             .Add(c => c.FilterInEffect, filter)
             .Add(c => c.FolderPath, FolderA)
             .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
-        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
+            .Add(c => c.XgpAnonymize, false)
+            .Add(c => c.OnXgpExported, (XgpExportCommit commit) => exported?.Add(commit)));
+        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = format == OutputFormat.Xgp ? @"D:\xg\positions" : @"D:\xg\out.csv" });
         return cut;
     }
 
@@ -144,6 +149,38 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
 
         Assert.Empty(cut.FindAll(Notice));
         Assert.DoesNotContain("Done", cut.Markup);
+    }
+
+    /// <summary>
+    /// A→B→A: the held XGP run's folder is replaced and then put back before
+    /// it completes. Coming back does not undo the replacement — the return is
+    /// a new visit — so the run publishes neither its record nor "Done". What
+    /// it committed still reaches the host: clearing a record never discards
+    /// accounting. Before the correction the panel judged by the folder's
+    /// value at completion, so the old run's "Done" and record came back.
+    /// </summary>
+    [Fact]
+    public async Task ARunWhoseSourceWasReplacedAndRestored_PublishesNothing_AndItsAccountingStillReachesTheHost()
+    {
+        var commit = new XgpExportCommit(new XgpExportOptions(), 2);
+        var server = new CapturingProcessHandler(new ProcessingProgress
+        {
+            Current = 2, Total = 2, Complete = true, TotalRows = 2, Skipped = BrokenA, XgpCommit = commit,
+        });
+        var exported = new List<XgpExportCommit>();
+        var cut = PanelOver(server, new FilterConfig(), OutputFormat.Xgp, exported);
+        server.HoldStatus();
+        var run = RunAsync(cut);
+        await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        ChangeSource(cut, FolderB);
+        ChangeSource(cut, FolderA);
+        server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Empty(cut.FindAll(Notice));
+        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.Equal(commit, Assert.Single(exported));
     }
 
     /// <summary>
