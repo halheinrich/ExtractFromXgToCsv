@@ -206,18 +206,23 @@
                         </span>
                     }
                 </div>
-                @if (_progress.Complete)
-                {
-                    // A skip never ends a run, so without this the terminal line
-                    // above reads as a clean result while inputs were dropped
-                    // (halheinrich/backgammon#223). Outside the branch chain on
-                    // purpose: a cancelled run's partial record is as true as a
-                    // finished one's, and so is a failed one's. Through the one
-                    // rendering both modes share; it shows nothing for an empty
-                    // record.
-                    <SkipListNotice class="mt-2" Record="_progress.Skipped" />
-                }
             }
+        </div>
+    }
+
+    @if (_lastRun is { } lastRun)
+    {
+        // The last run's skip record (SPEC-notices.md §7.2): a skip never ends
+        // a run, so without this a terminal line reads as a clean result while
+        // inputs were dropped (halheinrich/backgammon#223). It is the run's
+        // history, apart from the result above: a filter change keeps it,
+        // labelled with its run and that run's ending, while "Done" and the
+        // zero-match notice go; a new source, or the next run, clears it. A
+        // cancelled or failed run's record is as true as a completed one's.
+        // Through the one rendering both modes share; it shows nothing for an
+        // empty record.
+        <div style="max-width:800px">
+            <SkipListNotice class="mt-2" Record="lastRun.Skips" Label="@lastRun.Label" />
         </div>
     }
 
@@ -311,6 +316,38 @@
     // before it publishes a run's outcome).
     private RunInputs? _run;
 
+    /// <summary>
+    /// A finished run's skip record, identified with its run: the source it
+    /// ran against — the record belongs to the run on that source — and how
+    /// it ended, which its label states.
+    /// </summary>
+    private sealed record LastRunRecord(FilterSourceToken? Source, SkipRecord Skips, RunEnding Ending)
+    {
+        /// <summary>The list's label: the run it is the history of, and how that run ended.</summary>
+        public string Label => Ending switch
+        {
+            RunEnding.Cancelled => "The last run (stopped)",
+            RunEnding.Failed => "The last run (failed)",
+            _ => "The last run",
+        };
+
+        /// <summary>The record <paramref name="terminal"/> carries, for a run on <paramref name="source"/>.</summary>
+        public static LastRunRecord Of(FilterSourceToken? source, ProcessingProgress terminal) =>
+            new(source, terminal.Skipped,
+                terminal.ErrorMessage is not null ? RunEnding.Failed
+                : terminal.Cancelled ? RunEnding.Cancelled
+                : RunEnding.Completed);
+    }
+
+    /// <summary>How a run that reached its terminal snapshot ended.</summary>
+    private enum RunEnding { Completed, Cancelled, Failed }
+
+    // The last run's skip record; null while there is none. Kept apart from
+    // the result (_run, _progress, _runError) because it lives by other rules
+    // (SPEC-notices.md §7.2): a filter change keeps it, replacing or removing
+    // the source clears it, and the next run replaces it.
+    private LastRunRecord? _lastRun;
+
     // Server-side opening-book load state, fetched once on first render so the
     // status line can tell the user which analysis-depth stamps to expect. Null
     // until fetched (or if the fetch fails) — the line renders only when known.
@@ -368,6 +405,13 @@
         // published (RunLocalAsync).
         if (!_busy && _run is { } run && !DescribesCurrentInputs(run))
             DropResult();
+
+        // The skip record belongs to the run on the source it ran against:
+        // replacing or removing the source clears it, and a filter change
+        // does not — it is that run's history, never a verdict on the new
+        // filter.
+        if (_lastRun is { } lastRun && lastRun.Source != Source)
+            _lastRun = null;
     }
 
     // Whether the current source and filter values are still the ones the run
@@ -408,6 +452,9 @@
         _run = run;
         _busy = true; _runError = null;
         _progress = null; _currentJobId = null;
+        // The next run replaces the last one's record: this run's is shown
+        // when it ends, never while it is still growing.
+        _lastRun = null;
         StateHasChanged();
 
         var request = new ProcessRequest
@@ -488,6 +535,14 @@
         {
             DropResult();
         }
+
+        // The run's skip record is published by its own rule: only while the
+        // source it ran against is still the current one, whatever the filter
+        // now is. A run from a former source publishes none, and cannot
+        // restore one.
+        _lastRun = terminal is not null && run.Source == Source
+            ? LastRunRecord.Of(run.Source, terminal)
+            : null;
         StateHasChanged();
 
         // The job's own accounting, whatever is on screen: the commit an XGP

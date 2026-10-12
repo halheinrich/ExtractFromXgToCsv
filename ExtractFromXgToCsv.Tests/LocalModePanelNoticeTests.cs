@@ -70,14 +70,6 @@ public class LocalModePanelNoticeTests : BunitContext
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 
-    private IRenderedComponent<LocalModePanel> RenderWith(ProcessingProgress snapshot)
-    {
-        var cut = RenderPanel();
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", snapshot);
-        cut.Render();
-        return cut;
-    }
-
     // ── The two gate reasons ────────────────────────────────────────────────
 
     [Fact]
@@ -103,18 +95,28 @@ public class LocalModePanelNoticeTests : BunitContext
     }
 
     [Fact]
-    public void SkippedNotice_IsAnAssertiveNonDismissibleGateReason()
+    public async Task SkippedNotice_IsAnAssertiveNonDismissibleGateReason()
     {
-        var cut = RenderWith(new ProcessingProgress
+        // A real run: the record is the run's, published when it ends.
+        await using var ctx = new BunitContext();
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.Services.AddClientServices();
+        ctx.Services.AddSingleton(new HttpClient(new CapturingProcessHandler(new ProcessingProgress
         {
             Current = 1,
             Total = 1,
             Complete = true,
             TotalRows = 4,
             Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic.")],
+        }))
+        {
+            BaseAddress = new Uri("http://localhost/"),
         });
+        var cut = ctx.RenderReadyLocalPanel(new FilterConfig());
+        await cut.RunToCompletionAsync();
 
-        // <Notice class="skipped-notice mt-2" Kind="Warning" Announcement="Assertive">
+        // Through the shared rendering: <Notice class="skipped-notice mt-2"
+        // Kind="Warning" Announcement="Assertive">
         var box = NoticeBox.ByMarkerClass(cut, "skipped-notice").ShouldBe(
             NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class");
         Assert.Equal(["skipped-notice", "mt-2"], box.CallerClasses);

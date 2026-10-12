@@ -190,12 +190,11 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 /// Fakes the Local-mode processing endpoints so <c>LocalModePanel.RunLocalAsync</c>
 /// runs its real request-building and polling loop against an in-memory server:
 /// captures the <see cref="ProcessRequest"/> POSTed to <c>/api/process/start</c>
-/// and answers the first status poll with a terminal snapshot
-/// (<paramref name="terminalStatusJson"/>; three rows written by default) so
-/// the click resolves in one iteration. Everything else 404s, so a stray
-/// request fails loudly rather than hanging.
+/// and answers each status poll with the next of its snapshots — by default
+/// one terminal snapshot (three rows written), so the click resolves in one
+/// iteration. Everything else 404s, so a stray request fails loudly rather
+/// than hanging.
 /// </summary>
-/// <param name="terminalStatusJson">The terminal snapshot the first status poll answers.</param>
 /// <remarks>
 /// Binds with <see cref="JsonSerializerDefaults.Web"/> — what a bare
 /// <c>AddControllers()</c> actually gives <c>ProcessController.Start</c> on the
@@ -205,10 +204,36 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
 /// the panel's own; the panel no longer has one, and mirroring the *server* is
 /// the point of a stand-in.)
 /// </remarks>
-internal sealed class CapturingProcessHandler(
-    string terminalStatusJson = "{\"complete\":true,\"totalRows\":3}") : HttpMessageHandler
+internal sealed class CapturingProcessHandler : HttpMessageHandler
 {
     private static readonly JsonSerializerOptions _opts = new(JsonSerializerDefaults.Web);
+
+    private readonly IReadOnlyList<string> _statusBodies;
+    private int _polls;
+
+    /// <summary>A server whose every status poll answers <paramref name="terminalStatusJson"/>.</summary>
+    public CapturingProcessHandler(string terminalStatusJson = "{\"complete\":true,\"totalRows\":3}")
+        : this([terminalStatusJson])
+    {
+    }
+
+    /// <summary>
+    /// A server whose status polls answer <paramref name="statuses"/> in turn,
+    /// the last answering every poll after it — progress snapshots before a
+    /// terminal one, or the terminals of consecutive runs (every run is job
+    /// <c>j1</c>).
+    /// </summary>
+    public CapturingProcessHandler(params ProcessingProgress[] statuses)
+        : this(statuses.Select(Terminal).ToList())
+    {
+    }
+
+    private CapturingProcessHandler(IReadOnlyList<string> statusBodies)
+    {
+        if (statusBodies.Count == 0)
+            throw new ArgumentException("A server needs at least one status to answer.", nameof(statusBodies));
+        _statusBodies = statusBodies;
+    }
 
     /// <summary>
     /// <paramref name="snapshot"/> as the status endpoint writes it — the
@@ -220,20 +245,42 @@ internal sealed class CapturingProcessHandler(
     private readonly TaskCompletionSource _statusReached =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource? _statusGate;
+    private TaskCompletionSource _heldPollReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _holdFromPoll = int.MaxValue;
+    private int _holdThroughPoll = int.MaxValue;
 
     /// <summary>
-    /// Hold the next status poll pending until <see cref="ReleaseStatus"/>, so
-    /// a test can act while a run is in flight. Call before the run starts.
+    /// Hold every status poll from now on pending until
+    /// <see cref="ReleaseStatus"/>, so a test can act while a run is in flight.
+    /// Call before the run starts.
     /// </summary>
-    public void HoldStatus() =>
-        _statusGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    public void HoldStatus() => Hold(from: 1, through: int.MaxValue);
 
-    /// <summary>Let a held status poll answer with the terminal snapshot.</summary>
+    /// <summary>
+    /// Hold only status poll number <paramref name="pollNumber"/> (1-based,
+    /// counted across runs) until <see cref="ReleaseStatus"/>; the polls
+    /// before it answer at once. <see cref="HeldPollReached"/> completes when
+    /// it arrives.
+    /// </summary>
+    public void HoldPoll(int pollNumber) => Hold(from: pollNumber, through: pollNumber);
+
+    private void Hold(int from, int through)
+    {
+        _statusGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _heldPollReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _holdFromPoll = from;
+        _holdThroughPoll = through;
+    }
+
+    /// <summary>Let a held status poll answer.</summary>
     public void ReleaseStatus() =>
         (_statusGate ?? throw new InvalidOperationException("No status poll is held.")).TrySetResult();
 
     /// <summary>Completes when the first status poll has arrived — the run is in flight.</summary>
     public Task StatusReached => _statusReached.Task;
+
+    /// <summary>Completes when a held poll has arrived and is being held.</summary>
+    public Task HeldPollReached => _heldPollReached.Task;
 
     /// <summary>
     /// The bound on waiting for a run through this server: the panel's
@@ -270,10 +317,14 @@ internal sealed class CapturingProcessHandler(
 
         if (request.Method == HttpMethod.Get && path == "/api/process/j1/status")
         {
+            var poll = Interlocked.Increment(ref _polls);
             _statusReached.TrySetResult();
-            if (_statusGate is { } gate)
+            if (_statusGate is { } gate && poll >= _holdFromPoll && poll <= _holdThroughPoll)
+            {
+                _heldPollReached.TrySetResult();
                 await gate.Task.WaitAsync(cancellationToken);
-            return Json(terminalStatusJson);
+            }
+            return Json(_statusBodies[Math.Min(poll, _statusBodies.Count) - 1]);
         }
 
         return new HttpResponseMessage(HttpStatusCode.NotFound);
