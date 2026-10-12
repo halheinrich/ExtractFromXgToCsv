@@ -14,7 +14,7 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Committed accounting reaching Home's numbering record
-/// (halheinrich/backgammon#374 and #397, <c>SPEC-notices.md</c> §7.1, §7.2
+/// (halheinrich/backgammon#374 and halheinrich/backgammon#397, <c>SPEC-notices.md</c> §7.1, §7.2
 /// and §7.5): a Local XGP run's ended ledger entry — completed, cancelled or
 /// failed — is applied in one checkpoint, from the options the run captured,
 /// and the controls follow it control by control, so a newer choice in them
