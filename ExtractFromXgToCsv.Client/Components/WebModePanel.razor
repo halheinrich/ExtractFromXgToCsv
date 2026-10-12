@@ -4,11 +4,13 @@
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
 @using XgFilter_Razor
+@using Microsoft.Extensions.Logging
 @implements IDisposable
 @inject XgProcessingService Processor
 @inject ISourceConverter Converter
 @inject SettingsStorage Settings
 @inject IJSRuntime JS
+@inject ILogger<WebModePanel> Logger
 
 @* Panel root. It exists to carry the busy marker: everything the user can
    point at while a gesture holds the WASM thread sits inside it, so one class
@@ -486,7 +488,8 @@
                     .ToList();
                 if (await _session.CompletePickAsync(pick, token!.Value, picked, _lifetime.Token))
                     await _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token);
-            }));
+            },
+            ownsTheOutcome: () => _session.IsLatest(pick)));
     }
 
     private async Task HandleOpeningBookSelectionAsync(InputFileChangeEventArgs e)
@@ -526,16 +529,21 @@
             // needs them.
             if (_session.CompleteBookLoad(load, book, failed))
                 await _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token);
-        }));
+        },
+        ownsTheOutcome: () => _session.IsLatest(load)));
     }
 
     /// <summary>
     /// Runs a gesture's work: a cancellation from this panel's own lifetime
     /// ends it silently, since the panel has gone; anything else that escapes
     /// — never a file's failure, which is a skip — is the gesture's failure,
-    /// the run error.
+    /// the run error, while the gesture still owns its outcome
+    /// (<paramref name="ownsTheOutcome"/>, asked when it fails). A failure is
+    /// published by the same owner rules as a result and a skip record
+    /// (SPEC-notices.md §7.3): a superseded gesture publishes nothing, its
+    /// failure included, and the failure is logged instead.
     /// </summary>
-    private async Task GuardedAsync(Func<Task> work)
+    private async Task GuardedAsync(Func<Task> work, Func<bool> ownsTheOutcome)
     {
         try
         {
@@ -544,14 +552,25 @@
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ownsTheOutcome())
         {
             _runError = $"Error: {ex.Message}";
         }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "A superseded Web-mode gesture failed; its failure is not shown.");
+        }
     }
 
-    private Task EnsureConversionsAsync() =>
-        GuardedAsync(() => _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token));
+    // A conversion belongs to the selection it converts for: its failure is
+    // the run error only while that selection is current.
+    private Task EnsureConversionsAsync()
+    {
+        var selection = _session.Selection;
+        return GuardedAsync(
+            () => _session.EnsureConversionsAsync(() => SelectedRepresentation, _lifetime.Token),
+            ownsTheOutcome: () => ReferenceEquals(selection, _session.Selection));
+    }
 
     /// <summary>
     /// Runs <paramref name="body"/> with the panel's busy notice showing.
@@ -806,10 +825,14 @@
         catch (Exception ex)
         {
             // Nothing was handed over, so nothing counts as exported; the
-            // attempt keeps the skips it found.
-            _session.CompleteDownload(ticket, new WebDownload(
-                format, fileName, DownloadStatus.Failed, 0, null, exportSkips));
-            _runError = $"Error: {ex.Message}";
+            // attempt keeps the skips it found. Its failure is the run error
+            // by the same owner rule as its record: only while no newer
+            // attempt has begun and its selection is current.
+            if (_session.CompleteDownload(ticket, new WebDownload(
+                    format, fileName, DownloadStatus.Failed, 0, null, exportSkips)))
+                _runError = $"Error: {ex.Message}";
+            else
+                Logger.LogWarning(ex, "A superseded Web-mode download failed; its failure is not shown.");
         }
     }
 }

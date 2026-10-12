@@ -55,6 +55,11 @@ internal sealed class WebSession
     private object? _bookOwner;
     private object? _downloadOwner;
 
+    // The newest pick and book load begun, whether or not they have published:
+    // what owns a gesture's outcome after its completion has run.
+    private PickTicket? _latestPick;
+    private BookTicket? _latestBookLoad;
+
     private readonly ConversionSlot<DecisionRow> _rows = new();
     private readonly ConversionSlot<BgDecisionData> _records = new();
 
@@ -106,6 +111,7 @@ internal sealed class WebSession
     {
         var ticket = new PickTicket();
         _pickOwner = ticket;
+        _latestPick = ticket;
         _downloadOwner = null;
         Selection = null;
         LastDownload = null;
@@ -189,8 +195,22 @@ internal sealed class WebSession
     {
         var ticket = new BookTicket();
         _bookOwner = ticket;
+        _latestBookLoad = ticket;
         return ticket;
     }
+
+    /// <summary>
+    /// Whether <paramref name="ticket"/>'s pick is the newest begun — so its
+    /// gesture still owns what it reports, its failure included. A newer pick,
+    /// or a selection cleared since, supersedes it for good.
+    /// </summary>
+    public bool IsLatest(PickTicket ticket) => ReferenceEquals(ticket, _latestPick);
+
+    /// <summary>
+    /// Whether <paramref name="ticket"/>'s book load is the newest begun — so
+    /// its gesture still owns what it reports, its failure included.
+    /// </summary>
+    public bool IsLatest(BookTicket ticket) => ReferenceEquals(ticket, _latestBookLoad);
 
     /// <summary>
     /// Publishes a book load's outcome unless a newer load has begun: the book

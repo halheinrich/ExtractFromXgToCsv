@@ -252,6 +252,28 @@ public class WebModePanelDownloadTests : BunitContext
         Assert.Equal(ConversionState.Completed, cut.Instance.Session.StateOf(Representation.Records));
     }
 
+    /// <summary>
+    /// A held download's hand-off fails after a newer pick has replaced its
+    /// selection: the attempt no longer owns its outcome, so its failure is not
+    /// the run error, as its record is not "the last download". Before the
+    /// correction the failure was shown whatever had happened since.
+    /// </summary>
+    [Fact]
+    public async Task AHeldDownloadThatFailsAfterANewerPick_ShowsNoError()
+    {
+        var handOff = JSInterop.SetupVoid("downloadFile", _ => true);
+        var cut = RenderPicked(OutputFormat.Csv);
+
+        var click = DownloadButton(cut).ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
+        Pick(cut);
+        handOff.SetException(new JSException("The download was blocked."));
+        await click.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.DoesNotContain(NoticeBox.AllIn(cut), b => b.Kind == NoticeKind.Error);
+        Assert.Null(cut.Instance.Session.LastDownload);
+    }
+
     [Fact]
     public async Task TheNextAttempt_ReplacesTheLastDownload()
     {

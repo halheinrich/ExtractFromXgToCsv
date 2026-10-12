@@ -233,6 +233,31 @@ public class WebModePanelConversionTests : BunitContext
     }
 
     /// <summary>
+    /// A pick's gesture fails — its records conversion throws something that
+    /// escapes the file's boundary — after a newer pick has replaced it. The
+    /// superseded gesture publishes nothing, its failure included, so no run
+    /// error appears. A cancellation the panel did not ask for escapes the
+    /// boundary, which never takes one for a skip.
+    /// </summary>
+    [Fact]
+    public async Task AFailureOfASupersededPick_IsNotShown()
+    {
+        var cut = RenderPanel(OutputFormat.DiagramJson);
+        _converter.HoldRecordsCall(1);
+        var first = Task.Run(() => Pick(cut, A));
+        await _converter.RecordsHeld.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Pick(cut, B);
+        _converter.FailRecords = (source, _) => source.Name == A ? new OperationCanceledException("Interrupted.") : null;
+        _converter.ReleaseRecords();
+        await first.WaitAsync(TimeSpan.FromSeconds(10));
+        WaitForIdle(cut);
+
+        Assert.DoesNotContain("Interrupted.", cut.Markup);
+        Assert.All(cut.Instance.RowCache.Records, r => Assert.Equal(B, r.Id.Filename));
+    }
+
+    /// <summary>
     /// A book change while records convert: the conversion's key is no longer
     /// current, so its completion publishes nothing, and the records shown are
     /// the ones converted under the new book.
