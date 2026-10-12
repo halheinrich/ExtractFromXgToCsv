@@ -87,6 +87,10 @@ public class LocalFolderProcessor
 
     private readonly XgpPayloadPreparation _preparePayload;
 
+    // Where every output file is written: the destination (SPEC-notices.md
+    // §7.1), whose failures fail the run.
+    private readonly IOutputDestination _destination;
+
     /// <summary>
     /// Creates the processor. <paramref name="logger"/> records per-file skip
     /// warnings; <paramref name="iteratorLogger"/> is the filtering
@@ -111,16 +115,18 @@ public class LocalFolderProcessor
         ILogger<FilteredDecisionIterator> iteratorLogger,
         PlayRanking ranking,
         OpeningBookProvider? bookProvider = null)
-        : this(logger, iteratorLogger, ranking, bookProvider, XgpPayload.Prepare)
+        : this(logger, iteratorLogger, ranking, bookProvider, XgpPayload.Prepare, FileSystemDestination.Instance)
     {
     }
 
     /// <summary>
-    /// Creates the processor with the XGP pathway's payload preparation
-    /// supplied: <see cref="XgpPayload.Prepare"/> in the application, or a
-    /// test's stand-in that fails a chosen decision's preparation. No real
-    /// input is known to fail it, and the export-skip boundary is pinned
-    /// through this.
+    /// Creates the processor with its two seams supplied: the XGP pathway's
+    /// payload preparation — <see cref="XgpPayload.Prepare"/> in the
+    /// application, or a test's stand-in that fails a chosen decision's
+    /// preparation — and the destination every output file is written to —
+    /// <see cref="FileSystemDestination"/> in the application, or a test's that
+    /// fails a write or a close. No real input is known to fail either, and
+    /// the export-skip and destination boundaries are pinned through these.
     /// </summary>
     /// <inheritdoc cref="LocalFolderProcessor(ILogger{LocalFolderProcessor}, ILogger{FilteredDecisionIterator}, PlayRanking, OpeningBookProvider?)"/>
     internal LocalFolderProcessor(
@@ -128,11 +134,13 @@ public class LocalFolderProcessor
         ILogger<FilteredDecisionIterator> iteratorLogger,
         PlayRanking ranking,
         OpeningBookProvider? bookProvider,
-        XgpPayloadPreparation preparePayload)
+        XgpPayloadPreparation preparePayload,
+        IOutputDestination destination)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(iteratorLogger);
         ArgumentNullException.ThrowIfNull(preparePayload);
+        ArgumentNullException.ThrowIfNull(destination);
         if (!Enum.IsDefined(ranking))
             throw new ArgumentOutOfRangeException(nameof(ranking), ranking, "Not a defined ranking.");
         _logger = logger;
@@ -140,6 +148,7 @@ public class LocalFolderProcessor
         _ranking = ranking;
         _openingBook = bookProvider?.Book;
         _preparePayload = preparePayload;
+        _destination = destination;
     }
 
     /// <summary>
@@ -198,6 +207,17 @@ public class LocalFolderProcessor
         var outputDir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDir))
             Directory.CreateDirectory(outputDir);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="bytes"/> as the one file <paramref name="path"/>
+    /// names, replacing one of that name, and closes it before returning — so
+    /// a failure finishing the file is the caller's, before it reports success.
+    /// </summary>
+    private async Task ReplaceWithAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    {
+        await using var file = _destination.Replace(path);
+        await file.WriteAsync(bytes, cancellationToken);
     }
 
     /// <summary>
@@ -334,23 +354,26 @@ public class LocalFolderProcessor
         var filtering = FilteringFor(filterSet);
 
         // The destination, opened before any file is read; it and every write
-        // below are outside the files' boundaries.
+        // below are outside the files' boundaries. It is finished — flushed
+        // whole and closed — before the run reports success, so a failure
+        // finishing it is the run's error, never a success already published.
         CreateParentFolder(outputPath);
-        await using var writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
-        await writer.WriteLineAsync(DecisionRow.CsvHeader);
-
         var run = new RunProgress(files.Count, progress, record);
-        await ForEachFileAsync(
-            folderPath, files, record, run,
-            retainBytes: false,
-            stage: (decoded, fileName) => filtering.IterateFile(decoded.File, fileName).ToList(),
-            commit: async (rows, _) =>
-            {
-                foreach (var row in rows)
-                    await writer.WriteLineAsync(row.ToCsvLine());
-                run.Add(rows.Count);
-            },
-            cancellationToken);
+        await using (var writer = new StreamWriter(_destination.Replace(outputPath), Encoding.UTF8))
+        {
+            await writer.WriteLineAsync(DecisionRow.CsvHeader);
+            await ForEachFileAsync(
+                folderPath, files, record, run,
+                retainBytes: false,
+                stage: (decoded, fileName) => filtering.IterateFile(decoded.File, fileName).ToList(),
+                commit: async (rows, _) =>
+                {
+                    foreach (var row in rows)
+                        await writer.WriteLineAsync(row.ToCsvLine());
+                    run.Add(rows.Count);
+                },
+                cancellationToken);
+        }
 
         run.ReportDone();
     }
@@ -390,9 +413,9 @@ public class LocalFolderProcessor
             cancellationToken);
 
         // The commit to the destination.
-        await File.WriteAllTextAsync(
+        await ReplaceWithAsync(
             outputPath,
-            JsonSerializer.Serialize(allItems, new JsonSerializerOptions { WriteIndented = true }),
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(allItems, new JsonSerializerOptions { WriteIndented = true })),
             cancellationToken);
 
         run.ReportDone();
@@ -480,7 +503,7 @@ public class LocalFolderProcessor
                     // the run's commit counts the file, only once it is
                     // written. Not cancellable: a file is the cancellation's
                     // granularity.
-                    await File.WriteAllBytesAsync(Path.Combine(outputPath, allocator.Peek(row)), payload);
+                    await ReplaceWithAsync(Path.Combine(outputPath, allocator.Peek(row)), payload, CancellationToken.None);
                     allocator.Commit(row);
                     record.Commit(new XgpExportCommit(options, allocator.CommittedCount));
                     run.Add(1);
@@ -585,7 +608,7 @@ public class LocalFolderProcessor
                 "No decisions matched the filter — nothing to render.");
 
         var deckBytes = renderer(requests, new DiagramOptions());
-        await File.WriteAllBytesAsync(outputPath, deckBytes, cancellationToken);
+        await ReplaceWithAsync(outputPath, deckBytes, cancellationToken);
 
         run.ReportDone();
     }

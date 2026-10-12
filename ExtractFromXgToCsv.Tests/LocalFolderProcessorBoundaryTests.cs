@@ -159,6 +159,67 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
     }
 
     /// <summary>
+    /// The CSV destination is finished before success is reported: when the
+    /// terminal snapshot is made, the file is closed — nothing holds it open —
+    /// and holds every row. Before the correction the writer was disposed when
+    /// the method returned, after the success report, so a success was
+    /// published over a file still open and partly unflushed.
+    /// </summary>
+    [Fact]
+    public async Task Csv_SuccessIsReportedOnlyOnceTheFileIsClosed()
+    {
+        Copy(GoodName);
+        var good = FixtureRows(GoodName);
+        var output = Path.Combine(_folder, "out.csv");
+        bool? closedAtSuccess = null;
+        string[]? linesAtSuccess = null;
+        var progress = new OnReport(snapshot =>
+        {
+            if (!snapshot.Complete)
+                return;
+            try
+            {
+                using var exclusive = new FileStream(output, FileMode.Open, FileAccess.Read, FileShare.None);
+                closedAtSuccess = true;
+            }
+            catch (IOException)
+            {
+                closedAtSuccess = false;
+            }
+            using var shared = new StreamReader(new FileStream(output, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+            linesAtSuccess = shared.ReadToEnd().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        });
+
+        await Processor().ProcessAsync(_folder, output, new DecisionFilterSet(), progress, new RunRecord());
+
+        Assert.True(closedAtSuccess);
+        Assert.Equal(good.Count + 1, linesAtSuccess!.Length);
+    }
+
+    /// <summary>
+    /// A failure finishing the CSV file — its flush on close — is the run's
+    /// error: the run throws, no success is reported first, and it is no skip.
+    /// </summary>
+    [Fact]
+    public async Task Csv_AFailureFinishingTheFile_IsTheRunError_WithNoSkip()
+    {
+        Copy(GoodName);
+        var record = new RunRecord();
+        var progress = new RecordingProgress();
+        var processor = new LocalFolderProcessor(
+            NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance,
+            AppRanking.Ranking, bookProvider: null, XgpPayload.Prepare,
+            new ScriptedDestination { FailFlush = true });
+
+        var failure = await Assert.ThrowsAsync<IOException>(() => processor.ProcessAsync(
+            _folder, Path.Combine(_folder, "out.csv"), new DecisionFilterSet(), progress, record));
+
+        Assert.Equal(ScriptedDestination.FlushFailure, failure.Message);
+        Assert.DoesNotContain(progress.Reports, snapshot => snapshot.Complete);
+        Assert.Empty(record.Skips);
+    }
+
+    /// <summary>
     /// The write of one position is the commit. Before this leg the write sat
     /// inside the per-decision catch, so a destination that refused one file
     /// was recorded as a skipped decision and the run went on.
@@ -201,7 +262,8 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
             AppRanking.Ranking, bookProvider: null,
             (id, source, bytes, anonymize) => id == failing
                 ? throw new InvalidOperationException("Preparation failed.")
-                : XgpPayload.Prepare(id, source, bytes, anonymize));
+                : XgpPayload.Prepare(id, source, bytes, anonymize),
+            FileSystemDestination.Instance);
 
         await processor.ProcessXgpAsync(
             _folder, outputDir, new DecisionFilterSet(), new XgpExportOptions(), new FilterConfig(),
@@ -293,6 +355,12 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         {
             throw new IOException(ex.Message, ex);
         }
+    }
+
+    /// <summary>A progress sink that acts on each snapshot as it is reported, on the run's own flow.</summary>
+    private sealed class OnReport(Action<ProcessingProgress> act) : IProgress<ProcessingProgress>
+    {
+        public void Report(ProcessingProgress value) => act(value);
     }
 
     /// <summary>
