@@ -59,18 +59,13 @@ public class HomeRunResultTests : BunitContext
 
     /// <summary>
     /// The bookkeeping an export of two decisions under the default pattern
-    /// makes, its first write held.
+    /// makes — one checkpoint of the numbering record — its write held.
     /// </summary>
     private BrowserStorageHeldWrite ExpectTheExportBookkeepingHeld()
     {
-        var pattern = _storage.ExpectHeldWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, "pos{n}");
-        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpLastNumberKey, "2",
-            BrowserStorageWriteAnswer.Succeeded);
-        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "3",
-            BrowserStorageWriteAnswer.Succeeded);
-        _storage.ExpectRemove(BrowserStorageArea.Local, HomeStoragePlan.XgpPrefixKey,
-            BrowserStorageWriteAnswer.Succeeded);
-        return pattern;
+        _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, BrowserStorageReadAnswer.Absent);
+        return _storage.ExpectHeldWrite(
+            BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, HomeStoragePlan.NumberingDocument("pos{n}", 2, 3));
     }
 
     /// <summary>

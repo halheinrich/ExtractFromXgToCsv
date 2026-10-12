@@ -301,6 +301,7 @@
     protected override void OnInitialized()
     {
         _documentStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
+        _numbering = new XgpNumberingKeeper(new XgpNumberingStore(Settings));
 
         // Both owners outlive this page and change while no gesture of this
         // page is running — a commit on the filter surface, a refusal from a
@@ -331,10 +332,10 @@
     private bool _xgpAnonymize = false;
     private XgpExportOptions _xgpOptions = new();
 
-    // Last persisted pattern/number pair — the "next number" default follows
-    // the persisted counter only while the pattern still matches it.
-    private string? _xgpPersistedPattern;
-    private int _xgpPersistedLastNumber;
+    // The numbering record (SPEC-notices.md §7.5): one storage document, of
+    // which this page is the one owner — the panels never write it. Its
+    // numbering is what "next number" continues while the pattern matches it.
+    private XgpNumberingKeeper _numbering = default!;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -391,35 +392,17 @@
         _folderPathText = await ReadSettingAsync("xg_folderPath") ?? string.Empty;
         LatchSourceFolder(_folderPathText);
 
-        _xgpPersistedPattern = await ReadSettingAsync("xg_xgpPattern");
-        if (_xgpPersistedPattern is null)
+        // The numbering record — the one document, or, the first time, what
+        // the keys it replaced held (XgpNumberingStore migrates them once,
+        // the legacy prefix included). The controls start from its numbering.
+        await _numbering.RestoreAsync();
+        lifetime.ThrowIfCancellationRequested();
+        if (_numbering.Record.Numbering is { } numbering)
         {
-            // One-time migration from the pre-pattern persistence shape: the
-            // legacy prefix becomes "{prefix}{n}" — the pattern that names
-            // files exactly the way the prefix did — and counts as the
-            // persisted pattern so counter continuation carries across the
-            // upgrade. A legacy prefix the pattern grammar rejects (it could
-            // contain braces) falls back to the default. xg_xgpPrefix is
-            // read-once legacy: never written again, and removed on the next
-            // successful export.
-            var legacyPrefix = await ReadSettingAsync("xg_xgpPrefix");
-            if (legacyPrefix is not null)
-            {
-                var migrated = legacyPrefix + "{n}";
-                _xgpPersistedPattern = XgpNameTemplate.TryParse(migrated, out _, out _)
-                    ? migrated
-                    : XgpExportOptions.DefaultNamePattern;
-            }
+            _xgpPattern = numbering.Pattern;
+            _xgpNextNumber = numbering.LastNumber + 1;
+            _xgpSuffixLength = numbering.SuffixLength;
         }
-        var savedLast = await ReadSettingAsync("xg_xgpLastNumber");
-        var savedLength = await ReadSettingAsync("xg_xgpSuffixLength");
-
-        _xgpPattern = _xgpPersistedPattern ?? XgpExportOptions.DefaultNamePattern;
-        if (int.TryParse(savedLast, out var last) && last >= 0)
-            _xgpPersistedLastNumber = last;
-        _xgpNextNumber = _xgpPersistedLastNumber + 1;
-        if (int.TryParse(savedLength, out var len) && len is >= 1 and <= 9)
-            _xgpSuffixLength = len;
         var savedAnonymize = await ReadSettingAsync("xg_xgpAnonymize");
         _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
@@ -516,11 +499,11 @@
     private void ApplyPatternEdit(string pattern)
     {
         _xgpPattern = pattern;
-        // Continue the persisted counter only while the pattern matches the
-        // one it was persisted under; a different pattern starts a fresh
+        // Continue the recorded numbering only while the pattern matches the
+        // one it was recorded under; a different pattern starts a fresh
         // series at 1. The user can still override the number afterwards.
-        _xgpNextNumber = _xgpPattern == _xgpPersistedPattern
-            ? _xgpPersistedLastNumber + 1
+        _xgpNextNumber = _numbering.Record.Numbering is { } numbering && _xgpPattern == numbering.Pattern
+            ? numbering.LastNumber + 1
             : 1;
         RebuildXgpOptions();
     }
@@ -569,36 +552,30 @@
     /// The one accounting handler both modes' panels raise: an XGP export
     /// committed <see cref="XgpExportCommit.Count"/> files under the options
     /// it captured — a Local run when it ends, completed, cancelled or failed;
-    /// a Web download at its successful hand-off. Persists the numbering those
+    /// a Web download at its successful hand-off. Records the numbering those
     /// files used, so the next export under the same pattern continues where
     /// this one ended. An export that committed nothing advances nothing.
     /// </summary>
     /// <remarks>
-    /// Everything persisted comes from <paramref name="commit"/>, never from
+    /// Everything recorded comes from <paramref name="commit"/>, never from
     /// the controls: the user may have changed the pattern or the numbers while
     /// the export ran, and the files on disk were named by what it captured.
-    /// The controls follow it control by control (<see cref="FollowsExport"/>):
-    /// a newer choice in one stands.
+    /// It is one checkpoint of the numbering record — the whole document,
+    /// from a fresh read, in one write; a refused write leaves it recorded in
+    /// this page. The controls follow it control by control
+    /// (<see cref="FollowsExport"/>): a newer choice in one stands.
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
         if (commit.Count <= 0) return;
 
-        var exported = commit.Options;
-        _xgpPersistedLastNumber = commit.NextNumber - 1;
-        _xgpPersistedPattern = exported.NamePattern;
-        if (FollowsExport(exported))
+        if (FollowsExport(commit.Options))
         {
             _xgpNextNumber = commit.NextNumber;
             RebuildXgpOptions();
         }
 
-        await Settings.WriteAsync("xg_xgpPattern", _xgpPersistedPattern);
-        await Settings.WriteAsync("xg_xgpLastNumber", _xgpPersistedLastNumber.ToString());
-        await Settings.WriteAsync("xg_xgpSuffixLength", exported.SuffixLength.ToString());
-        // The legacy prefix key is read-once (migration input only) — clear
-        // it so it can never shadow the persisted pattern again.
-        await Settings.RemoveAsync("xg_xgpPrefix");
+        await _numbering.CheckpointAsync(record => record.WithCommit(commit), currentInstance: null);
         StateHasChanged();
     }
 

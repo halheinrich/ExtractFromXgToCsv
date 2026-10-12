@@ -130,6 +130,7 @@ internal static class HomeStoragePlan
 {
     public const string OutputFormatKey = "xg_outputFormat";
     public const string FolderPathKey = "xg_folderPath";
+    public const string NumberingKey = "xg_xgpNumbering";
     public const string XgpPatternKey = "xg_xgpPattern";
     public const string XgpPrefixKey = "xg_xgpPrefix";
     public const string XgpLastNumberKey = "xg_xgpLastNumber";
@@ -140,24 +141,65 @@ internal static class HomeStoragePlan
     public const string LastFolderHintKey = "xg_lastFolderHint";
 
     /// <summary>
-    /// Home's first-render restore: each of its keys answered from
-    /// <paramref name="stored"/>, or absent. The legacy prefix is read only
-    /// when no pattern is stored.
+    /// The numbering record's document as it is stored, restated here as the
+    /// test's oracle: a numbering, an optional mark, and the owed jobs, given
+    /// as their stored JSON objects.
     /// </summary>
-    public static void ExpectHomeRestore(this BrowserStoragePlan plan, Dictionary<string, string>? stored = null)
+    public static string NumberingDocument(
+        string pattern, int lastNumber, int suffixLength, (string Instance, int Number)? mark = null, params string[] owed) =>
+        "{\"version\":1,"
+        + $"\"numbering\":{{\"pattern\":\"{pattern}\",\"lastNumber\":{lastNumber},\"suffixLength\":{suffixLength}}},"
+        + (mark is { } m ? $"\"mark\":{{\"instance\":\"{m.Instance}\",\"number\":{m.Number}}}," : string.Empty)
+        + $"\"owed\":[{string.Join(",", owed)}]}}";
+
+    /// <summary>An owed job as the numbering record stores it.</summary>
+    public static string OwedJob(string jobId, string instance, string pattern, int startNumber, int suffixLength, string folder) =>
+        $"{{\"jobId\":\"{jobId}\",\"instance\":\"{instance}\","
+        + $"\"options\":{{\"namePattern\":\"{pattern}\",\"startNumber\":{startNumber},\"suffixLength\":{suffixLength}}},"
+        + $"\"folder\":\"{folder.Replace(@"\", @"\\")}\"}}";
+
+    /// <summary>
+    /// Home's first-render restore: each of its keys answered from
+    /// <paramref name="stored"/>, or absent. While no numbering document is
+    /// stored, the keys it replaced are read — the legacy prefix only when no
+    /// pattern is — and when they hold anything, the record they migrate to
+    /// is written as <paramref name="migratedDocument"/> and the keys that
+    /// held something are removed.
+    /// </summary>
+    public static void ExpectHomeRestore(
+        this BrowserStoragePlan plan, Dictionary<string, string>? stored = null, string? migratedDocument = null)
     {
         BrowserStorageReadAnswer Answer(string key) =>
             stored is not null && stored.TryGetValue(key, out var value)
                 ? BrowserStorageReadAnswer.Stored(value)
                 : BrowserStorageReadAnswer.Absent;
+        bool Holds(string key) => stored is not null && stored.ContainsKey(key);
 
         plan.ExpectRead(BrowserStorageArea.Local, OutputFormatKey, Answer(OutputFormatKey));
         plan.ExpectRead(BrowserStorageArea.Local, FolderPathKey, Answer(FolderPathKey));
-        plan.ExpectRead(BrowserStorageArea.Local, XgpPatternKey, Answer(XgpPatternKey));
-        if (stored is null || !stored.ContainsKey(XgpPatternKey))
-            plan.ExpectRead(BrowserStorageArea.Local, XgpPrefixKey, Answer(XgpPrefixKey));
-        plan.ExpectRead(BrowserStorageArea.Local, XgpLastNumberKey, Answer(XgpLastNumberKey));
-        plan.ExpectRead(BrowserStorageArea.Local, XgpSuffixLengthKey, Answer(XgpSuffixLengthKey));
+        plan.ExpectRead(BrowserStorageArea.Local, NumberingKey, Answer(NumberingKey));
+        if (!Holds(NumberingKey))
+        {
+            var legacy = new List<string> { XgpPatternKey };
+            if (!Holds(XgpPatternKey))
+                legacy.Add(XgpPrefixKey);
+            legacy.Add(XgpLastNumberKey);
+            legacy.Add(XgpSuffixLengthKey);
+            foreach (var key in legacy)
+                plan.ExpectRead(BrowserStorageArea.Local, key, Answer(key));
+
+            var held = legacy.Where(Holds).ToList();
+            if (held.Count > 0)
+            {
+                plan.ExpectWrite(BrowserStorageArea.Local, NumberingKey,
+                    migratedDocument ?? throw new ArgumentException(
+                        "The legacy keys hold a numbering, so the test states the document it migrates to.",
+                        nameof(migratedDocument)),
+                    BrowserStorageWriteAnswer.Succeeded);
+                foreach (var key in held)
+                    plan.ExpectRemove(BrowserStorageArea.Local, key, BrowserStorageWriteAnswer.Succeeded);
+            }
+        }
         plan.ExpectRead(BrowserStorageArea.Local, XgpAnonymizeKey, Answer(XgpAnonymizeKey));
     }
 
@@ -166,10 +208,26 @@ internal static class HomeStoragePlan
     {
         foreach (var key in new[]
                  {
-                     OutputFormatKey, FolderPathKey, XgpPatternKey, XgpPrefixKey,
+                     OutputFormatKey, FolderPathKey, NumberingKey, XgpPatternKey, XgpPrefixKey,
                      XgpLastNumberKey, XgpSuffixLengthKey, XgpAnonymizeKey,
                  })
             plan.ExpectRead(BrowserStorageArea.Local, key, BrowserStorageReadAnswer.Refused);
+    }
+
+    /// <summary>
+    /// One checkpoint of the numbering record: its fresh read, answered
+    /// <paramref name="before"/>, then its one write of
+    /// <paramref name="written"/>, answered <paramref name="answer"/>
+    /// (stored, by default).
+    /// </summary>
+    public static void ExpectNumberingCheckpoint(
+        this BrowserStoragePlan plan,
+        BrowserStorageReadAnswer before,
+        string written,
+        BrowserStorageWriteAnswer? answer = null)
+    {
+        plan.ExpectRead(BrowserStorageArea.Local, NumberingKey, before);
+        plan.ExpectWrite(BrowserStorageArea.Local, NumberingKey, written, answer ?? BrowserStorageWriteAnswer.Succeeded);
     }
 
     /// <summary>The Local panel's restore — its output path.</summary>
@@ -190,9 +248,9 @@ internal static class HomeStoragePlan
     /// per context.
     /// </summary>
     public static void ExpectHomeVisit(
-        this BrowserStoragePlan plan, string mode, Dictionary<string, string>? stored = null)
+        this BrowserStoragePlan plan, string mode, Dictionary<string, string>? stored = null, string? migratedDocument = null)
     {
-        plan.ExpectHomeRestore(stored);
+        plan.ExpectHomeRestore(stored, migratedDocument);
         plan.ExpectModePanelRestore(mode);
         plan.ExpectFilterPanelMount();
     }

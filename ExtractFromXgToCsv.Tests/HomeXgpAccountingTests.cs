@@ -49,18 +49,14 @@ public class HomeXgpAccountingTests : BunitContext
         return processing;
     }
 
-    /// <summary>The writes Home's handler makes for an export ending at <paramref name="lastNumber"/>.</summary>
-    private void ExpectTheNumberingPersisted(string pattern, int lastNumber, int suffixLength)
-    {
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, pattern,
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpLastNumberKey, lastNumber.ToString(),
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, suffixLength.ToString(),
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectRemove(BrowserStorageArea.Local, HomeStoragePlan.XgpPrefixKey,
-            BrowserStorageWriteAnswer.Succeeded);
-    }
+    /// <summary>
+    /// The one checkpoint Home's handler makes for an export ending at
+    /// <paramref name="lastNumber"/>: a fresh read of the record, then the
+    /// whole document in one write.
+    /// </summary>
+    private void ExpectTheNumberingPersisted(string pattern, int lastNumber, int suffixLength) =>
+        Storage.ExpectNumberingCheckpoint(
+            BrowserStorageReadAnswer.Absent, HomeStoragePlan.NumberingDocument(pattern, lastNumber, suffixLength));
 
     private static XgpExportOptions PanelOptions(IRenderedComponent<Home> cut) =>
         cut.FindComponent<LocalModePanel>().Instance.XgpOptions;

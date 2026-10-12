@@ -13,11 +13,11 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// bUnit tests for the Home-owned XGP name-pattern UI: the pattern textbox
 /// binding, the registry-driven insert-token dropdown, the live preview /
-/// inline error branch, the one-time <c>xg_xgpPrefix</c> →
-/// <c>xg_xgpPattern</c> storage migration, and the post-export persistence
-/// (write the pattern key, remove the legacy key). Naming mechanics
-/// themselves are owned by the engine suites — here only the wiring is
-/// pinned.
+/// inline error branch, the one-time migration of the keys the numbering
+/// record replaced (the legacy prefix included) into that record, and the
+/// post-export persistence (one checkpoint of the record — the umbrella's
+/// <c>SPEC-notices.md</c> §7.5). Naming mechanics themselves are owned by the
+/// engine suites — here only the wiring is pinned.
 /// <para>
 /// Storage is planned (<see cref="BrowserStoragePlan"/>): the migration reads
 /// and the export's writes are the subject, and every other call the page
@@ -36,9 +36,10 @@ public class HomeXgpPatternTests : BunitContext
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
     }
 
-    private IRenderedComponent<Home> RenderHomeWithXgpSelected(Dictionary<string, string>? stored = null)
+    private IRenderedComponent<Home> RenderHomeWithXgpSelected(
+        Dictionary<string, string>? stored = null, string? migratedDocument = null)
     {
-        _storage.ExpectHomeVisit("Web", stored);
+        _storage.ExpectHomeVisit("Web", stored, migratedDocument);
         _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
             BrowserStorageWriteAnswer.Succeeded);
         _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.CsvFileNameKey, "decisions.zip",
@@ -126,12 +127,13 @@ public class HomeXgpPatternTests : BunitContext
     {
         // Pre-pattern persistence: prefix "quiz", last exported number 42,
         // no xg_xgpPattern key. The migrated pattern must be "quiz{n}" AND
-        // count as the persisted pattern, so the counter continues at 43.
+        // count as the recorded pattern, so the counter continues at 43. The
+        // migration writes the numbering record and removes the keys it read.
         var cut = RenderHomeWithXgpSelected(new()
         {
             [HomeStoragePlan.XgpPrefixKey] = "quiz",
             [HomeStoragePlan.XgpLastNumberKey] = "42",
-        });
+        }, HomeStoragePlan.NumberingDocument("quiz{n}", 42, 3));
 
         Assert.Equal("quiz{n}", cut.Find("#xgpPattern").GetAttribute("value"));
         var options = cut.FindComponent<WebModePanel>().Instance.XgpOptions;
@@ -150,29 +152,55 @@ public class HomeXgpPatternTests : BunitContext
         {
             [HomeStoragePlan.XgpPrefixKey] = "qu{iz",
             [HomeStoragePlan.XgpLastNumberKey] = "42",
-        });
+        }, HomeStoragePlan.NumberingDocument("pos{n}", 42, 3));
 
         var options = cut.FindComponent<WebModePanel>().Instance.XgpOptions;
         Assert.Equal(XgpExportOptions.DefaultNamePattern, options.NamePattern);
-        // The fallback counts as the persisted pattern too — the counter
+        // The fallback counts as the recorded pattern too — the counter
         // still continues rather than resetting underneath the user.
         Assert.Equal(43, options.StartNumber);
         _storage.Verify();
     }
 
     [Fact]
-    public async Task Export_PersistsThePattern_AndRemovesTheLegacyPrefixKey()
+    public void TheThreeKeys_MigrateToTheRecord_AndAreRemovedOnceItIsStored()
+    {
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.XgpPatternKey] = "m{n}",
+            [HomeStoragePlan.XgpLastNumberKey] = "7",
+            [HomeStoragePlan.XgpSuffixLengthKey] = "2",
+        }, HomeStoragePlan.NumberingDocument("m{n}", 7, 2));
+
+        var options = cut.FindComponent<WebModePanel>().Instance.XgpOptions;
+        Assert.Equal(new XgpExportOptions { NamePattern = "m{n}", StartNumber = 8, SuffixLength = 2 }, options);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// A stored record is what the page starts from: the keys it replaced are
+    /// not read again, whatever they still hold.
+    /// </summary>
+    [Fact]
+    public void AStoredRecord_IsReadAlone()
+    {
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.NumberingKey] = HomeStoragePlan.NumberingDocument("r{n}", 12, 4),
+        });
+
+        var options = cut.FindComponent<WebModePanel>().Instance.XgpOptions;
+        Assert.Equal(new XgpExportOptions { NamePattern = "r{n}", StartNumber = 13, SuffixLength = 4 }, options);
+        _storage.Verify();
+    }
+
+    [Fact]
+    public async Task Export_RecordsTheNumbering_AsOneDocument_InOneWrite()
     {
         var cut = RenderHomeWithXgpSelected();
         var webPanel = cut.FindComponent<WebModePanel>();
-        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, "pos{n}",
-            BrowserStorageWriteAnswer.Succeeded);
-        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpLastNumberKey, "5",
-            BrowserStorageWriteAnswer.Succeeded);
-        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "3",
-            BrowserStorageWriteAnswer.Succeeded);
-        _storage.ExpectRemove(BrowserStorageArea.Local, HomeStoragePlan.XgpPrefixKey,
-            BrowserStorageWriteAnswer.Succeeded);
+        _storage.ExpectNumberingCheckpoint(
+            BrowserStorageReadAnswer.Absent, HomeStoragePlan.NumberingDocument("pos{n}", 5, 3));
 
         await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(
             new XgpExportCommit(webPanel.Instance.XgpOptions, 5)));

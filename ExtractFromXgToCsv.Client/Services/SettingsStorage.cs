@@ -52,11 +52,17 @@ internal sealed class SettingsStorage(BrowserStorage storage, BrowserStorageCond
     /// Writes <paramref name="value"/> under <paramref name="key"/>. A refusal
     /// is reported and the call returns normally.
     /// </summary>
-    public async Task WriteAsync(string key, string value)
+    /// <returns>
+    /// Whether the browser stored the value — for a caller whose next step
+    /// depends on it, such as removing what a stored value replaces. Most
+    /// callers need not ask.
+    /// </returns>
+    public async Task<bool> WriteAsync(string key, string value)
     {
         var written = await storage.WriteAsync(BrowserStorageArea.Local, key, value);
         if (written.IsRefused)
             condition.ReportRefused(written.Refusal);
+        return written.Succeeded;
     }
 
     /// <summary>
