@@ -261,7 +261,15 @@
 
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
-    [Parameter] public EventCallback<int> OnXgpExported { get; set; }
+
+    /// <summary>
+    /// Raised with an XGP run's commit — the files it wrote and the options it
+    /// captured — when the run ends, completed, cancelled or failed, whatever
+    /// the panel shows: the host owns the numbering those files used.
+    /// EditorRequired: a silently splatted binding here would lose the
+    /// accounting.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback<XgpExportCommit> OnXgpExported { get; set; }
 
     private bool XgpRunBlocked =>
         OutputFormat == OutputFormat.Xgp && !XgpOptions.TryValidate(out _);
@@ -482,14 +490,13 @@
         }
         StateHasChanged();
 
-        // The job's own accounting, whatever is on screen: advance the export
-        // counter by what actually landed on disk, in the format the job ran.
-        // Cancelled runs count too — their files were written (the processor
-        // reports per file, so TotalRows is exact); error terminations don't
-        // advance anything.
-        if (request.OutputFormat == OutputFormat.Xgp && terminal is { ErrorMessage: null } done)
+        // The job's own accounting, whatever is on screen: the commit an XGP
+        // run's terminal snapshot carries, taken from the run's record —
+        // completed, cancelled and failed alike, since a failed run's files
+        // were written too. Only an XGP run carries one.
+        if (terminal?.XgpCommit is { } commit)
         {
-            await OnXgpExported.InvokeAsync(done.TotalRows);
+            await OnXgpExported.InvokeAsync(commit);
         }
     }
 

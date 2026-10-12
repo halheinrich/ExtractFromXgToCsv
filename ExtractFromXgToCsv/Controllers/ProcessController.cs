@@ -37,10 +37,10 @@ public class ProcessController(
             var progress = new InlineProgress(p => entry.Progress = p);
 
             // The run's record, held here so the two terminal snapshots
-            // this runner builds itself can carry it. Neither can take it from
-            // the last snapshot the run reported: a run-ending exception
-            // reports nothing, and the streaming pathways report only every
-            // tenth file, so the last report can trail the record.
+            // this runner builds itself carry its skips and its XGP commit.
+            // Neither can take them from the last snapshot the run reported: a
+            // run-ending exception reports nothing, and the pathways report
+            // only every tenth file, so the last report can trail the record.
             var record = new RunRecord();
 
             try
@@ -80,19 +80,14 @@ public class ProcessController(
             }
             catch (OperationCanceledException)
             {
-                entry.Progress.Cancelled = true;
-                entry.Progress.Complete = true;
-                entry.Progress.Skipped = record.Skips;
+                // A new snapshot, swapped in whole: a status read never sees
+                // one half-made terminal.
+                entry.Progress = record.CancelledSnapshot(entry.Progress);
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Job {JobId} failed", jobId);
-                entry.Progress = new ProcessingProgress
-                {
-                    Complete = true,
-                    ErrorMessage = ex.Message,
-                    Skipped = record.Skips,
-                };
+                entry.Progress = record.FailedSnapshot(ex.Message);
             }
         });
 

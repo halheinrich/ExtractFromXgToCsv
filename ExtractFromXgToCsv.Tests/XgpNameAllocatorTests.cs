@@ -28,6 +28,27 @@ public class XgpNameAllocatorTests
     private static DecisionRow Row(int moveNumber = 1) => TestRecords.Row(TestRecords.CheckerPlay(
         id: new XgDecisionId("t.xg", Game: 1, MoveNumber: moveNumber, IsCube: false)));
 
+    /// <summary>
+    /// The count a run's <see cref="XgpExportCommit"/> carries: committed
+    /// slots only, so a peeked name that was never committed — a skipped
+    /// decision — is no number used.
+    /// </summary>
+    [Fact]
+    public void CommittedCount_CountsCommitsAndNotPeeks()
+    {
+        var allocator = Create("pos{n}");
+        Assert.Equal(0, allocator.CommittedCount);
+
+        allocator.Peek(Row(1));
+        allocator.Peek(Row(1));
+        Assert.Equal(0, allocator.CommittedCount);
+
+        allocator.Commit(Row(1));
+        allocator.Next(Row(2));
+        Assert.Equal(2, allocator.CommittedCount);
+        Assert.Equal("pos003.xgp", allocator.Peek(Row(3)));
+    }
+
     [Fact]
     public void DuplicateBaseNames_GetWindowsStyleSuffixes()
     {

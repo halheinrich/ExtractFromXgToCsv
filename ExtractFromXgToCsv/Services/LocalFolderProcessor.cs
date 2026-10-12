@@ -249,11 +249,6 @@ public class LocalFolderProcessor
     /// <param name="record">The run's record.</param>
     /// <param name="run">The run's progress, reported as the walk goes.</param>
     /// <param name="retainBytes">Whether the read keeps each file's exact bytes, for a pathway that copies a source verbatim.</param>
-    /// <param name="reportEachFileBeforeCancellation">
-    /// Whether to report before every file and before its cancellation check
-    /// (the XGP pathway, whose last report the client's numbering reads),
-    /// rather than every tenth file after it.
-    /// </param>
     /// <param name="stage">
     /// Converts a decoded file, by its bare name, to its whole contribution.
     /// A failure is the file's conversion skip.
@@ -269,7 +264,6 @@ public class LocalFolderProcessor
         RunRecord record,
         RunProgress run,
         bool retainBytes,
-        bool reportEachFileBeforeCancellation,
         Func<XgSourceDecoded, string, TStaged> stage,
         Func<TStaged, string, Task> commit,
         CancellationToken cancellationToken)
@@ -279,17 +273,9 @@ public class LocalFolderProcessor
             var file = files[i];
             var fileName = Path.GetFileName(file);
 
-            if (reportEachFileBeforeCancellation)
-            {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (i % ReportEvery == 0)
                 run.Report(i, fileName);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            else
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (i % ReportEvery == 0)
-                    run.Report(i, fileName);
-            }
 
             // The one read of this file. A failed read is the file's read
             // skip; a cancellation propagates out of the read, which no catch
@@ -357,7 +343,6 @@ public class LocalFolderProcessor
         await ForEachFileAsync(
             folderPath, files, record, run,
             retainBytes: false,
-            reportEachFileBeforeCancellation: false,
             stage: (decoded, fileName) => filtering.IterateFile(decoded.File, fileName).ToList(),
             commit: async (rows, _) =>
             {
@@ -395,7 +380,6 @@ public class LocalFolderProcessor
         await ForEachFileAsync(
             folderPath, files, record, run,
             retainBytes: false,
-            reportEachFileBeforeCancellation: false,
             stage: (decoded, fileName) => filtering.IterateFileDiagrams(decoded.File, fileName).ToList(),
             commit: (items, _) =>
             {
@@ -429,9 +413,10 @@ public class LocalFolderProcessor
     /// <para>
     /// The allocator's Peek/Commit split keeps the counter honest: a
     /// decision's slot is consumed only once its file is written, so a
-    /// decision whose preparation failed — an export skip — burns no number,
-    /// and a write that fails ends the run with the files already written
-    /// counted.
+    /// decision whose preparation failed — an export skip — burns no number.
+    /// The run's record holds its <see cref="XgpExportCommit"/>, replaced as
+    /// each file is written, so a run that ends — completed, cancelled, or by
+    /// a write that failed — accounts for exactly the files it wrote.
     /// </para>
     /// <para>
     /// <paramref name="runRecord"/> as on <see cref="ProcessAsync"/>.
@@ -460,6 +445,10 @@ public class LocalFolderProcessor
         var files = DiscoverInputFiles(folderPath);
         var filtering = FilteringFor(filterSet);
 
+        // The run's commit, from here on the accounting of every file it
+        // writes, whatever ends it.
+        record.Commit(new XgpExportCommit(options, allocator.CommittedCount));
+
         Directory.CreateDirectory(outputPath);
 
         var run = new RunProgress(files.Count, progress, record);
@@ -468,11 +457,6 @@ public class LocalFolderProcessor
             // A source copied verbatim needs its exact bytes; an anonymized
             // copy is re-emitted from the decoded file instead.
             retainBytes: !anonymize,
-            // The client persists its numbering counter from the last
-            // reported row count, so a cancelled job must leave an exact
-            // count behind: report on every file, before its cancellation
-            // check, and keep a file's decision writes non-cancellable.
-            reportEachFileBeforeCancellation: true,
             stage: (decoded, fileName) => (Source: decoded, Rows: filtering.IterateFile(decoded.File, fileName).ToList()),
             commit: async (staged, file) =>
             {
@@ -492,10 +476,13 @@ public class LocalFolderProcessor
                     }
 
                     // The commit: the write, outside the decision's boundary,
-                    // so a failure fails the run. The slot is consumed only
-                    // once the file is written.
+                    // so a failure fails the run. The slot is consumed, and
+                    // the run's commit counts the file, only once it is
+                    // written. Not cancellable: a file is the cancellation's
+                    // granularity.
                     await File.WriteAllBytesAsync(Path.Combine(outputPath, allocator.Peek(row)), payload);
                     allocator.Commit(row);
+                    record.Commit(new XgpExportCommit(options, allocator.CommittedCount));
                     run.Add(1);
                 }
             },
@@ -562,7 +549,6 @@ public class LocalFolderProcessor
         await ForEachFileAsync(
             folderPath, files, record, run,
             retainBytes: false,
-            reportEachFileBeforeCancellation: false,
             // Each decision becomes a Problem/Solution pair — the reader
             // considers the problem slide, then advances to the solution
             // slide for the answer. The diagram orders and scores the
@@ -606,7 +592,8 @@ public class LocalFolderProcessor
 
     /// <summary>
     /// One run's progress: its clock and row count, and the snapshots it
-    /// reports, each carrying the run's skips as they stand.
+    /// reports, each carrying the run's record — its skips and its XGP commit
+    /// — as it stands.
     /// </summary>
     private sealed class RunProgress(int total, IProgress<ProcessingProgress> progress, RunRecord record)
     {
@@ -631,6 +618,7 @@ public class LocalFolderProcessor
                 ElapsedSec = elapsed,
                 FilesPerSec = elapsed > 0 ? (int)(index / elapsed) : 0,
                 Skipped = record.Skips,
+                XgpCommit = record.XgpCommit,
             });
         }
 
@@ -654,6 +642,7 @@ public class LocalFolderProcessor
                 ElapsedSec = elapsed,
                 FilesPerSec = elapsed > 0 ? (int)(total / elapsed) : 0,
                 Skipped = record.Skips,
+                XgpCommit = record.XgpCommit,
             };
         }
     }

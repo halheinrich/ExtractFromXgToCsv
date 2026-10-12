@@ -179,6 +179,10 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         Assert.Empty(record.Skips);
         Assert.True(File.Exists(Path.Combine(outputDir, "pos001.xgp")));
         Assert.Single(Directory.GetFiles(outputDir, "*.xgp"));
+
+        // The run's commit — what the job runner's error snapshot carries to
+        // the client's numbering — counts the file it wrote before the failure.
+        Assert.Equal(new XgpExportCommit(new XgpExportOptions(), 1), record.XgpCommit);
     }
 
     // ── An XGP payload whose preparation fails is a decision skip ───────────
@@ -213,6 +217,7 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         var expected = Enumerable.Range(1, rows.Count - 1).Select(n => $"pos{n:D3}.xgp");
         Assert.Equal(expected, Directory.GetFiles(outputDir, "*.xgp").Select(Path.GetFileName).Order(StringComparer.Ordinal));
         Assert.Equal(rows.Count - 1, progress.Reports[^1].TotalRows);
+        Assert.Equal(new XgpExportCommit(new XgpExportOptions(), rows.Count - 1), progress.Reports[^1].XgpCommit);
 
         // And the decision after the skipped one is the second file: the
         // third decision, re-read, is what pos002 holds.
@@ -241,9 +246,34 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
             cts.Token));
 
         Assert.Empty(record.Skips);
+        Assert.Null(record.XgpCommit);
         Assert.Equal(
             good.Concat(second).Select(r => r.ToCsvLine()),
             File.ReadAllLines(output).Skip(1));
+    }
+
+    [Fact]
+    public async Task Xgp_ACancellation_RecordsNoSkip_AndItsCommitCountsEveryFileWritten()
+    {
+        Copy(GoodName);
+        Copy(FailingName);
+        Copy(ThirdName);
+        var good = FixtureRows(GoodName);
+        var second = FixtureRows(FailingName);
+        var outputDir = Path.Combine(_folder, "positions");
+        var options = new XgpExportOptions { NamePattern = "c{n}", StartNumber = 7 };
+        var record = new RunRecord();
+        using var cts = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor().ProcessXgpAsync(
+            _folder, outputDir, CancelAtCall.Set(good.Count + 1, cts), options, new FilterConfig(),
+            new RecordingProgress(), runRecord: record, cancellationToken: cts.Token));
+
+        // The last progress report was made before the first file; the commit
+        // is the record's, and counts both files the run wrote.
+        Assert.Empty(record.Skips);
+        Assert.Equal(new XgpExportCommit(options, good.Count + second.Count), record.XgpCommit);
+        Assert.Equal(good.Count + second.Count, Directory.GetFiles(outputDir, "*.xgp").Length);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

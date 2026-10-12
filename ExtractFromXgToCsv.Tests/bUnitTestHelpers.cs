@@ -210,6 +210,13 @@ internal sealed class CapturingProcessHandler(
 {
     private static readonly JsonSerializerOptions _opts = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// <paramref name="snapshot"/> as the status endpoint writes it — the
+    /// terminal a test hands this server, stated as the typed snapshot rather
+    /// than as hand-written JSON.
+    /// </summary>
+    public static string Terminal(ProcessingProgress snapshot) => JsonSerializer.Serialize(snapshot, _opts);
+
     private readonly TaskCompletionSource _statusReached =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource? _statusGate;

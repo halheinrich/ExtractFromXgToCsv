@@ -94,6 +94,8 @@ public class LocalFolderProcessorXgpTests
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.Equal(expected.Count, lastProgress.TotalRows);
+            // The run's commit: every file, under the options it was given.
+            Assert.Equal(new XgpExportCommit(options, expected.Count), lastProgress.XgpCommit);
 
             var written = Directory.GetFiles(outputDir, "*.xgp")
                 .Select(Path.GetFileName)

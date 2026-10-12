@@ -16,7 +16,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// Wire test for the Web-mode .xgp export chain:
 /// file selection → filter apply → Download click → <c>downloadFile</c>
 /// JS interop invoked with a zip of per-decision .xgp entries →
-/// <c>OnXgpExported</c> raised with the exported count. Real fixture bytes
+/// <c>OnXgpExported</c> raised with the download's commit. Real fixture bytes
 /// travel the whole chain; only the JS boundary is faked (bUnit JSInterop).
 /// </summary>
 public class WebModePanelXgpExportTests : BunitContext
@@ -32,7 +32,7 @@ public class WebModePanelXgpExportTests : BunitContext
     [Fact]
     public async Task SelectExportDownload_InvokesDownloadFileWithZip_AndRaisesOnXgpExported()
     {
-        int exportedCount = -1;
+        XgpExportCommit? commit = null;
         // The default pattern — pins that "pos{n}" still names entries
         // byte-identically to the pre-pattern prefix naming.
         var options = new XgpExportOptions
@@ -48,7 +48,7 @@ public class WebModePanelXgpExportTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Xgp)
             .Add(c => c.FilterInEffect, (FilterConfig?)null)
             .Add(c => c.XgpOptions, options)
-            .Add(c => c.OnXgpExported, (int n) => exportedCount = n));
+            .Add(c => c.OnXgpExported, (XgpExportCommit c) => commit = c));
 
         var fixtureBytes = FixtureHelper.ReadFixture(XgFixture);
         // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
@@ -72,7 +72,7 @@ public class WebModePanelXgpExportTests : BunitContext
         Assert.Equal(expectedCount, zip.Entries.Count);
         Assert.Equal("pos001.xgp", zip.Entries[0].FullName);
 
-        Assert.Equal(expectedCount, exportedCount);
+        Assert.Equal(new XgpExportCommit(options, expectedCount), commit);
     }
 
     [Fact]

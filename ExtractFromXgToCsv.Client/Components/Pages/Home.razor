@@ -566,22 +566,36 @@
     }
 
     /// <summary>
-    /// Raised by a panel after a successful .xgp export of
-    /// <paramref name="count"/> decisions. Advances and persists the
-    /// numbering counter so the next batch continues where this one ended.
+    /// The one accounting handler both modes' panels raise: an XGP export
+    /// committed <see cref="XgpExportCommit.Count"/> files under the options
+    /// it captured — a Local run when it ends, completed, cancelled or failed;
+    /// a Web download at its successful hand-off. Persists the numbering those
+    /// files used, so the next export under the same pattern continues where
+    /// this one ended. An export that committed nothing advances nothing.
     /// </summary>
-    private async Task OnXgpExported(int count)
+    /// <remarks>
+    /// Everything persisted comes from <paramref name="commit"/>, never from
+    /// the controls: the user may have changed the pattern or the numbers while
+    /// the export ran, and the files on disk were named by what it captured.
+    /// For the same reason the controls advance only while they still show
+    /// exactly those options; a newer choice in them stands.
+    /// </remarks>
+    private async Task OnXgpExported(XgpExportCommit commit)
     {
-        if (count <= 0) return;
+        if (commit.Count <= 0) return;
 
-        _xgpPersistedLastNumber = _xgpOptions.StartNumber + count - 1;
-        _xgpPersistedPattern = _xgpOptions.NamePattern;
-        _xgpNextNumber = _xgpPersistedLastNumber + 1;
-        RebuildXgpOptions();
+        var exported = commit.Options;
+        _xgpPersistedLastNumber = commit.NextNumber - 1;
+        _xgpPersistedPattern = exported.NamePattern;
+        if (_xgpOptions == exported)
+        {
+            _xgpNextNumber = commit.NextNumber;
+            RebuildXgpOptions();
+        }
 
         await Settings.WriteAsync("xg_xgpPattern", _xgpPersistedPattern);
         await Settings.WriteAsync("xg_xgpLastNumber", _xgpPersistedLastNumber.ToString());
-        await Settings.WriteAsync("xg_xgpSuffixLength", _xgpOptions.SuffixLength.ToString());
+        await Settings.WriteAsync("xg_xgpSuffixLength", exported.SuffixLength.ToString());
         // The legacy prefix key is read-once (migration input only) — clear
         // it so it can never shadow the persisted pattern again.
         await Settings.RemoveAsync("xg_xgpPrefix");

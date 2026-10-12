@@ -89,6 +89,39 @@ public class ProcessEndpointTests : IDisposable
         AssertTheMalformedFileIsTheOneSkip(terminal);
     }
 
+    /// <summary>
+    /// The accounting case (halheinrich/backgammon#374): within one source
+    /// file a decision is written, and the next write fails. The run fails,
+    /// the failed write is not a skip, and the error snapshot the runner
+    /// builds itself — no report followed the first write — carries the
+    /// commit of the one file written, under the options the run was sent.
+    /// </summary>
+    [Fact]
+    public async Task XgpRunWhoseSecondWriteFails_ErrorSnapshotCarriesTheFirstFilesCommit_AndNoSkip()
+    {
+        File.Copy(
+            Path.Combine(FixtureHelper.FixtureDir, "MTCH4064.xg"),
+            Path.Combine(_folder, "MTCH4064.xg"));
+        var outputDir = Path.Combine(_folder, "positions");
+        var options = new XgpExportOptions { NamePattern = "p{n}", StartNumber = 40, SuffixLength = 2 };
+        // The second position's name is taken by a folder, so its write fails.
+        Directory.CreateDirectory(Path.Combine(outputDir, "p41.xgp"));
+
+        var terminal = await RunToTerminalAsync(new ProcessRequest
+        {
+            FolderPath = _folder,
+            OutputPath = outputDir,
+            Filters = new FilterConfig(),
+            OutputFormat = OutputFormat.Xgp,
+            XgpOptions = options,
+        });
+
+        Assert.False(string.IsNullOrEmpty(terminal.ErrorMessage));
+        Assert.Empty(terminal.Skipped);
+        Assert.Equal(new XgpExportCommit(options, 1), terminal.XgpCommit);
+        Assert.True(File.Exists(Path.Combine(outputDir, "p40.xgp")));
+    }
+
     private static void AssertTheMalformedFileIsTheOneSkip(ProcessingProgress terminal)
     {
         var skip = Assert.Single(terminal.Skipped);

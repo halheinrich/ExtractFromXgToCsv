@@ -67,6 +67,21 @@ public class ProcessingProgress
 
     private SkipRecord _skipped = SkipRecord.Empty;
 
+    /// <summary>
+    /// For an XGP run, what it has committed so far — the files written to
+    /// the output folder, and the naming options it captured; on a terminal
+    /// snapshot, completed, cancelled or failed alike, the run's whole commit.
+    /// <see langword="null"/> for every other format.
+    /// </summary>
+    /// <remarks>
+    /// The authoritative accounting the client advances its numbering from,
+    /// never reconstructed from <see cref="TotalRows"/> or any other progress
+    /// figure: the job runner takes it from the run's own record, so a run that
+    /// ends between two progress reports, or by an exception, still accounts
+    /// for every file it wrote.
+    /// </remarks>
+    public XgpExportCommit? XgpCommit { get; set; }
+
     /// <summary>Percent complete, derived from <see cref="Current"/> over <see cref="Total"/>.</summary>
     public int PercentComplete => Total == 0 ? 0 : (int)((Current / (double)Total) * 100);
 }

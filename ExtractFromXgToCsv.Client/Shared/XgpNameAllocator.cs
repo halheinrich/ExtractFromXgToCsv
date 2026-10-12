@@ -14,11 +14,12 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <para>
 /// The <see cref="Peek"/>/<see cref="Commit"/> split is load-bearing: the
 /// Local-mode processor computes a decision's name before writing it and
-/// consumes the slot only after the write succeeds, so a failed decision
-/// doesn't burn a number (the client persists its counter from the reported
-/// row total). The Web-mode zip builder uses <see cref="Next"/> — any
-/// failure there aborts the whole zip, so there is no partial-success state
-/// to protect.
+/// consumes the slot only after the write succeeds, so a decision that was
+/// skipped, or whose write ended the run, doesn't burn a number.
+/// <see cref="CommittedCount"/> — the numbers a run has used — is the count
+/// the run's <see cref="XgpExportCommit"/> carries to the persisted counter.
+/// The Web-mode zip builder uses <see cref="Next"/> — any failure there
+/// aborts the whole zip, so there is no partial-success state to protect.
 /// </para>
 ///
 /// <para>
@@ -100,6 +101,12 @@ public sealed class XgpNameAllocator
         _baseNameCounts[baseName] = attempt + 1;
         _index++;
     }
+
+    /// <summary>
+    /// The slots committed so far — the number of names this allocator has
+    /// issued, and so the count of <c>{n}</c> values the run has used.
+    /// </summary>
+    public int CommittedCount => _index;
 
     /// <summary><see cref="Peek"/> then <see cref="Commit"/> in one call.</summary>
     public string Next(DecisionRow row)

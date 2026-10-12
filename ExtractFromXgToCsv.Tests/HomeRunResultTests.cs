@@ -33,8 +33,15 @@ public class HomeRunResultTests : BunitContext
     private const string OutputFolder = @"D:\xg\positions";
 
     private readonly BrowserStoragePlan _storage;
-    private readonly CapturingProcessHandler _processing =
-        new("{\"complete\":true,\"totalRows\":2}");
+
+    // An XGP job that wrote two positions under the default options, and says
+    // so the way the job runner does: its commit, beside the row count.
+    private readonly CapturingProcessHandler _processing = new(CapturingProcessHandler.Terminal(new ProcessingProgress
+    {
+        Complete = true,
+        TotalRows = 2,
+        XgpCommit = new XgpExportCommit(new XgpExportOptions(), 2),
+    }));
 
     public HomeRunResultTests()
     {

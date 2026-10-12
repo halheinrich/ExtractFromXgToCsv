@@ -241,7 +241,15 @@
 
     [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
-    [Parameter] public EventCallback<int> OnXgpExported { get; set; }
+
+    /// <summary>
+    /// Raised with an XGP download's commit — the entries of the archive
+    /// handed to the browser and the options the download captured — once the
+    /// hand-off has succeeded: the host owns the numbering those entries used.
+    /// EditorRequired: a silently splatted binding here would lose the
+    /// accounting.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback<XgpExportCommit> OnXgpExported { get; set; }
 
     /// <summary>
     /// Raised once per file-selection gesture — every
@@ -574,24 +582,29 @@
         if (FilterInEffect is not { } filter) return;
 
         _runError = null;
+        // What the download depends on, captured at its start: a change to
+        // the controls while it runs reinterprets nothing.
+        var format = OutputFormat;
+        var options = XgpOptions;
+        var decisions = _rowCache.FilteredRows;
         try
         {
             byte[] bytes;
             string fileName;
             string mimeType;
 
-            if (OutputFormat == OutputFormat.Xgp)
+            if (format == OutputFormat.Xgp)
             {
                 bytes = Processor.BuildXgpZip(
                     _fileBytes,
-                    _rowCache.FilteredRows,
-                    XgpOptions,
+                    decisions,
+                    options,
                     filter,
                     anonymize: XgpAnonymize);
                 fileName = string.IsNullOrWhiteSpace(_csvFileName) ? "decisions.zip" : _csvFileName;
                 mimeType = "application/zip";
             }
-            else if (OutputFormat == OutputFormat.DiagramJson)
+            else if (format == OutputFormat.DiagramJson)
             {
                 var content = Processor.BuildDiagramJson(_rowCache.FilteredDiagramRows);
                 bytes = System.Text.Encoding.UTF8.GetBytes(content);
@@ -608,8 +621,10 @@
 
             await JS.InvokeVoidAsync("downloadFile", fileName, mimeType, bytes);
 
-            if (OutputFormat == OutputFormat.Xgp)
-                await OnXgpExported.InvokeAsync(_rowCache.FilteredRows.Count);
+            // The archive holds an entry per decision — any failure fails the
+            // whole build — so the hand-off commits them all.
+            if (format == OutputFormat.Xgp)
+                await OnXgpExported.InvokeAsync(new XgpExportCommit(options, decisions.Count));
         }
         catch (Exception ex)
         {

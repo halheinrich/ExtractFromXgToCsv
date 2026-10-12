@@ -174,7 +174,8 @@ public class HomeXgpPatternTests : BunitContext
         _storage.ExpectRemove(BrowserStorageArea.Local, HomeStoragePlan.XgpPrefixKey,
             BrowserStorageWriteAnswer.Succeeded);
 
-        await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(5));
+        await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(
+            new XgpExportCommit(webPanel.Instance.XgpOptions, 5)));
 
         Assert.Equal(6, webPanel.Instance.XgpOptions.StartNumber);
         _storage.Verify();

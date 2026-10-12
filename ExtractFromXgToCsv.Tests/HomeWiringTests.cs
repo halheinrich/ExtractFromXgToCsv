@@ -1,6 +1,7 @@
 using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
+using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
@@ -478,10 +479,11 @@ public class HomeWiringTests : BunitContext
         var webPanel = cut.FindComponent<WebModePanel>();
         Assert.Equal(1, webPanel.Instance.XgpOptions.StartNumber);
 
-        // Panel reports an export of 5 decisions → counter advances to 6.
-        // What is persisted is pinned, with storage planned, in
-        // HomeXgpPatternTests.
-        await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(5));
+        // Panel reports an export of 5 decisions under the options it was
+        // handed → counter advances to 6. What is persisted is pinned, with
+        // storage planned, in HomeXgpPatternTests.
+        await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(
+            new XgpExportCommit(webPanel.Instance.XgpOptions, 5)));
 
         Assert.Equal(6, webPanel.Instance.XgpOptions.StartNumber);
     }
