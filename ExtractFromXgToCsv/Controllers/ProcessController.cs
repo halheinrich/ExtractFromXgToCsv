@@ -165,9 +165,10 @@ public partial class ProcessController(
         }
         catch (OperationCanceledException)
         {
-            // A new snapshot, recorded whole: a status read never sees one
-            // half-made terminal result.
-            jobs.Complete(job, record.CancelledSnapshot(job.Progress));
+            // A new snapshot, recorded whole and built from the last report
+            // in the same step: a status read never sees one half-made
+            // terminal result.
+            jobs.Complete(job, record.CancelledSnapshot);
         }
         catch (Exception ex)
         {

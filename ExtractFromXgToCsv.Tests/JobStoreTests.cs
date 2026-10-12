@@ -9,12 +9,13 @@ namespace ExtractFromXgToCsv.Tests;
 /// One server instance's job store (the umbrella's <c>SPEC-notices.md</c>
 /// §7.5), directly: a start is judged by its identity first — a repeat returns
 /// its disposition and starts nothing, a changed request and a retired
-/// identity are refused, and so is a start naming another instance — and only
-/// then, for XGP, by the ledger: refused while any entry runs, and unless its
-/// mark names the latest entry. A status read never removes a job; the
-/// acknowledgement releases only its result. Settling retires an identity
-/// never admitted and answers admitted for one that was. Deterministic: the
-/// launched work is the test's.
+/// identity are refused, and so is a start naming another instance, which
+/// changes nothing here — and only then, for XGP, by the ledger: refused while
+/// any entry runs, and unless its mark names the latest entry, a refusal that
+/// retires the identity. No refusal changes a disposition an identity already
+/// has. A status read never removes a job; the acknowledgement releases only
+/// its result. Settling retires an identity never admitted and answers
+/// admitted for one that was. Deterministic: the launched work is the test's.
 /// </summary>
 public class JobStoreTests
 {
@@ -147,13 +148,64 @@ public class JobStoreTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void AStartNamingAnotherInstance_IsRefused_BeforeItsIdentityIsJudged(bool xgp)
+    public void AStartNamingAnotherInstance_IsRefused_BeforeItsIdentityIsJudged_AndChangesNothingHere(bool xgp)
     {
         var elsewhere = xgp ? Xgp("a", instance: "instance-before") : Csv("a", instance: "instance-before");
 
         Assert.Equal(new StartJudgement.Refused(RefusalReason.OtherInstance), Start(elsewhere));
         Assert.Empty(_launched);
         Assert.Empty(_store.Ledger().Entries);
+
+        // The identity is still unseen here: a start naming this instance is
+        // admitted, and settling it would not have retired it.
+        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: true), Start(xgp ? Xgp("a") : Csv("a")));
+    }
+
+    /// <summary>
+    /// An unseen identity refused at XGP admission — an entry running, or a
+    /// mark that does not name the latest entry — is retired: no start under it
+    /// may ever run, a repeat is refused as retired, and settling answers
+    /// retired.
+    /// </summary>
+    [Theory]
+    [InlineData(RefusalReason.XgpRunning)]
+    [InlineData(RefusalReason.StaleMark)]
+    public void AnUnseenIdentityRefusedAtAdmission_IsRetired(RefusalReason reason)
+    {
+        Start(Xgp("a"));
+        if (reason == RefusalReason.StaleMark)
+            _store.Complete(_launched[0], Ended(1));
+
+        Assert.Equal(new StartJudgement.Refused(reason), Start(Xgp("b", mark: null)));
+
+        if (reason == RefusalReason.XgpRunning)
+            _store.Complete(_launched[0], Ended(1));
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.Retired), Start(Xgp("b", Mark(1))));
+        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Retired), _store.Settle("b", Here));
+        Assert.Single(_launched);
+        Assert.Single(_store.Ledger().Entries);
+    }
+
+    /// <summary>
+    /// No refusal changes a disposition an identity already has: an admitted
+    /// identity whose conflicting retry is refused stays admitted, so the
+    /// original's retry is still answered with its job, and settling it still
+    /// answers admitted.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AConflictingRetryRefused_LeavesTheAdmittedDisposition_SoTheOriginalRetryIsStillAdmitted(bool xgp)
+    {
+        var original = xgp ? Xgp("a") : Csv("a");
+        Start(original);
+        var conflicting = original with { Run = new ProcessRequest { FolderPath = @"D:\elsewhere" } };
+
+        Assert.Equal(new StartJudgement.Refused(RefusalReason.ChangedRequest), Start(conflicting));
+
+        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: false), Start(original));
+        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Admitted), _store.Settle("a", Here));
+        Assert.Single(_launched);
     }
 
     // ── Settling ────────────────────────────────────────────────────────────

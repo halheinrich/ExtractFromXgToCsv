@@ -121,6 +121,68 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
         Assert.Empty(record.Skips);
     }
 
+    // ── The destination says which refusal a create was ─────────────────────
+
+    /// <summary>
+    /// A collision is the destination's own classification of its refusal:
+    /// one it reports is the run's collision though no file of the name is on
+    /// disk, so the run asks the disk nothing itself.
+    /// </summary>
+    [Fact]
+    public async Task ACollisionTheDestinationReports_StopsTheRunAsAnExistingFile()
+    {
+        var destination = new ScriptedDestination { ExistingCreateOf = "pos002.xgp" };
+        var record = new RunRecord();
+
+        var failure = await Assert.ThrowsAsync<XgpFileExistsException>(() => RunAsync(record, destination));
+
+        Assert.Equal("pos002.xgp", failure.FileName);
+        Assert.IsType<OutputFileExistsException>(failure.InnerException);
+        Assert.Empty(destination.Removed);
+        Assert.Equal(new XgpExportCommit(Options, 1), record.XgpCommit);
+    }
+
+    /// <summary>
+    /// A create refusal the destination does not call a collision is no
+    /// collision, even where a file of the name is on disk: it is the run's
+    /// destination failure, with the destination's own message, and it removes
+    /// nothing.
+    /// </summary>
+    [Fact]
+    public async Task ACreateRefusalTheDestinationDoesNotCallACollision_IsNone_EvenWhereAFileOfTheNameExists()
+    {
+        byte[] theirs = [4, 2];
+        File.WriteAllBytes(OutputFile("pos002.xgp"), theirs);
+        var destination = new ScriptedDestination { FailCreateOf = "pos002.xgp" };
+        var record = new RunRecord();
+
+        var failure = await Assert.ThrowsAsync<IOException>(() => RunAsync(record, destination));
+
+        Assert.Equal(ScriptedDestination.CreateFailure, failure.Message);
+        Assert.Empty(destination.Removed);
+        Assert.Equal(theirs, File.ReadAllBytes(OutputFile("pos002.xgp")));
+        Assert.Equal(new XgpExportCommit(Options, 1), record.XgpCommit);
+    }
+
+    /// <summary>
+    /// The file system's own classification: a create-new over an existing
+    /// file is a collision and leaves the file as it was; a create that fails
+    /// for any other reason — its folder is missing — is not.
+    /// </summary>
+    [Fact]
+    public void TheFileSystem_ClassifiesAnExistingFile_AndNothingElse_AsACollision()
+    {
+        byte[] theirs = [7];
+        File.WriteAllBytes(OutputFile("taken.xgp"), theirs);
+
+        var collision = Assert.Throws<OutputFileExistsException>(() => FileSystemDestination.Instance.CreateNew(OutputFile("taken.xgp")));
+        Assert.Equal(OutputFile("taken.xgp"), collision.FilePath);
+        Assert.Equal(theirs, File.ReadAllBytes(OutputFile("taken.xgp")));
+
+        var other = Assert.ThrowsAny<IOException>(() => FileSystemDestination.Instance.CreateNew(Path.Combine(_outputDir, "missing", "pos001.xgp")));
+        Assert.IsNotType<OutputFileExistsException>(other);
+    }
+
     // ── An unfinished file of the run's own is removed ──────────────────────
 
     [Fact]

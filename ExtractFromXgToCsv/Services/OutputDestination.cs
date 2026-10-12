@@ -25,9 +25,10 @@ internal interface IOutputDestination
     /// Creates <paramref name="path"/> for writing only if no file of that name
     /// exists, in one operation — an XGP position file, which is never
     /// overwritten (§7.5). There is no existence check before it: the create
-    /// itself refuses.
+    /// itself refuses, and the destination says which refusal it was.
     /// </summary>
-    /// <exception cref="IOException">A file of that name exists, or the file could not be created.</exception>
+    /// <exception cref="OutputFileExistsException">A file of that name exists; nothing was created.</exception>
+    /// <exception cref="IOException">The file could not be created for any other reason.</exception>
     Stream CreateNew(string path);
 
     /// <summary>Removes the file at <paramref name="path"/> — an unfinished file the run itself created.</summary>
@@ -51,13 +52,42 @@ internal sealed class FileSystemDestination : IOutputDestination
     /// <remarks>
     /// <see cref="FileMode.CreateNew"/>: the operating system creates the file
     /// only if none of its name exists, and throws an
-    /// <see cref="IOException"/> if one does.
+    /// <see cref="IOException"/> if one does. Which refusal it was is asked
+    /// only after the create has refused, so it guards no write.
     /// </remarks>
-    public Stream CreateNew(string path) => Open(path, FileMode.CreateNew);
+    public Stream CreateNew(string path)
+    {
+        try
+        {
+            return Open(path, FileMode.CreateNew);
+        }
+        catch (IOException ex) when (File.Exists(path))
+        {
+            throw new OutputFileExistsException(path, ex);
+        }
+    }
 
     /// <inheritdoc />
     public void Delete(string path) => File.Delete(path);
 
     private static FileStream Open(string path, FileMode mode) =>
         new(path, mode, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+}
+
+/// <summary>
+/// <see cref="IOutputDestination.CreateNew"/> refused because a file of the
+/// name it was asked to create exists: nothing was created, and the existing
+/// file is untouched. The destination's own classification of its refusal.
+/// </summary>
+internal sealed class OutputFileExistsException : IOException
+{
+    /// <summary>A file exists at <paramref name="path"/>; <paramref name="refusal"/> is the create's own refusal.</summary>
+    public OutputFileExistsException(string path, Exception refusal)
+        : base($"{System.IO.Path.GetFileName(path)} already exists.", refusal)
+    {
+        FilePath = path;
+    }
+
+    /// <summary>The path the create was asked for.</summary>
+    public string FilePath { get; }
 }

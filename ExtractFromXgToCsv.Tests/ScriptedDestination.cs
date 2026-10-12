@@ -5,9 +5,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// The file system as a Local run's destination, scripted: the files are real
 /// (<see cref="FileSystemDestination"/>), and a test can make finishing a file
-/// (its flush), a chosen file's write partway through, a chosen file's close,
-/// or a removal fail. No real destination is known to fail there, and the
-/// run's handling of each is pinned through this.
+/// (its flush), a chosen file's create, write partway through or close, or a
+/// removal fail. No real destination is known to fail there, and the run's
+/// handling of each is pinned through this.
 /// </summary>
 internal sealed class ScriptedDestination : IOutputDestination
 {
@@ -22,6 +22,23 @@ internal sealed class ScriptedDestination : IOutputDestination
 
     /// <summary>The message a scripted removal failure carries.</summary>
     public const string RemovalFailure = "The file is in use by another process.";
+
+    /// <summary>The message a scripted create failure carries.</summary>
+    public const string CreateFailure = "The specified network name is no longer available.";
+
+    /// <summary>
+    /// The file whose create-new fails with <see cref="CreateFailure"/>, a
+    /// plain <see cref="IOException"/> the destination does not call a
+    /// collision, creating nothing.
+    /// </summary>
+    public string? FailCreateOf { get; init; }
+
+    /// <summary>
+    /// The file whose create-new the destination refuses as one that exists
+    /// (<see cref="OutputFileExistsException"/>), creating nothing, whatever
+    /// the disk holds.
+    /// </summary>
+    public string? ExistingCreateOf { get; init; }
 
     /// <summary>Whether flushing any file fails, with <see cref="FlushFailure"/>.</summary>
     public bool FailFlush { get; init; }
@@ -41,8 +58,15 @@ internal sealed class ScriptedDestination : IOutputDestination
     public Stream Replace(string path) =>
         new ScriptedStream(FileSystemDestination.Instance.Replace(path), this, Path.GetFileName(path));
 
-    public Stream CreateNew(string path) =>
-        new ScriptedStream(FileSystemDestination.Instance.CreateNew(path), this, Path.GetFileName(path));
+    public Stream CreateNew(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name == FailCreateOf)
+            throw new IOException(CreateFailure);
+        if (name == ExistingCreateOf)
+            throw new OutputFileExistsException(path, new IOException("The file exists."));
+        return new ScriptedStream(FileSystemDestination.Instance.CreateNew(path), this, name);
+    }
 
     public void Delete(string path)
     {

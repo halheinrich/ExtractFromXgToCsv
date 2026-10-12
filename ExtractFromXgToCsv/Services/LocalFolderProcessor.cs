@@ -253,9 +253,9 @@ public class LocalFolderProcessor
         {
             file = _destination.CreateNew(path);
         }
-        // Which refusal this is decides only the wording of the run's error:
-        // asked after the create has refused, it guards no write.
-        catch (IOException ex) when (File.Exists(path))
+        // The destination says which refusal it was; that decides only the
+        // wording of the run's error.
+        catch (OutputFileExistsException ex)
         {
             throw new XgpFileExistsException(Path.GetFileName(path), written, ex);
         }
