@@ -151,6 +151,61 @@ public class WebModePanelConversionTests : BunitContext
         Assert.Single(cut.FindAll(".zero-match-notice"));
     }
 
+    /// <summary>
+    /// Under XGP, rows not converted yet — a book's re-extract under way — are
+    /// never "No decisions match the filters": the hint reads the selected
+    /// key's state. Before the correction it read the empty projection and
+    /// said nothing matched. Once the rows are converted, a real zero is said.
+    /// </summary>
+    [Fact]
+    public async Task UnderXgp_RowsNotConvertedYet_AreNeverNothingMatches()
+    {
+        var cut = RenderPanel(OutputFormat.Xgp, new FilterConfig { Players = ["__nobody__"] });
+        Pick(cut, A);
+        Assert.Equal("No decisions match the filters", cut.Find("#xgpBlockedHint").TextContent.Trim());
+
+        _converter.HoldRowsCall(2);
+        var bookLoad = Task.Run(() => cut.FindComponents<InputFile>()[1].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture("OpeningBookV2.ob"), "OpeningBookV2.ob")));
+        await _converter.RowsHeld.WaitAsync(TimeSpan.FromSeconds(10));
+
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll(".busy-notice")));
+        Assert.Equal(ConversionState.Running, cut.Instance.Session.StateOf(Representation.Rows));
+
+        // A render while the rows convert — the host re-renders the panel on
+        // a filter change, say — shows the state as it stands.
+        cut.Render();
+        Assert.Empty(cut.FindAll("#xgpBlockedHint"));
+        Assert.True(DownloadButton(cut).HasAttribute("disabled"));
+
+        _converter.ReleaseRows();
+        await bookLoad.WaitAsync(TimeSpan.FromSeconds(10));
+        WaitForIdle(cut);
+        Assert.Equal("No decisions match the filters", cut.Find("#xgpBlockedHint").TextContent.Trim());
+    }
+
+    /// <summary>
+    /// The preview shows the rows an output is built from, so it follows the
+    /// selected representation: there for CSV, gone for Diagram JSON — whose
+    /// records convert on their own and could describe a different set — and
+    /// back for CSV.
+    /// </summary>
+    [Fact]
+    public void ThePreview_FollowsTheSelectedRepresentation()
+    {
+        var cut = RenderPanel(OutputFormat.Csv);
+        Pick(cut, A);
+        Assert.Contains("Preview", cut.Find("h5").TextContent);
+
+        SwitchTo(cut, OutputFormat.DiagramJson);
+        WaitForIdle(cut);
+        Assert.Empty(cut.FindAll("h5"));
+        Assert.Empty(cut.FindAll("table"));
+
+        SwitchTo(cut, OutputFormat.Csv);
+        Assert.Contains("Preview", cut.Find("h5").TextContent);
+    }
+
     // ── A late completion owned by a replaced selection ─────────────────────
 
     /// <summary>

@@ -187,8 +187,8 @@
             }
             else if (XgpDownloadBlocked)
             {
-                <small class="text-muted ms-2">
-                    @(SelectedMatched == 0
+                <small class="text-muted ms-2" id="xgpBlockedHint">
+                    @(XgpNothingMatches
                         ? "No decisions match the filters"
                         : "Fix the XGP export options first")
                 </small>
@@ -209,7 +209,13 @@
         </div>
     }
 
-    @if (FilterInEffect is not null && _session.StateOf(Representation.Rows) == ConversionState.Completed
+    @* The preview shows the rows the selected output is built from, so it is
+       there only while that output is built from rows (CSV and XGP) and they
+       are converted. Diagram JSON is built from records, which convert on
+       their own (halheinrich/backgammon#74): a rows table beside it could
+       describe a different set from the download's, so there is none. *@
+    @if (FilterInEffect is not null && SelectedRepresentation == Representation.Rows
+         && _session.StateOf(Representation.Rows) == ConversionState.Completed
          && Projections.FilteredRows.Count > 0)
     {
         <h5>Preview (first @(Math.Min(20, Projections.FilteredRows.Count)) of @Projections.FilteredRows.Count filtered rows, @Projections.Rows.Count total)</h5>
@@ -649,8 +655,13 @@
         && !XgpDownloadBlocked;
 
     private bool XgpDownloadBlocked =>
-        OutputFormat == OutputFormat.Xgp
-        && (Projections.FilteredRows.Count == 0 || !XgpOptions.TryValidate(out _));
+        OutputFormat == OutputFormat.Xgp && (XgpNothingMatches || !XgpOptions.TryValidate(out _));
+
+    // The XGP output's rows are converted and the filter admits none of them.
+    // Read off the selected key's state, so rows not converted yet are never
+    // "nothing matches" (SPEC-notices.md §7.3).
+    private bool XgpNothingMatches =>
+        OutputFormat == OutputFormat.Xgp && SelectedConverted > 0 && SelectedMatched == 0;
 
     private static string LastDownloadLabel(WebDownload download) => download.Status switch
     {
