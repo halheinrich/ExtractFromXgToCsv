@@ -14,7 +14,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Wire tests for the Web-mode opening-book input: the status line reflects a
 /// loaded / invalid book, and a book chosen <em>after</em> the .xg files
-/// re-extracts the retained bytes so enrichment does not depend on pick order.
+/// re-extracts decisions from the retained decoded files, so enrichment does
+/// not depend on pick order.
 /// The second <see cref="InputFile"/> ([1]) is the .ob picker; [0] is the
 /// .xg/.xgp picker.
 /// </summary>
@@ -75,7 +76,7 @@ public class WebModePanelOpeningBookTests : BunitContext
         UploadXg(cut);
         Assert.DoesNotContain(Rows(cut), r => r.AnalysisDepth == EnrichedDepth);
 
-        // Book second: retained bytes are re-extracted, now enriched.
+        // Book second: the retained decoded files are re-extracted, now enriched.
         UploadBook(cut, FixtureHelper.ReadFixture(BookFixture), BookFixture);
         Assert.Contains(Rows(cut), r => r.AnalysisDepth == EnrichedDepth);
     }

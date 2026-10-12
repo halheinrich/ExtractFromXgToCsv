@@ -480,11 +480,13 @@
 
         // One message has to cover the whole gesture: the load and the
         // re-extract both hold the thread, so there is no frame in between to
-        // update it in. Naming the re-extract when there are files to re-read
-        // is what keeps the notice from under-promising a multi-second wait.
+        // update it in. Naming the re-extract when there are decoded files to
+        // re-extract from is what keeps the notice from under-promising a
+        // multi-second wait. Nothing is read again: the selection keeps each
+        // decoded file.
         var decodedCount = _session.Selection?.Decoded.Length ?? 0;
         var message = decodedCount > 0
-            ? $"Loading opening book and re-reading {decodedCount} file(s)…"
+            ? $"Loading opening book and re-extracting decisions from {decodedCount} file(s)…"
             : "Loading opening book…";
 
         await RunBusyAsync(message, () => GuardedAsync(async () =>
