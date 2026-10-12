@@ -13,11 +13,12 @@
    record stands. *@
 @if (!Record.IsEmpty)
 {
-    @* The caller's attributes first, so the marker class, the kind and the
-       announcement stated after them are this rendering's, whatever a caller
-       passes. *@
+    @* The caller's attributes first, so the marker class, the kind, the
+       announcement and the dismissibility stated after them are this
+       rendering's, whatever a caller passes. *@
     <Notice @attributes="AdditionalAttributes"
-            class="@CssClass" Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive">
+            class="@CssClass" Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive"
+            Dismissible="false">
         @if (Label is not null)
         {
             <div class="skip-list-label fw-semibold">@Label</div>

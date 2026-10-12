@@ -54,6 +54,24 @@ public class SkipListNoticeTests : BunitContext
         Assert.Empty(box.Content.QuerySelectorAll(".skip-list-label"));
     }
 
+    /// <summary>
+    /// The record of what was lost is never dismissible (SPEC-notices.md §4),
+    /// whatever a caller passes: a caller's <c>Dismissible</c> reaches the box
+    /// through the captured attributes, and the rendering's own value, stated
+    /// after them, wins.
+    /// </summary>
+    [Fact]
+    public void ACallersDismissible_CannotMakeTheRecordDismissible()
+    {
+        var cut = Render<SkipListNotice>(p => p
+            .Add(c => c.Record, TwoFilesAndADecision)
+            .AddUnmatched("Dismissible", true));
+
+        NoticeBox.ByMarkerClass(cut, "skipped-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class");
+        Assert.Empty(cut.FindAll("button"));
+    }
+
     [Theory]
     [InlineData(1, 0, "⚠ Skipped 1 file — not in the output:")]
     [InlineData(0, 2, "⚠ Skipped 2 decisions — not in the output:")]
