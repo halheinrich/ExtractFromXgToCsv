@@ -301,9 +301,14 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     /// record this page knows cannot be read, nothing is written, and the
     /// change stands in this page's record alone.
     /// </summary>
+    /// <remarks>
+    /// Internal, not part of the keeper's surface: the page changes the record
+    /// only through the named operations, each of which is one checkpoint. Its
+    /// tests reach it to make a checkpoint of their own choosing.
+    /// </remarks>
     /// <param name="change">The change, applied to the merged record.</param>
     /// <returns>Whether storage stored the record.</returns>
-    public Task<bool> CheckpointAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change)
+    internal Task<bool> CheckpointAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change)
     {
         ArgumentNullException.ThrowIfNull(change);
         return AloneAsync(() => CheckpointAloneAsync(change));
