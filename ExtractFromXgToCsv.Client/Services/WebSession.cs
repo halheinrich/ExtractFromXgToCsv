@@ -38,10 +38,11 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// what it started with — a ticket — and its completion publishes only while
 /// its owner says so: a pick or a book load while no newer one has begun; a
 /// conversion while its selection, and its key's book, are still current —
-/// and a conversion's failure by that same owner, whichever gesture asked for
-/// the conversion (<see cref="Owns"/>). A result for a key that is no longer
-/// the selected output's is cached, not shown, because what is shown is read
-/// from the selected key's state. A superseded completion publishes nothing.
+/// and a conversion's failure by that same owner, while its key is the
+/// selected output's, whichever gesture asked for the conversion
+/// (<see cref="Owns"/>). A result for a key that is no longer the selected
+/// output's is cached, not shown, because what is shown is read from the
+/// selected key's state. A superseded completion publishes nothing.
 /// </para>
 /// <para>
 /// Not thread-safe: Blazor WebAssembly runs it on one thread, and its awaits
@@ -265,9 +266,9 @@ internal sealed class WebSession
         while (NextNeeded(selected()) is { } next)
         {
             if (next == Representation.Rows)
-                await ConvertAsync(_rows, (source, book, ct) => _converter.RowsAsync(source, Ranking, book, ct), PublishRows, cancellationToken);
+                await ConvertAsync(Representation.Rows, _rows, (source, book, ct) => _converter.RowsAsync(source, Ranking, book, ct), PublishRows, cancellationToken);
             else
-                await ConvertAsync(_records, (source, book, ct) => _converter.RecordsAsync(source, Ranking, book, ct), PublishRecords, cancellationToken);
+                await ConvertAsync(Representation.Records, _records, (source, book, ct) => _converter.RecordsAsync(source, Ranking, book, ct), PublishRecords, cancellationToken);
         }
     }
 
@@ -384,14 +385,16 @@ internal sealed class WebSession
         Projections.ReplaceRecords(results.SelectMany(result => result.Items));
 
     /// <summary>
-    /// One key's conversion over the current selection's decoded files, owned
-    /// by its ticket: it publishes into <paramref name="slot"/> only while that
+    /// One key's conversion — <paramref name="representation"/>'s, under the
+    /// book in force — over the current selection's decoded files, owned by its
+    /// ticket: it publishes into <paramref name="slot"/> only while that
     /// selection and that book are still current, and is abandoned — back to
     /// not requested — if it ends any other way. Its failure carries the same
-    /// owner (<see cref="ConversionFailedException"/>).
+    /// owner, and its key (<see cref="ConversionFailedException"/>).
     /// </summary>
     /// <exception cref="ConversionFailedException">Anything but a cancellation of <paramref name="cancellationToken"/> ended it.</exception>
     private async Task ConvertAsync<T>(
+        Representation representation,
         ConversionSlot<T> slot,
         Func<DecodedSource, OpeningBook?, CancellationToken, Task<IReadOnlyList<T>>> convert,
         Action<ImmutableArray<SourceConversion<T>>> publish,
@@ -409,7 +412,7 @@ internal sealed class WebSession
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
-            throw new ConversionFailedException(selection, book, ex);
+            throw new ConversionFailedException(selection, representation, book, ex);
         }
         finally
         {
@@ -420,12 +423,17 @@ internal sealed class WebSession
     /// <summary>
     /// Whether <paramref name="failure"/> is still its gesture's to show: while
     /// the selection and the book it converted for are current — the owner its
-    /// result would have published under (SPEC-notices.md §7.3).
+    /// result would have published under — and its representation is the
+    /// <paramref name="selected"/> output's, since a late completion for a key
+    /// that is no longer selected never replaces what is shown
+    /// (SPEC-notices.md §7.3).
     /// </summary>
-    public bool Owns(ConversionFailedException failure)
+    public bool Owns(ConversionFailedException failure, Representation selected)
     {
         ArgumentNullException.ThrowIfNull(failure);
-        return ReferenceEquals(failure.Selection, Selection) && ReferenceEquals(failure.Book, Book);
+        return ReferenceEquals(failure.Selection, Selection)
+            && ReferenceEquals(failure.Book, Book)
+            && failure.Representation == selected;
     }
 
     /// <summary>
@@ -525,20 +533,25 @@ internal sealed class WebSession
 /// <summary>
 /// A conversion's failure — anything that ended it but a cancellation of its
 /// caller — with the owner its result would have published under: the
-/// selection and the book it converted for. <see cref="WebSession.Owns"/> says
-/// whether that owner is still current. Its message is the failure's own.
+/// selection and the book it converted for, and its key's representation.
+/// <see cref="WebSession.Owns"/> says whether that owner is still current and
+/// the key still the selected output's. Its message is the failure's own.
 /// </summary>
 internal sealed class ConversionFailedException : Exception
 {
-    internal ConversionFailedException(WebSelection selection, OpeningBook? book, Exception failure)
+    internal ConversionFailedException(WebSelection selection, Representation representation, OpeningBook? book, Exception failure)
         : base(failure.Message, failure)
     {
         Selection = selection;
+        Representation = representation;
         Book = book;
     }
 
     /// <summary>The selection the conversion converted for.</summary>
     internal WebSelection Selection { get; }
+
+    /// <summary>The representation it converted to: its key's, with <see cref="Book"/>.</summary>
+    internal Representation Representation { get; }
 
     /// <summary>The book it converted under; <see langword="null"/> for none.</summary>
     internal OpeningBook? Book { get; }

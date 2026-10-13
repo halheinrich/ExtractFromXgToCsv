@@ -560,10 +560,11 @@
     /// — never a file's failure, which is a skip — is a failure, the run
     /// error, while its owner still owns it. A failure is published by the
     /// same owner rules as a result and a skip record (SPEC-notices.md §7.3):
-    /// a conversion's by the selection and book it converted for, whichever
-    /// gesture asked for it (<see cref="WebSession.Owns"/>); anything else by
-    /// its gesture (<paramref name="gestureOwns"/>, asked when it fails). A
-    /// superseded failure publishes nothing, and is logged instead.
+    /// a conversion's by the selection and book it converted for, while its
+    /// key is the selected output's, whichever gesture asked for it
+    /// (<see cref="WebSession.Owns"/>); anything else by its gesture
+    /// (<paramref name="gestureOwns"/>, asked when it fails). A superseded
+    /// failure publishes nothing, and is logged instead.
     /// </summary>
     private async Task GuardedAsync(Func<Task> work, Func<bool> gestureOwns)
     {
@@ -574,7 +575,9 @@
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
         }
-        catch (Exception ex) when (ex is ConversionFailedException conversion ? _session.Owns(conversion) : gestureOwns())
+        catch (Exception ex) when (ex is ConversionFailedException conversion
+                                       ? _session.Owns(conversion, SelectedRepresentation)
+                                       : gestureOwns())
         {
             _runError = $"Error: {ex.Message}";
         }

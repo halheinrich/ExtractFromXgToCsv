@@ -309,6 +309,32 @@ public class WebModePanelConversionTests : BunitContext
     }
 
     /// <summary>
+    /// A conversion's failure is owned by its key too: a records conversion,
+    /// asked for by a switch to Diagram JSON, fails after the user switched
+    /// back to CSV. Its selection and book are current, but records are no
+    /// longer the selected output's representation, so the failure — a late
+    /// completion for a key no longer selected — shows nothing.
+    /// </summary>
+    [Fact]
+    public async Task ARecordsConversionThatFailsAfterASwitchBackToCsv_ShowsNoError()
+    {
+        var cut = RenderPanel(OutputFormat.Csv);
+        Pick(cut, A);
+        _converter.HoldRecordsCall(1);
+        var switching = Task.Run(() => SwitchTo(cut, OutputFormat.DiagramJson));
+        await _converter.RecordsHeld.WaitAsync(TimeSpan.FromSeconds(10));
+
+        SwitchTo(cut, OutputFormat.Csv);
+        _converter.FailRecords = (_, _) => new OperationCanceledException("Interrupted.");
+        _converter.ReleaseRecords();
+        await switching.WaitAsync(TimeSpan.FromSeconds(10));
+        WaitForIdle(cut);
+
+        Assert.DoesNotContain("Interrupted.", cut.Markup);
+        Assert.NotEmpty(cut.Instance.RowCache.Rows);
+    }
+
+    /// <summary>
     /// A book change while records convert: the conversion's key is no longer
     /// current, so its completion publishes nothing, and the records shown are
     /// the ones converted under the new book.
