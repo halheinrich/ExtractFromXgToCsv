@@ -273,6 +273,9 @@ numbering. This section says how the code meets it, not what it rules.
   carries on. Every output is finished before the run reports success: the
   CSV writer, and the one file a Diagram JSON or deck run writes, are
   written and then closed whatever the write did (`WriteThenCloseAsync`),
+  and only then does the run report "Done" with the path the file was
+  created at (`RunProgress.ReportDone`, carried as
+  `ProcessingProgress.WrittenPath`; an XGP run reports its folder),
   so a failure flushing one is the run's error, never a success already
   published. The write's own ending stands (§7.1): a cancellation stays a
   stopped run, with a failure closing the unfinished file reported beside it
@@ -783,8 +786,12 @@ once, by the numbering (`XgpNumbering.NextNumber`).
   filter is in effect" fall is not enough, and was what this replaced: the
   empty selection stays in effect across a folder change, so nothing falls
   while the folder the result was computed from has gone. The Done line
-  names the run's own output path, and the zero-match box asks the run's own
-  filter, never the one on screen now.
+  names what the run wrote, as its completed snapshot carried it
+  (`ProcessingProgress.WrittenPath`, §7.5): the one file as it was created,
+  numbered where it had to be, or an XGP run's folder — never the requested
+  path, and the panel neither rebuilds a numbered name nor looks for the
+  file. The zero-match box asks the run's own filter, never the one on
+  screen now.
   **The run's skip record lives by other rules** (`SPEC-notices.md` §7.2,
   ruled "Option B"), so it is its own state, `_lastRun`: the record the run's
   terminal snapshot carried, the source visit the run ran in, and how the
@@ -2013,12 +2020,15 @@ GET  /api/process/{jobId}/status
   200 →  ProcessingProgress { Current, Total, Phase, FileName, TotalRows,
                               Complete, Cancelled, ElapsedSec, FilesPerSec,
                               ErrorMessage?, CloseFailureMessage?,
-                              Skipped[], XgpCommit?,
+                              WrittenPath?, Skipped[], XgpCommit?,
                               PercentComplete (computed) }
          — as often as asked; a read removes nothing. PercentComplete is
            derived from Current/Total; ErrorMessage is non-null only on the
            terminal error state; CloseFailureMessage only on a cancelled one
-           whose output file then failed to close; Phase is the JobPhase discriminator the
+           whose output file then failed to close; WrittenPath only on a
+           completed successful one — the one file as it was created
+           (numbered where a file of the requested name existed), or an
+           XGP run's output folder; Phase is the JobPhase discriminator the
            client picks its progress bar from (FileName is presentation and
            is never parsed for it); Skipped is the run's skip record so far,
            the array of SkippedItem { FileName, DecisionId?, Reason } with
@@ -2193,8 +2203,10 @@ project reference.
   processor makes and the panel reads, so the job store can keep, serve and
   hand on a snapshot as it is. `Skipped` (`SkipRecord`, empty by default,
   never null) is the run's skip record as of the snapshot; `XgpCommit`
-  (`XgpExportCommit?`) an XGP run's committed result. `PercentComplete` is
-  get-only and derived.
+  (`XgpExportCommit?`) an XGP run's committed result; `WrittenPath`, on a
+  successful terminal snapshot only, where the run wrote its output, an
+  output fact the request's `OutputPath` never stands in for.
+  `PercentComplete` is get-only and derived.
 - `SkipRecord` — the one record type of skipped units, both modes
   (`SPEC-notices.md` §7.1): an immutable, ordered `IReadOnlyList<SkippedItem>`
   with no null entry — `Empty`, `Of(items)`, collection expressions
