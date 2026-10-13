@@ -777,8 +777,9 @@
 
     /// <summary>
     /// Begins an attempt for the selected output, capturing what it depends
-    /// on; <see langword="null"/>, beginning nothing, when the session has no
-    /// converted representation to begin one from.
+    /// on; <see langword="null"/>, beginning nothing, when no filter is in
+    /// effect to build it through, or the session has no converted
+    /// representation to begin one from.
     /// </summary>
     private DownloadAttempt? BeginAttempt()
     {
