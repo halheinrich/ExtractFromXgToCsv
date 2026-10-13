@@ -227,11 +227,19 @@ internal sealed class LocalReconciler
             catch (Exception ex)
             {
                 // Not the server's absence, which a pass handles: something
-                // else failed. The state stays unknown, and the pass is
-                // tried again.
-                _logger.LogWarning(ex, "Reconciling with the Local server failed; trying again.");
+                // else failed. The state stays unknown, and the pass is tried
+                // again — both settled before the failure is logged, and a
+                // failure to log it stops neither.
                 Publish(State with { XgpBlock = XgpStartBlock.Checking });
                 ScheduleAfter(_timing.RetryDelay);
+                try
+                {
+                    _logger.LogWarning(ex, "Reconciling with the Local server failed; trying again.");
+                }
+                catch (Exception)
+                {
+                    // Nowhere else to report it: the retry is what matters.
+                }
             }
         }
         while (_again && !_lifetime.IsCancellationRequested);

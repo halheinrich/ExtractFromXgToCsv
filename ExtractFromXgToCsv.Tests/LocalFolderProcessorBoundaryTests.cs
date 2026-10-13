@@ -303,6 +303,62 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         Assert.Equal(new XgpExportCommit(new XgpExportOptions(), 1), record.XgpCommit);
     }
 
+    // ── Logging a skip stops nothing ────────────────────────────────────────
+
+    /// <summary>
+    /// Each kind of skip — a file that cannot be read, a file whose
+    /// conversion fails, a decision whose payload cannot be prepared — is
+    /// recorded before it is logged, and a logger that throws stops nothing:
+    /// the batch goes on past the skip, its record whole, writing the files
+    /// that come after it.
+    /// </summary>
+    [Theory]
+    [InlineData("read")]
+    [InlineData("conversion")]
+    [InlineData("payload")]
+    public async Task ALoggerThatThrows_AtAnySkip_StopsNothing(string kind)
+    {
+        Copy(GoodName);
+        var good = FixtureRows(GoodName);
+        var filters = new DecisionFilterSet();
+        XgpPayloadPreparation prepare = XgpPayload.Prepare;
+        int expectedFiles;
+        switch (kind)
+        {
+            case "read":
+                MalformedXg.Write(Path.Combine(_folder, "0-malformed.xg"));
+                expectedFiles = good.Count;
+                break;
+            case "conversion":
+                Copy(FailingName);
+                Copy(ThirdName);
+                filters = MidwayFailure.InTheSecondFile(good.Count);
+                expectedFiles = 2 * good.Count;
+                break;
+            default:
+                var failing = good[0].Id;
+                prepare = (id, source, bytes, anonymize) => id == failing
+                    ? throw new InvalidOperationException("Preparation failed.")
+                    : XgpPayload.Prepare(id, source, bytes, anonymize);
+                expectedFiles = good.Count - 1;
+                break;
+        }
+        var logger = new ThrowingLogger<LocalFolderProcessor>();
+        var record = new RunRecord();
+        var outputDir = Path.Combine(_folder, "positions");
+
+        await new LocalFolderProcessor(
+                logger, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking,
+                bookProvider: null, prepare, FileSystemDestination.Instance)
+            .ProcessXgpAsync(_folder, outputDir, filters, new XgpExportOptions(), new FilterConfig(),
+                new RecordingProgress(), runRecord: record);
+
+        Assert.Single(record.Skips);
+        Assert.Equal(1, logger.Attempts);
+        Assert.Equal(expectedFiles, Directory.GetFiles(outputDir, "*.xgp").Length);
+        Assert.Equal(new XgpExportCommit(new XgpExportOptions(), expectedFiles), record.XgpCommit);
+    }
+
     // ── An XGP payload whose preparation fails is a decision skip ───────────
 
     [Fact]

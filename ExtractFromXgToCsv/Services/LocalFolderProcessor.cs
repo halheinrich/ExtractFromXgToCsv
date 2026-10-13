@@ -361,11 +361,13 @@ public class LocalFolderProcessor
 
     /// <summary>
     /// The one skip seam: every read, conversion and payload failure in this
-    /// processor comes here, and nothing logs a skip on its own. Logs the skip
-    /// and appends it to <paramref name="record"/>, the run's record, which
-    /// every snapshot the run reports carries as it stands
-    /// (<see cref="ProcessingProgress.Skipped"/>). The exception's message is
-    /// the recorded reason.
+    /// processor comes here, and nothing logs a skip on its own. Appends the
+    /// skip to <paramref name="record"/>, the run's record, which every
+    /// snapshot the run reports carries as it stands
+    /// (<see cref="ProcessingProgress.Skipped"/>), and then logs it. The
+    /// exception's message is the recorded reason. A skip never ends a run,
+    /// and nor does logging one: a logger that fails is contained here, after
+    /// the record, so the batch goes on with its record whole.
     /// <para>
     /// The two names differ on purpose. The record names the file by its path
     /// relative to <paramref name="folderPath"/>, because discovery is
@@ -389,13 +391,21 @@ public class LocalFolderProcessor
         string file,
         DecisionId? decisionId = null)
     {
-        var fileName = Path.GetFileName(file);
-        if (decisionId is null)
-            _logger.LogWarning(ex, "Skipping {File}", fileName);
-        else
-            _logger.LogWarning(ex, "Skipping decision {DecisionId} in {File}", decisionId, fileName);
-
         record.Skip(new SkippedItem(Path.GetRelativePath(folderPath, file), decisionId, ex.Message));
+
+        var fileName = Path.GetFileName(file);
+        try
+        {
+            if (decisionId is null)
+                _logger.LogWarning(ex, "Skipping {File}", fileName);
+            else
+                _logger.LogWarning(ex, "Skipping decision {DecisionId} in {File}", decisionId, fileName);
+        }
+        catch (Exception)
+        {
+            // The skip is recorded, and the user sees it there; a failure to
+            // log it has nowhere else to go.
+        }
     }
 
     /// <summary>

@@ -66,9 +66,11 @@ internal sealed class BrowserStorageCondition(ILogger<BrowserStorageCondition> l
     public bool IsNoticeDismissed { get; private set; }
 
     /// <summary>
-    /// Report that the browser refused a storage call. Every refusal is
-    /// logged; the first begins the occurrence and notifies the observers, and
-    /// every later one is the same occurrence and changes nothing.
+    /// Report that the browser refused a storage call. The first begins the
+    /// occurrence and notifies the observers, and every later one is the same
+    /// occurrence and changes nothing. Every refusal is then logged; a failure
+    /// to log it is contained, so the storage call that reported it still
+    /// returns its result normally.
     /// </summary>
     /// <param name="refusal">The browser's exception, as the accessor returned it.</param>
     /// <exception cref="ArgumentNullException"><paramref name="refusal"/> is <see langword="null"/>.</exception>
@@ -76,13 +78,23 @@ internal sealed class BrowserStorageCondition(ILogger<BrowserStorageCondition> l
     {
         ArgumentNullException.ThrowIfNull(refusal);
 
-        logger.LogWarning(refusal,
-            "The browser refused a storage call; the page keeps working, but some settings may not be "
-            + "restored or saved.");
+        if (!HasOccurred)
+        {
+            HasOccurred = true;
+            Publish();
+        }
 
-        if (HasOccurred) return;
-        HasOccurred = true;
-        Publish();
+        try
+        {
+            logger.LogWarning(refusal,
+                "The browser refused a storage call; the page keeps working, but some settings may not be "
+                + "restored or saved.");
+        }
+        catch (Exception)
+        {
+            // The occurrence is recorded, and the notice says so; a failure
+            // to log it has nowhere else to go.
+        }
     }
 
     /// <summary>Records that the user dismissed the notice.</summary>

@@ -76,6 +76,30 @@ public class LocalReconcilerTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// A pass that fails for any reason but the server's absence leaves the
+    /// state unknown and is tried again — both settled before the failure is
+    /// logged — and a logger that throws stops neither: the reconciliation
+    /// itself completes normally, and the next pass succeeds.
+    /// </summary>
+    [Fact]
+    public async Task APassThatFails_WithALoggerThatThrows_LeavesTheStateUnknown_AndIsTriedAgain()
+    {
+        await _server.ExportAsync("elsewhere-1", _instance, mark: null);
+        var logger = new ThrowingLogger<LocalReconciler>();
+        var follows = 0;
+        var reconciler = ReconcilerOver(await RestoredKeeperAsync(),
+            _ => ++follows == 1 ? throw new InvalidOperationException("The controls failed to follow.") : Task.CompletedTask,
+            logger);
+
+        await reconciler.StartAsync();
+
+        Assert.Equal(1, logger.Attempts);
+        Assert.Equal(XgpStartBlock.Checking, reconciler.State.XgpBlock);
+        Assert.True(SpinWait.SpinUntil(() => reconciler.State.XgpBlock is null, NoticeTesting.OperationBound));
+        Assert.Equal(_instance, reconciler.State.Instance);
+    }
+
+    /// <summary>
     /// A page restored from a record that already holds the entries offers
     /// nothing: its controls were restored from that record.
     /// </summary>
