@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using BgUiPrimitives_Razor;
 using Bunit;
 using ExtractFromXgToCsv.Client;
@@ -88,6 +89,32 @@ internal sealed class LocalServer : IDisposable
 
     /// <summary>A client over the wire, as a page has.</summary>
     public HttpClient Client() => new(Wire, disposeHandler: false) { BaseAddress = new Uri("http://localhost/") };
+
+    /// <summary>
+    /// One XGP job run straight against the server under
+    /// <paramref name="instance"/>, as a page elsewhere would, touching no
+    /// browser's storage — into its own folder, so its files never meet a
+    /// test's pages' — and awaited to its end.
+    /// </summary>
+    public async Task ExportAsync(string jobId, string instance, LedgerMark? mark, XgpExportOptions? options = null)
+    {
+        using var client = Client();
+        var run = new ProcessRequest
+        {
+            FolderPath = InputFolder,
+            OutputPath = Path.Combine(OutputFolder, jobId),
+            OutputFormat = OutputFormat.Xgp,
+            XgpOptions = options ?? new XgpExportOptions(),
+        };
+        (await client.PostAsJsonAsync("/api/process/start", new StartRequest(jobId, instance, mark, run))).EnsureSuccessStatusCode();
+        var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
+        while ((await client.GetFromJsonAsync<ProcessingProgress>($"/api/process/{jobId}/status")) is not { Complete: true })
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException($"{jobId} never ended.");
+            await Task.Delay(20);
+        }
+    }
 
     /// <summary>The XGP files in the output folder, by name, in order.</summary>
     public IReadOnlyList<string> XgpFiles() =>

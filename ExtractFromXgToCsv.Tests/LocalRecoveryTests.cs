@@ -110,24 +110,8 @@ public class LocalRecoveryTests : IAsyncLifetime
     /// touching none of this browser's storage — into its own folder, so its
     /// files never meet this test's pages' — and awaited to its end.
     /// </summary>
-    private async Task ExportElsewhereAsync(string jobId, LedgerMark? mark, XgpExportOptions? options = null)
-    {
-        using var client = _server.Client();
-        var run = new ProcessRequest
-        {
-            FolderPath = _server.InputFolder,
-            OutputPath = Path.Combine(_server.OutputFolder, jobId),
-            OutputFormat = OutputFormat.Xgp,
-            XgpOptions = options ?? new XgpExportOptions(),
-        };
-        (await client.PostAsJsonAsync("/api/process/start", new StartRequest(jobId, _instance, mark, run))).EnsureSuccessStatusCode();
-        var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
-        while ((await client.GetFromJsonAsync<ProcessingProgress>($"/api/process/{jobId}/status")) is not { Complete: true })
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"{jobId} never ended.");
-            await Task.Delay(20);
-        }
-    }
+    private Task ExportElsewhereAsync(string jobId, LedgerMark? mark, XgpExportOptions? options = null) =>
+        _server.ExportAsync(jobId, _instance, mark, options);
 
     // ── A lost start response ───────────────────────────────────────────────
 
