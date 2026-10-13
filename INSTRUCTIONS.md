@@ -157,12 +157,15 @@ components are rendered with — the test suite calls it too. Three areas:
   `BrowserStorage`, reporting every refusal) and `BrowserStorageCondition`
   (this app's one storage condition and its notice's dismissal; the filter
   surface's registered refusal sink). And Local mode's side of the recovery
-  protocol (see "Recovery"): `LocalJobsClient` (the protocol's wire),
-  `LocalReconciler` (Home's reconciliation with the server),
+  protocol (see "Recovery"): `ILocalJobs` and its `LocalJobsClient` (the
+  protocol's wire), `LocalReconciler` (Home's reconciliation with the
+  server, and the `LedgerTaking` it offers the controls),
   `XgpNumberingRecord`, `XgpNumberingStore` (with `NumberingRead`, a read's
   four outcomes) and `XgpNumberingKeeper` (Home's numbering record: its
-  value, its one document, and its one owner's writes), `LocalJobTiming` and
-  `IJobIdentities` (seams for a test's waits and identities).
+  value, its one document, and its one owner's writes), `XgpEditClock`
+  (what counts as an edit, and whether the controls follow a taking),
+  `LocalJobTiming` and `IJobIdentities` (seams for a test's waits and
+  identities).
 - **Shared** — the wire types the server references too (`ProcessRequest`,
   `ProcessingProgress` with `SkipRecord`, `SkippedItem` and
   `XgpExportCommit`, `JobPhase`, `OutputFormat` and `OutputFormatNames`,
@@ -185,18 +188,23 @@ HTTP handlers, and a Local run to completion), `HomeTesting` (Home's
 registration, render and gestures, and `HomeStoragePlan` — Home's storage
 stated on a `BrowserStoragePlan`), `NoticeTesting` (a dismissal through
 BgUiPrimitives' `NoticeBox`, settled before its outcome is read, and the
-bound on awaiting an operation), `CapturingLogger<T>`, `FixtureHelper`, `MalformedXg`
+bound on awaiting an operation), `CapturingLogger<T>` and `ThrowingLogger<T>`
+(a logger every entry of which fails), `FixtureHelper`, `MalformedXg`
 (the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`,
 `WebSources` (a fixture decoded and converted as Web mode holds it),
 `ScriptedConverter` (the real Web-mode converter wrapped to count, fail or
 hold conversions), `ScriptedDestination` (real output files whose create,
-flush, write, close or removal a test can fail) and `LocalProtocolTesting`
+flush, write, close or removal a test can fail, and which records every
+removal asked of it) and `LocalProtocolTesting`
 (the real Local server in memory, which can restart as a new instance over
-the same folders, behind a `ProtocolWire` that can drop a response, fail a
-request, hold a request — delivered even if its sender stops waiting — hold
-a response, or answer a status itself; a `FileGate` that holds an XGP run
-at its next file; `MemoryBrowserStorage`; and `LocalPage` — one page of the
-app over both, so a reload, disposing the first page, is another page).
+the same folders and run a job straight against itself, behind a
+`ProtocolWire` that can drop a response, fail a request, hold a request —
+delivered even if its sender stops waiting — hold a response, or answer a
+status itself; a `FileGate` that holds a run as it opens its next output
+file, over the file system or another destination; `MemoryBrowserStorage`;
+`LocalPage` — one page of the app over both, so a reload, disposing the
+first page, is another page — and `AnswerHeldJobs`, a page's jobs client
+holding its first start's answer after it has arrived).
 Fixtures are the umbrella's `TestData/FixtureFiles`,
 linked into the build output rather than kept in this repo (see Test project,
 and the fixture pitfall).
@@ -296,10 +304,11 @@ numbering. This section says how the code meets it, not what it rules.
   (halheinrich/backgammon#74). Refiltering reads only what is retained
   (`FilteredRowCache`). Every asynchronous completion carries a ticket and
   publishes only while its owner says so — its failure included: a
-  conversion's failure carries the selection and book it converted for
-  (`ConversionFailedException`, judged by `WebSession.Owns`), whichever
-  gesture asked for it, and a superseded failure is logged, never the run
-  error. Recording what a delivered XGP archive committed comes after the
+  conversion's failure carries the selection, representation and book it
+  converted for (`ConversionFailedException`, judged by `WebSession.Owns`
+  against the selected output's representation), whichever gesture asked
+  for it, and a superseded failure, or one for a key no longer selected, is
+  logged, never the run error. Recording what a delivered XGP archive committed comes after the
   attempt's failure handling: its failure is the run error, and the download
   stays completed. "This
   selection" (`SelectionSkips`) and "the last download" (`WebDownload`, its
@@ -324,7 +333,8 @@ numbering. This section says how the code meets it, not what it rules.
 ### Recovery: a Local XGP run's accounting survives losing the job
 
 The umbrella's `../SPEC-notices.md` §7.5, as amended at the leg's second
-review, is the ratified protocol (halheinrich/backgammon#397): what each
+review (its third review corrected the code, not the section), is the
+ratified protocol (halheinrich/backgammon#397): what each
 owner holds and for how long, how a start is judged and admitted and what
 a refusal does to a disposition, how a page follows a job and finds it
 again, a pass's authority over another instance's mark, owed jobs learned
@@ -347,27 +357,43 @@ what it rules.
   disposition and entry in one step; a refusal at admission retires the
   identity, and no refusal changes a disposition already held. `Settle`
   retires an unseen identity or answers admitted; `Acknowledge` releases
-  only the result. `ProcessController` carries these over the wire (see
-  Public API); a failed job's terminal result is recorded before it is
-  logged.
-- **The browser's wire** (`LocalJobsClient`): one typed call per endpoint;
-  it retries nothing. Its cancel tells delivered, refused (404) and failed
-  (any other answer, or none) apart.
+  only the result. A job's snapshot (`ProcessingProgress`) is immutable, so
+  the store keeps the one reported, serves it to every status read and
+  hands it to a terminal result's builder as it is. `ProcessController`
+  carries these over the wire (see Public API); a failed job's terminal
+  result is recorded before it is logged, and a stopped run's close failure
+  is handed to its terminal result.
+- **The browser's wire** (`ILocalJobs`, implemented by `LocalJobsClient`):
+  one typed call per endpoint; it retries nothing. Its cancel tells
+  delivered, refused (404) and failed (any other answer, or none) apart. A
+  service behind an interface, as the Web conversion is, so a test can hold
+  an answer at the point the page takes it.
 - **The numbering record** (Home's, `XgpNumberingRecord` /
   `XgpNumberingStore` / `XgpNumberingKeeper`): the document
   `xg_xgpNumbering` holds the numbering, the mark (`LedgerMark`) and the owed
   jobs (`OwedXgpJob`).
   - A read has §7.5's four outcomes (`NumberingRead`). An unreadable
     document is kept (`XgpNumberingKeeper.IsUnreadable`): migration runs
-    only over a missing record, and no checkpoint writes over it, until the
-    user's resolution (`ResolveUnreadableAsync`) authorizes replacing that
-    document, and only that one, with a fresh record.
+    only over a missing record, and nothing writes over it, nor applies an
+    entry, while the page knows it is stored — a refused read cannot show
+    it replaced — until the user's resolution (`ResolveUnreadableAsync`)
+    authorizes replacing that document, and only that one, with a fresh
+    record. The replacement is written only once a fresh read shows that
+    document, or nothing; a read showing another page's record takes it and
+    writes nothing. The authorization ends once the fresh record is stored,
+    or once a read shows anything else.
   - Every write is a checkpoint — a fresh read, merged, the change applied,
-    one write. The merge compares the stored record with what this page
-    last saw stored: unchanged, this page's record stands, pending changes
-    and all; changed, its numbering and mark are taken together, by number
-    within an instance and outright across instances, which no mark orders
-    (`LedgerMark.Follows`). A refused checkpoint stands in the page.
+    one write — and only from a fresh read that showed what is stored: under
+    a refused read nothing is written, and the change stands in the page, as
+    a refused write's does. The merge compares the stored record with what
+    this page last saw stored: unchanged, this page's record stands, pending
+    changes and all; changed, its numbering and mark are taken together, by
+    number within an instance and outright across instances, which no mark
+    orders (`LedgerMark.Follows`).
+  - The keeper runs one operation at a time (a `SemaphoreSlim` held from an
+    operation's first read to its last write), so a pass's guard compares
+    the live record and no write marks as seen a job another operation has
+    just recorded.
   - Owed jobs merge as the stored ones and those this page recorded and has
     not yet seen stored, less those it resolved.
   - The three keys it replaced, and the legacy prefix before them, migrate
@@ -380,11 +406,23 @@ what it rules.
   of another instance only from the state the pass started with, both
   halves unchanged (`Applying`'s `underPassAuthority`), and otherwise
   nothing is written and the pass reconciles again from the changed state.
-  It follows a running entry, and settles an owed job of this instance with
-  no entry (retired resolves it, admitted keeps it owed). The controls
-  follow each entry the record took, and what it took from storage (Home's
-  `FollowRecord`). A result the panel's follower received goes through a
-  pass (`ApplyEndedAsync`). Its `State` (`LocalStartState`: the instance,
+  When the state the pass started from changed under it, it shows
+  `Checking` until it has reconciled again. It follows a running entry, and
+  settles an owed job of this instance with no entry (retired resolves it,
+  admitted keeps it owed). The controls are offered each taking — a
+  `LedgerTaking`: the entries of the pass's ledger the record's mark has
+  moved past since the last offer, by an entry applied or by another page's
+  accounting taken from storage; its `Export` is the last of them that
+  committed something. The event is the mark moving, never a change in the
+  numbering's value, so a replay offers nothing and a new export offers
+  itself though its numbering equals the record's (Home's
+  `FollowRecordAfterPassAsync`). A result the panel's follower received goes
+  through a pass (`ApplyEndedAsync`). Recording an XGP job as owed
+  (`RecordOwedAsync`) answers whether its start may be sent: not when its
+  read finds the record unreadable, or another job owed — then the job is
+  resolved as never sent. A pass that fails for any other reason than the
+  server's absence publishes `Checking` and schedules its retry before it
+  logs, and a failure to log stops neither. Its `State` (`LocalStartState`: the instance,
   the mark, and why no XGP start may be sent — `Checking`, `Running`,
   `LostExport` or `UnreadableRecord`) is what the panel's Run gate reads;
   its `LostJobs` are the owed jobs of earlier instances Home's gate reason
@@ -392,28 +430,45 @@ what it rules.
   applies nothing. It retries every `LocalJobTiming.RetryDelay` while it
   cannot reach the server, and follows every `PollInterval` while an entry
   runs or an owed job is unresolved.
-- **The panel's run** (`LocalModePanel.RunLocalAsync`): it mints the
-  identity (`IJobIdentities`), has Home record an XGP job as owed
-  (`OnXgpJobStarting`), sends the start — retried under the same identity
-  until answered, noting whether every attempt was answered — follows the
-  job's status with retries (a persistent failure is the run error, and
-  following goes on), tells Home the job ended (`OnXgpJobEnded`) and only
-  then acknowledges it. A start refused on every attempt resolves its job
-  (`OnXgpJobNeverStarted`); one with an unanswered attempt stays owed. Stop
-  before the answer settles the identity (`SettleAsync`): retired, nothing
-  ran; admitted, Stop cancels and the run follows the job to its stopped
-  result. A cancel refused or not answered is the run error, and following
-  goes on. A refused start, or a job the server no longer holds, ends the
-  run with the run error and asks Home to reconcile (`OnReconcileNeeded`).
-  What it shows still follows §7.2: a job recovered after a reload
-  contributes its accounting and nothing else.
-- **What counts as an edit** (Home): a clock of the page's own events —
-  never wall-clock time — notes each user edit of the next number or the
-  pattern, each export's start (a Local job as it is recorded owed, a Web
-  download as the Web panel raises `OnXgpExportStarting`) and each time the
-  page sets the controls itself. `FollowRecord` keeps an edit made since the
-  export started; for an export this page did not start, since the page
-  last set the controls.
+- **The panel's run** (`LocalModePanel.RunLocalAsync`), past its gate
+  (`RunReady`, the one definition the Run button and its click share): it
+  mints the identity (`IJobIdentities`), has Home record an XGP job as owed
+  and answer whether its start may be sent (`OnXgpJobStarting`, a
+  `Func<OwedXgpJob, Task<bool>>`; held back, nothing is sent and the page
+  reconciles), sends the start — retried under the same identity until
+  answered, noting whether every attempt was answered — follows the job's
+  status with retries (a persistent failure is the run error, and following
+  goes on), tells Home the job ended (`OnXgpJobEnded`) and only then
+  acknowledges it. A start refused on every attempt resolves its job
+  (`OnXgpJobNeverStarted`); one with an unanswered attempt stays owed.
+- **Stop** is the run's own: while the job is not known, the Stop button
+  cancels the run's source, which ends the start's sending; an answer that
+  admits the job after that has the Stop delivered before the job is
+  followed. Stop before the answer settles the identity (`SettleAsync`):
+  retired, nothing ran; admitted, Stop cancels and the run follows the job
+  to its stopped result; refused as another instance's, the run error says
+  the server no longer has the run, and the page reconciles — in every
+  format, as for a job the server no longer holds. A cancel refused or not
+  confirmed is the run error, and following goes on. What the run error
+  shows of a run in hand is one `InFlightError`: a Stop not delivered stands
+  through a persistent failure and contact returning, until a Stop is
+  delivered, the run ends or the user closes it. A refused start, or a job
+  the server no longer holds, ends the run with the run error and asks Home
+  to reconcile (`OnReconcileNeeded`). What it shows still follows §7.2: a
+  job recovered after a reload contributes its accounting and nothing else.
+- **What counts as an edit** (`XgpEditClock`, Home's): a clock of the
+  page's own events — never wall-clock time — notes each user edit of the
+  next number or the pattern, each export's start (a Local job as it is
+  recorded owed, a Web download as the Web panel raises
+  `OnXgpExportStarting`) and each time the page sets the controls itself.
+  The controls keep an edit made since the export started (`Follows`,
+  `FollowsWebDownload`). For an export this page did not start, the start
+  is bounded below only by the latest entry this page started that the same
+  ledger admitted before it, or by the moment the page last set the
+  controls, if later; a refused request, or another instance's, orders
+  nothing. At each taking the clock forgets the starts no later taking can
+  need (`Prune`: it keeps the jobs still owed and the latest admitted one
+  not owed), and a job that never ran is forgotten at once.
 
 ### The ranking: one run, one ranking
 
@@ -565,12 +620,15 @@ it does for a page that lost the job (see "Recovery"). Web mode: the
 archive's commit is handed on only after its hand-off succeeds
 (`OnXgpExported`); a failed hand-off advances nothing. Either way Home
 records the numbering from the commit's options — never from its controls —
-in one checkpoint, and the next-number control follows the record
-(`FollowRecord`) unless the user has edited the next number or the pattern
+in one checkpoint, and the next-number control follows the record's taking
+of the export (`FollowRecord`) — the event, though the numbering's value
+may not change — unless the user has edited the next number or the pattern
 since the export started (see "Recovery": what counts as an edit). A
 length change is no such edit — it says nothing about which number comes
 next. A commit of nothing changes no number, the record's own rule
-(`XgpNumberingRecord.WithCommit`), so nothing follows it.
+(`XgpNumberingRecord.WithCommit`, `XgpExportCommit.CommittedNothing`), so
+the record takes nothing and nothing follows it. The next number is stated
+once, by the numbering (`XgpNumbering.NextNumber`).
 
 ### Components
 
@@ -631,12 +689,15 @@ next. A commit of nothing changes no number, the record's own rule
     (`LocalReconciler`, started once the restore has resolved Local mode):
     it hands the Local panel the reconciliation's `State` and binds its
     hand-offs (`OnXgpJobStartingAsync` noting the job's start before
-    `RecordOwedAsync`, `ApplyEndedAsync`, `ResolveNeverStartedAsync`,
-    `ReconcileAsync`). While XGP is selected it renders the **lost-export
-    gate reason** for each job owed from an earlier instance, and, in either
-    mode, the **unreadable-record gate reason** while the record cannot be
-    read (see "Recovery" and "Notices"). Its controls follow the record by
-    the edit rule (`FollowRecord`; see "Recovery").
+    `RecordOwedAsync` and answering whether the start may be sent,
+    `ApplyEndedAsync`, `OnXgpJobNeverStartedAsync` forgetting the start
+    before `ResolveNeverStartedAsync`, `ReconcileAsync`). While XGP is
+    selected it renders the **lost-export gate reason** for each job owed
+    from an earlier instance, and, in either mode, the **unreadable-record
+    gate reason** while the record cannot be read — in Local mode with a
+    sentence more, about the output folder (see "Recovery" and "Notices").
+    Its controls follow the record's takings by the edit rule
+    (`XgpEditClock`, `FollowRecord`; see "Recovery").
   - **The storage condition's notice**, `#storageUnavailableNotice`, rendered
     from `BrowserStorageCondition` (see "Notices").
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
@@ -650,11 +711,12 @@ next. A commit of nothing changes no number, the record's own rule
   three `[EditorRequired]`, they are the source report's wiring), the XGP
   members, and the recovery protocol's five (all `[EditorRequired]`):
   `StartState` (Home's reconciliation's `LocalStartState` — the Run gate's
-  server half, and the hint saying why it waits), `OnXgpJobStarting`,
-  `OnXgpJobEnded`, `OnXgpJobNeverStarted` and `OnReconcileNeeded` (see
-  "Recovery"). A stopped run's close failure shows beside its stopped line
-  (`#closeFailure`). The output path stays panel-owned, under
-  `xg_outputPath`.
+  server half, and the hint saying why it waits), `OnXgpJobStarting` (a
+  delegate, since the panel needs its answer), `OnXgpJobEnded`,
+  `OnXgpJobNeverStarted` and `OnReconcileNeeded` (see "Recovery"). The Run
+  button and its click share one gate (`RunReady`). A stopped run's close
+  failure shows beside its stopped line (`#closeFailure`). The output path
+  stays panel-owned, under `xg_outputPath`.
   **A result describes the inputs it was computed from.** A run records
   them when it starts (`RunInputs`: the **source visit** it started in, the
   filter's values, the output path, and whether that filter restricted
@@ -734,15 +796,18 @@ next. A commit of nothing changes no number, the record's own rule
   JSON…"), and each gesture ends by converting what the format selected then
   needs (`ConvertWhatTheSelectedOutputNeedsAsync`) — a download included,
   once its attempt has ended. A download attempt begins at the click, before
-  the busy wrapper's yield (`BeginAttempt`): its format, filter, options,
-  file name and the projection it builds from are captured then, and it
-  begins only from a converted representation. A file that cannot be read is
+  the busy wrapper's yield (`BeginAttempt`), and only past the gate the
+  Download button and its click share (`DownloadReady`): its format, filter,
+  options, file name and the projection it builds from are captured then,
+  and it begins only from a converted representation. An XGP attempt raises
+  `OnXgpExportStarting` to Home as it begins. A file that cannot be read is
   no run error: it is named in "this selection". `_runError` is for a
   gesture that itself failed — a download that could not be built or handed
   over, or a selection that could not be taken — and only while its owner
   still owns it (`GuardedAsync`: a conversion's failure by its selection and
-  book, `WebSession.Owns`; anything else by its gesture; a download's by its
-  record): a superseded failure is logged instead. A failure recording a
+  book while its key is the selected output's, `WebSession.Owns`; anything
+  else by its gesture; a download's by its record): a superseded failure is
+  logged instead. A failure recording a
   delivered archive's numbering is the host's, after the attempt: it is
   shown, and the download stays completed. The session's projections
   are a `FilteredRowCache`; the panel's own
@@ -847,7 +912,9 @@ latches: a refusal disables nothing, and the next call is simply made.
   "refused" alike — every caller already reads null as "use my default", and
   each keeps its own parsing and default — and a refused write returns
   normally, leaving the caller's in-memory value standing. Every refusal is
-  reported to `BrowserStorageCondition` before the call returns. Anything
+  reported to `BrowserStorageCondition` before the call returns, and the
+  call still returns its result normally if logging the refusal fails (the
+  condition records the occurrence first and contains its logger). Anything
   that is not the browser's refusal propagates.
 - **`BrowserStorageCondition`** is the one storage condition, host-owned
   and app-scoped. Every refusal — `SettingsStorage`'s, and the filter
@@ -897,7 +964,7 @@ holds the dismissal**. No `.razor` file here types alert markup.
 | `zero-match-notice` (both panels) | gate reason — the run's result | no | assertive |
 | `skipped-notice` (both panels, `SkipListNotice`) | gate reason — the record of what was lost: Local's last run; Web's "this selection" and "the last download" | no — pinned after the caller's attributes | assertive |
 | `lost-export-notice` (Home, XGP selected) | gate reason — a Local XGP export lost with an earlier server instance blocks XGP until the user resolves it, with its action | no | assertive |
-| `unreadable-numbering-notice` (Home, XGP selected, both modes) | gate reason — a numbering record that cannot be read blocks XGP until the user resolves it, with its action; it suggests no number | no | assertive |
+| `unreadable-numbering-notice` (Home, XGP selected, both modes) | gate reason — a numbering record that cannot be read blocks XGP until the user resolves it, with its action; it suggests no number, and in Local mode adds a sentence about the output folder (Hal's wording, 2026-10-12) | no | assertive |
 | the selected-size limit (Web) | gate reason — why nothing loaded and Download is dark | no | assertive |
 | `busy-notice` (Web) | live indicator | no | polite |
 
@@ -1085,7 +1152,8 @@ the jobs, the start dispositions and the XGP ledger (see "Recovery"; the
 protocol is `SPEC-notices.md` §7.5). The runner holds a `JobEntry`, an
 immutable handle: its identity (the browser's), its XGP ledger number and
 the token its work runs under. The job's `ProcessingProgress` snapshot —
-final once terminal — and its `CancellationTokenSource` are the store's
+final once terminal, and immutable, so the store keeps and serves the one
+reported as it is — and its `CancellationTokenSource` are the store's
 private `HeldJob`, changed only under its lock. The client reads the status
 once per second (the processor reports every tenth file, on every pathway).
 
@@ -1111,9 +1179,10 @@ kill a batch: a failed read (the read's outcome), a failed conversion (the
 file's staged contribution) and, on the Xgp pathway, a decision whose payload
 cannot be prepared are each skipped, and the run goes on. Every one of them
 goes through one seam, `LocalFolderProcessor.RecordSkip`, and nothing else
-logs a skip: the seam logs it and appends a `SkippedItem` (the file's path
-relative to the input folder; the decision's id for a decision skip; the
-exception's message as the reason) to the run's `RunRecord`. Every snapshot
+logs a skip: the seam appends a `SkippedItem` (the file's path relative to
+the input folder; the decision's id for a decision skip; the exception's
+message as the reason) to the run's `RunRecord`, and then logs it, a
+logger that fails contained so the batch goes on. Every snapshot
 the run reports, progress and terminal alike, carries the record's skips as
 `ProcessingProgress.Skipped`. A commit to the destination is outside every
 skip boundary and fails the run. A cancellation propagates out of the read,
@@ -1340,11 +1409,13 @@ records what a run was computed from when the run starts.
   success reported first and no skip; a cancellation whose close fails is
   still a stopped run, the close failure beside it, and a failed Diagram
   JSON write whose close fails keeps the write's error, the close failure
-  beside it.
+  beside it; and a logger that throws stops no run at any kind of skip, the
+  record whole and the later files written.
 - `LocalFolderProcessorNoOverwriteTests` — Local XGP files are never
   overwritten (`SPEC-notices.md` §7.5): an existing file stops the run with
   an error naming it, its bytes untouched and the files before it counted;
-  a failure to create the file removes nothing; a write that fails partway
+  a failure to create the file — a folder of its name — asks no removal and
+  leaves the folder's contents as they were; a write that fails partway
   and a failed close each remove the run's unfinished file, the files before
   it standing; a close or a removal that also fails is reported beside the
   write's failure, never in its place; and the destination's own
@@ -1354,7 +1425,8 @@ records what a run was computed from when the run starts.
   wire form under `JsonSerializerDefaults.Web` (the array of its entries,
   `DecisionId` in its canonical form, a body without the field reading as the
   empty record), and its own contract (immutability, the derived counts,
-  equality, the copy taken of its input, null entries refused).
+  equality, the copy taken of its input, null entries refused); and the
+  snapshot itself has no property that can be set once it is made.
 - `RunRecordTests` / `XgpExportCommitTests` — the job runner's cancelled and
   failed snapshots take the skips and the commit from the record over a
   trailing report; the commit's validation, `NextNumber`, equality and wire
@@ -1379,7 +1451,8 @@ records what a run was computed from when the run starts.
   latest entry, admits exactly one of two simultaneous starts, and leaves
   other formats alone; a refusal at admission retires the identity, a
   conflicting retry's refusal leaves the admitted disposition, and a start
-  naming another instance changes nothing here.
+  naming another instance changes nothing here; the snapshot reported is
+  served as reported and is what a terminal result's builder receives.
 - `LocalJobEndpointTests` — the server's side of the protocol through the
   real wire (`LocalServer`, `ProtocolWire`): a lost start response's retry
   finds the same job and no second runs; a delayed start settled first is
@@ -1416,7 +1489,30 @@ records what a run was computed from when the run starts.
   what counts as an edit (a reload's restored value follows; away and back
   stays; a set-back number stays through a replay); and a record that
   cannot be read (gated, kept, replaced only by the action, which still
-  waits on reconciliation; a refused read gating nothing).
+  waits on reconciliation; a refused read gating nothing). And the third
+  review's: a new entry whose numbering equals the record's advancing the
+  control, and a replay of another page's export leaving a later edit; the
+  P/J/Q/K sequence following, and an entry of another instance bounding
+  nothing; the owe step finding the record unreadable, or learning of a
+  lost job, sending no start; a changed pass showing checking until it has
+  reconciled again; and Stop — after the admitted answer arrived (the
+  answer held by `AnswerHeldJobs`), a failure standing through a persistent
+  failure and contact returning, a CSV Stop before the answer, a settle
+  going unanswered, a settle answered by another instance in CSV and XGP,
+  Stop pressed twice, and a stopped run's close failure reaching the page.
+  The start-winning Stop test holds the cancel's response until the server
+  has answered it before letting the job past its first file.
+- `LocalReconcilerTests` — the reconciliation driven directly over the real
+  server and an in-memory browser storage, for what no page shows: each
+  entry the record takes offered once, a replay offering nothing, a
+  restored record offering nothing; and a pass that fails with a logger
+  that throws, still leaving the state unknown and tried again.
+- `XgpEditClockTests` — what counts as an edit, rule by rule: an export
+  this page started, another page's ordered by an earlier own entry of its
+  ledger (and not by a later one, a start no ledger holds, or a forgotten
+  one), the controls' setting as the bound and the later of the two, a
+  taking that committed nothing, a Web download; and pruning keeping the
+  owed starts and the latest admitted one not owed.
 - `XgpNumberingRecordTests` / `XgpNumberingStoreTests` /
   `XgpNumberingKeeperTests` — the numbering record (§7.5): applying an entry
   (a newer one sets numbering and mark and resolves its job; one at or
@@ -1429,7 +1525,13 @@ records what a run was computed from when the run starts.
   merge (a stored record unchanged since it was seen leaves the page's
   standing; a changed one supplies mark and numbering together), owed jobs
   learned and recorded, a pass's authority (both halves, refusal), and a
-  record that cannot be read kept until its resolution.
+  record that cannot be read kept until its resolution; nothing written
+  without a fresh read (over an in-memory storage refusing reads and taking
+  writes: a checkpoint, a known-unreadable document, the resolution), the
+  resolution's authorization ending, a competing resolution queued behind a
+  pass's held read running after it and preserved, an identical Web
+  download still taken and written; and the next number, derived and not
+  stored.
 - `WebDownloadTests` — "the last download"'s label names the attempt's
   format and ending, for every format and ending, and the formats' short
   names.
@@ -1501,7 +1603,9 @@ records what a run was computed from when the run starts.
   notifies once, later ones are the same occurrence; a dismissal cannot
   precede its occurrence (throws) and survives further refusals; `Attach`
   delivers the current state before it returns and then each change; a
-  disposed attachment hears nothing.
+  disposed attachment hears nothing; and a logger that throws still lets
+  the occurrence begin and its observers hear of it, and a storage call's
+  refused write, read and entry read return their results normally.
 - `WebModePanelStorageTests` / `LocalModePanelStorageTests` — each panel's
   own keys under a refusing browser, planned. **A refused folder-hint write
   and the upload still reads its files** — at v1.12.1 that write threw out of
@@ -1563,7 +1667,9 @@ records what a run was computed from when the run starts.
   or its values change, **dropped on a folder change while the empty filter
   stays ready**, and **not shown when the run completes after its inputs were
   superseded** — its progress and Stop staying with it while it runs — with
-  the same held run, released unchanged, as the control.
+  the same held run, released unchanged, as the control; and a click past
+  any one of the Run gate's conditions, or while a run is in hand, sends no
+  start.
 - `HomeRunResultTests` — a Local XGP run through the real page, storage
   planned, its bookkeeping's apply checkpoint held: a run whose folder
   changed while it ran shows no "Done" while that write is pending nor after
@@ -1578,8 +1684,10 @@ records what a run was computed from when the run starts.
   advance the numbering by their commit; a control changed while a Local
   run ran, or while a Web download's hand-off was pending, stands, while the
   export's numbering is recorded from its captured options; a length change
-  alone still advances the next number (correction 1); and a run that
-  committed nothing changes no number.
+  alone still advances the next number (correction 1); a run that
+  committed nothing changes no number; and a next number typed before a Web
+  download's click is followed past it, which needs the panel to raise the
+  download's start.
 - `LocalModePanelZeroMatchTests` — the Local zero-match notice, through real
   runs against a zero-row server: shown beside the Done line for an active
   filter, not for the empty one, and not when an active filter comes into
@@ -1670,8 +1778,9 @@ records what a run was computed from when the run starts.
   book change publishes nothing; a superseded pick's failure is not shown,
   and a conversion's failure is judged by its selection and book, not its
   gesture (a book load's reconversion overtaken by a pick, a records
-  conversion under a replaced book); refiltering changes no skip and
-  converts nothing.
+  conversion under a replaced book), and by its key (a records conversion
+  failing after a switch back to CSV shows nothing); refiltering changes no
+  skip and converts nothing.
 - `WebModePanelDownloadTests` — a download attempt (§7.1, §7.3): an XGP
   decision whose preparation fails is skipped, consumes no number, and is
   named in "the last download (XGP)", the host receiving the archive's
@@ -1681,11 +1790,19 @@ records what a run was computed from when the run starts.
   standing; a format switch inside the click's yield window or during the
   hand-off leaves the attempt building the format it was clicked for, and
   the gesture ends with the new format converted; a click while the selected
-  format is not converted builds nothing; a held download that fails after a
+  format is not converted builds nothing, and nor does a click past any one
+  of the Download gate's conditions (a gesture in hand, no filter, an
+  unreadable record, nothing matching, invalid options), which raises no
+  export to the host; a held download that fails after a
   newer pick shows no error, while one that succeeds still reaches the host's
   numbering; an accounting failure after the hand-off is shown, the download
   staying completed; an XGP download waits while the host's record cannot be
   read; the next attempt replaces the record and a new pick clears it.
+- `WebModePanelXgpExportTests` — the Web XGP export chain over real
+  fixture bytes: the archive handed over and the commit raised, anonymized
+  positions, the options gate; and the download's start raised to the host
+  as an XGP attempt begins, once, before anything is handed over, and for no
+  other format.
 - `WebModePanelBusyAffordanceTests` — the busy contract, pinned as two
   independent halves because the failure mode is ordering, not duration: the
   busy state is *rendered* before the body runs (drop the `StateHasChanged`
@@ -1754,8 +1871,10 @@ records what a run was computed from when the run starts.
   three keys, and the legacy prefix (including the brace-prefix fallback)
   — into the document, a stored document read alone, post-export
   persistence as one checkpoint, a number typed before a Web download
-  followed and one changed away and back during it kept, and an unreadable
-  record gating Web XGP until its action replaces it — storage planned, so
+  followed and one changed away and back during it kept, two downloads
+  whose numbering equals the record's each taken and each followed, and an
+  unreadable record gating Web XGP until its action replaces it, its text
+  exactly Hal's both-modes wording — storage planned, so
   the migration's reads, write and removals and the export's read and write
   are each declared and verified.
 - `HomeOutputFormatRestoreTests` — the stored output format restored by
@@ -1961,7 +2080,8 @@ project reference.
 - `XgpExportCommit` — `sealed record XgpExportCommit(XgpExportOptions
   Options, int Count)`: what one XGP export committed — the options it
   captured and the files it committed — valid by construction (valid options,
-  a non-negative count), `NextNumber` derived and not serialized. Both modes'
+  a non-negative count), `NextNumber` and `CommittedNothing` (the one
+  statement of "consumed no number") derived and not serialized. Both modes'
   accounting to Home (see "XGP export"); on the wire as
   `ProcessingProgress.XgpCommit`.
 - `XgpPayload` — static: `Prepare(DecisionId, XgFile, ReadOnlyMemory<byte>?
@@ -1978,8 +2098,9 @@ project reference.
   so a future move into a library is relocation-only. `XgpNamePreview`
   (`internal`, the preview's sample row) sits beside the engine and not in
   it, because it reads `AppRanking`, an app type. `XgProcessingService`,
-  `WebSession`, the numbering record's types, `LocalJobsClient`,
-  `LocalReconciler` and their companions (`Client/Services`) are `internal`
+  `WebSession`, the numbering record's types, `ILocalJobs` and
+  `LocalJobsClient`, `LocalReconciler`, `XgpEditClock` and their
+  companions (`Client/Services`) are `internal`
   for the same reason — client-assembly implementation details, not public
   surface.
 - `ProcessRequest` — what one Local run does, the `Run` of a start request
@@ -2002,11 +2123,13 @@ project reference.
   UnreadableRecord`) and `Allows(format)`; and `OwedXgpJob(JobId, Instance,
   Options, Folder)`, also an entry of the numbering record. Public because a
   component's parameters are.
-- `ProcessingProgress` — status-endpoint payload; a settable DTO the
-  processor fills and the panel reads. `Skipped` (`SkipRecord`, empty by
-  default, never null) is the run's skip record as of the snapshot;
-  `XgpCommit` (`XgpExportCommit?`) an XGP run's committed result.
-  `PercentComplete` is get-only and derived.
+- `ProcessingProgress` — status-endpoint payload; an immutable record (every
+  property init-only; a changed snapshot is a new one, made with `with`) the
+  processor makes and the panel reads, so the job store can keep, serve and
+  hand on a snapshot as it is. `Skipped` (`SkipRecord`, empty by default,
+  never null) is the run's skip record as of the snapshot; `XgpCommit`
+  (`XgpExportCommit?`) an XGP run's committed result. `PercentComplete` is
+  get-only and derived.
 - `SkipRecord` — the one record type of skipped units, both modes
   (`SPEC-notices.md` §7.1): an immutable, ordered `IReadOnlyList<SkippedItem>`
   with no null entry — `Empty`, `Of(items)`, collection expressions
@@ -2356,7 +2479,12 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   restored value is not an edit; away and back is one; a length change is
   not a choice about the next number), and the controls follow only what
   the record took (`FollowRecord`; `LocalRecoveryTests`,
-  `HomeXgpAccountingTests`).
+  `HomeXgpAccountingTests`). Follow the taking — the event — not a change
+  in the numbering's value: an export whose numbering equals the record's
+  is a taking all the same, and a replay is none (`LedgerTaking`;
+  `LocalReconcilerTests`). For an export another page started, don't take
+  any start of this page's as its bound: only an entry this page started
+  that the same ledger admitted before it orders it (`XgpEditClock`).
   Nothing scans previously exported files, and no number is ever inferred
   from file names (Hal's F3 ruling): a user who bypasses the counter (edits
   "next number" backwards, exports into the same place twice with a reset
@@ -2365,7 +2493,9 @@ lib type directly; nothing in this subproject duplicates or shadows it.
 - **Write the numbering record only through `XgpNumberingKeeper`.** Each
   checkpoint reads afresh, merges, and writes the whole document once;
   writing a field on its own, or from the page's copy without the fresh
-  read, can undo another page's export or drop its owed job.
+  read, can undo another page's export or drop its owed job. A refused read
+  is no fresh read: write nothing then. And keep the keeper's operations one
+  at a time — a second awaiting storage beside the first breaks its guard.
 - **Never order marks of different instances** (`SPEC-notices.md` §7.5) —
   not by which instance the page believes current, and not by wall-clock
   time, which can be set back. Across instances an entry is newer only
@@ -2381,7 +2511,12 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   let a refused or unreadable read drop anything.
 - **Never read an unreadable record as nothing stored.** It may hold owed
   exports: migration, checkpoints and passes all leave it as it is, and only
-  the user's resolution authorizes replacing it — that document, once.
+  the user's resolution authorizes replacing it — that document, once, and
+  only once a fresh read shows it.
+- **Log after recording, and contain the log.** Where a log reports state
+  the user depends on — a skip, a reconciliation's retry, a storage refusal
+  — record the state first and catch what the logger throws: a logging
+  failure must never end the batch, the retry or the storage call.
 - **The ranking is stated once, and always stated.** Every producer
   operation that takes a ranking gets `AppRanking.Ranking` (or, in Web mode,
   the cache's, which is built from it) — never a `PlayRanking` literal, and
