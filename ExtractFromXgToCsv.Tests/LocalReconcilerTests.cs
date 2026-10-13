@@ -190,6 +190,30 @@ public class LocalReconcilerTests : IAsyncLifetime
         Assert.Equal(["another-pages", "job-2"], keeper.Record.Owed.Select(job => job.JobId));
     }
 
+    /// <summary>
+    /// The state is unknown though the instance is known: a pass has learned
+    /// it, but an owed job of it cannot be settled, so reconciliation has not
+    /// succeeded, and the owe step holds a start back. Once the settle is
+    /// reached the job is retired and the state known again.
+    /// </summary>
+    [Fact]
+    public async Task TheOweStep_WhileAnOwedJobCannotBeSettled_HoldsTheStartBack()
+    {
+        var anotherPage = await RestoredKeeperAsync();
+        Assert.True(await anotherPage.OweAsync(OwedJob("never-started")));
+        var failing = _server.Wire.Fail(ProtocolWire.Settle);
+        var keeper = await RestoredKeeperAsync();
+        var reconciler = ReconcilerOver(keeper);
+        await reconciler.StartAsync();
+        Assert.Equal(new LocalStartState(_instance, null, XgpStartBlock.Checking), reconciler.State);
+
+        Assert.False(await reconciler.RecordOwedAsync(OwedJob("job-1")));
+        Assert.DoesNotContain(keeper.Record.Owed, job => job.JobId == "job-1");
+
+        failing.Stop();
+        Assert.True(SpinWait.SpinUntil(() => reconciler.State.XgpBlock is null, NoticeTesting.OperationBound));
+    }
+
     private OwedXgpJob OwedJob(string jobId) =>
         new(jobId, _instance, new XgpExportOptions(), _server.OutputFolder);
 
