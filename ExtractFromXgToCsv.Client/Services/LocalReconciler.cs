@@ -47,7 +47,7 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// </remarks>
 internal sealed class LocalReconciler
 {
-    private readonly LocalJobsClient _client;
+    private readonly ILocalJobs _client;
     private readonly XgpNumberingKeeper _numbering;
     private readonly LocalJobTiming _timing;
     private readonly Func<LedgerTaking, Task> _followRecord;
@@ -79,7 +79,7 @@ internal sealed class LocalReconciler
     /// <param name="logger">Logs a reconciliation that failed for any reason but the server's absence.</param>
     /// <param name="lifetime">The page's lifetime: nothing runs after it ends.</param>
     public LocalReconciler(
-        LocalJobsClient client,
+        ILocalJobs client,
         XgpNumberingKeeper numbering,
         LocalJobTiming timing,
         Func<LedgerTaking, Task> followRecord,

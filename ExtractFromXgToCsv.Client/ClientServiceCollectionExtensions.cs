@@ -32,9 +32,10 @@ internal static class ClientServiceCollectionExtensions
 
         // Local mode's job protocol (SPEC-notices.md §7.5): its wire, how
         // patiently a page follows and reconciles, and the identities the
-        // browser mints for its starts. The timing and the identities are
-        // services so a test can shorten the one and name the other.
-        services.AddScoped<LocalJobsClient>();
+        // browser mints for its starts. All three are services: a test can
+        // hold an answer at the point the page takes it, shorten the timing,
+        // and name the identities.
+        services.AddScoped<ILocalJobs, LocalJobsClient>();
         services.AddSingleton(LocalJobTiming.Default);
         services.AddSingleton<IJobIdentities, GuidJobIdentities>();
 

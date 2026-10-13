@@ -6,7 +6,7 @@
 @implements IDisposable
 @inject SettingsStorage Settings
 @inject HttpClient Http
-@inject LocalJobsClient Jobs
+@inject ILocalJobs Jobs
 @inject LocalJobTiming Timing
 @inject IJobIdentities Identities
 
@@ -67,12 +67,13 @@
        no longer match the run's, already clear it — and there is no dismissed bit anywhere,
        here or in the Notice (the binding makes it caller-held, so it keeps
        none). A second failure assigns the field again and shows fresh although
-       its text may be identical: the text was never the occurrence. No @if
-       around it — one fact, read once. *@
+       its text may be identical: the text was never the occurrence. While the
+       run goes on, what the field shows of it is _inFlightError's to say. No
+       @if around it — one fact, read once. *@
     <Notice class="mt-2" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
             Dismissible="true"
             @bind-Dismissed:get="_runError is null"
-            @bind-Dismissed:set="_ => _runError = null">
+            @bind-Dismissed:set="_ => DismissRunError()">
         @_runError
     </Notice>
 
@@ -364,15 +365,13 @@
     private string? _currentJobId = null;
     private bool _busy = false;
 
-    // Ends the start of the run in hand when Stop is pressed before the server
-    // has answered it; null while no start is being sent.
-    private CancellationTokenSource? _abandonStart;
+    // Stop pressed for the run in hand before its job was known: it ends the
+    // sending of the start, and once the start's answer admits the job, it is
+    // delivered before the job is followed. Null while no run is in hand.
+    private CancellationTokenSource? _stopBeforeTheJob;
 
     // This panel's lifetime: a run it is following stops when it goes.
     private readonly CancellationTokenSource _lifetime = new();
-
-    // Whether the persistent-failure run error is up for the run in hand.
-    private bool _stillTryingShown;
 
     // The failed run standing on screen, as its message; null when none is.
     // The run error notice's whole state — presence, text and dismissal are
@@ -381,6 +380,25 @@
     // started and then failed; this is the client's own failure to start or
     // follow one.
     private string? _runError;
+
+    // What the run error shows of the run in hand while it goes on.
+    private InFlightError _inFlightError;
+
+    /// <summary>What the run error shows of a run still in hand, beside nothing at all.</summary>
+    private enum InFlightError
+    {
+        /// <summary>Nothing of the run in hand.</summary>
+        None,
+
+        /// <summary>The persistent-failure error: taken down when contact returns.</summary>
+        StillTrying,
+
+        /// <summary>
+        /// A Stop that was refused, or could not be confirmed: it stands until a
+        /// Stop is delivered or the run ends, whatever contact does meanwhile.
+        /// </summary>
+        StopNotDelivered,
+    }
 
     /// <summary>
     /// One visit to a source: the stretch of this panel's life over which it
@@ -531,33 +549,50 @@
         _runError = null;
     }
 
-    // Stop (SPEC-notices.md §7.5): once the server has admitted the job, it
-    // cancels it; before the start is answered, it stops sending the start,
-    // and the run settles the identity (RunLocalAsync).
+    // The user closed the run error: the occurrence ends, whatever it was.
+    private void DismissRunError()
+    {
+        _runError = null;
+        _inFlightError = InFlightError.None;
+    }
+
+    // Stop (SPEC-notices.md §7.5): once the job is known, it cancels it;
+    // before then, it stops sending the start, and the run either delivers it
+    // as soon as an answer admits the job or settles the identity
+    // (RunLocalAsync).
     private async Task StopLocalAsync()
     {
         if (_currentJobId is { } jobId)
             await DeliverStopAsync(jobId);
         else
-            _abandonStart?.Cancel();
+            _stopBeforeTheJob?.Cancel();
     }
 
     /// <summary>
     /// Asks the server to cancel the admitted job. Delivered, the page goes on
-    /// following the job to its stopped result, which says so. Refused, or not
-    /// answered, the page says so — Stop is never shown as delivered when it
-    /// was not — and goes on following; Stop can be pressed again.
+    /// following the job to its stopped result, which says so, and a Stop
+    /// failure standing ends. Refused, or not confirmed — any other answer, or
+    /// none — the page says so, Stop is never shown as delivered when it was
+    /// not, and that stands until a Stop is delivered or the run ends; the page
+    /// goes on following, and Stop can be pressed again.
     /// </summary>
     private async Task DeliverStopAsync(string jobId)
     {
         try
         {
-            if (!await Jobs.CancelAsync(jobId, _lifetime.Token))
-                _runError = StopRefusedMessage;
+            if (await Jobs.CancelAsync(jobId, _lifetime.Token))
+            {
+                if (_inFlightError == InFlightError.StopNotDelivered)
+                    ClearInFlightError();
+            }
+            else
+            {
+                ShowInFlightError(InFlightError.StopNotDelivered, StopRefusedMessage);
+            }
         }
         catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
         {
-            _runError = StopFailedMessage;
+            ShowInFlightError(InFlightError.StopNotDelivered, StopUnconfirmedMessage);
         }
     }
 
@@ -591,7 +626,7 @@
         var xgp = OutputFormat == OutputFormat.Xgp;
         var run = new RunInputs(_visit, filter, filter.Build().IsEmpty, _outputPath);
         _run = run;
-        _busy = true; _runError = null;
+        _busy = true; _runError = null; _inFlightError = InFlightError.None;
         _progress = null; _currentJobId = null;
         // The next run replaces the last one's record: this run's is shown
         // when it ends, never while it is still growing.
@@ -617,8 +652,9 @@
         string? failure = null;
         var reconcile = false;
 
-        using var abandon = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _abandonStart = abandon;
+        using var stop = new CancellationTokenSource();
+        using var sending = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, _lifetime.Token);
+        _stopBeforeTheJob = stop;
         try
         {
             // An XGP job is owed from before its start is sent, so a page that
@@ -631,11 +667,15 @@
             }
             else
             {
-                var started = await StartAsync(start, abandon.Token);
+                var started = await StartAsync(start, sending.Token);
                 switch (started.Answer)
                 {
                     case StartAnswer.Admitted:
                         _currentJobId = jobId;
+                        // A Stop pressed while the answer was on its way, before
+                        // the job was known, is delivered before it is followed.
+                        if (stop.IsCancellationRequested)
+                            await DeliverStopAsync(jobId);
                         terminal = await FollowAsync(jobId);
                         if (terminal is null && !_lifetime.IsCancellationRequested)
                         {
@@ -654,7 +694,10 @@
                         break;
                     default:
                         // Stopped before the server answered: the start may
-                        // yet arrive, so Stop settles its identity.
+                        // yet arrive, so Stop settles its identity. Whatever the
+                        // format, a job the server does not hold, or a settle
+                        // the server refuses as another instance's, is shown,
+                        // and the page reconciles.
                         switch (await SettleAsync(jobId, instance))
                         {
                             case SettleOutcome.Retired:
@@ -669,10 +712,18 @@
                                 await DeliverStopAsync(jobId);
                                 terminal = await FollowAsync(jobId);
                                 if (terminal is null && !_lifetime.IsCancellationRequested)
+                                {
                                     failure = UnknownJobMessage;
+                                    reconcile = true;
+                                }
+                                break;
+                            default:
+                                // The server is another instance now: it does
+                                // not hold the run, whether or not it ran.
+                                failure = UnknownJobMessage;
+                                reconcile = true;
                                 break;
                         }
-                        reconcile = xgp;
                         break;
                 }
             }
@@ -689,7 +740,7 @@
         }
         finally
         {
-            _abandonStart = null;
+            _stopBeforeTheJob = null;
         }
 
         // The panel has gone, and with it everything its run would show; the
@@ -697,9 +748,11 @@
         if (_lifetime.IsCancellationRequested)
             return;
 
+        // The run has ended: its outcome replaces whatever the run error
+        // showed while it went on.
         _busy = false;
         _currentJobId = null;
-        _stillTryingShown = false;
+        _inFlightError = InFlightError.None;
 
         // Judge before publishing: the outcome is shown only while the run's
         // source visit is the current one and the filter values on screen are
@@ -861,23 +914,32 @@
 
     // The persistent-failure run error: shown once failures reach the
     // threshold, and taken down when contact returns, unless the user has
-    // closed it already.
+    // closed it already. A Stop not delivered stands: the persistent failure
+    // never replaces it, and contact returning never takes it down.
     private void StillTryingAfter(int failures)
     {
-        if (failures != Timing.FailuresBeforeError)
+        if (failures != Timing.FailuresBeforeError || _inFlightError == InFlightError.StopNotDelivered)
             return;
-        _runError = StillTryingMessage;
-        _stillTryingShown = true;
-        StateHasChanged();
+        ShowInFlightError(InFlightError.StillTrying, StillTryingMessage);
     }
 
     private void ContactReturned()
     {
-        if (!_stillTryingShown)
-            return;
-        _stillTryingShown = false;
-        if (_runError == StillTryingMessage)
-            _runError = null;
+        if (_inFlightError == InFlightError.StillTrying)
+            ClearInFlightError();
+    }
+
+    private void ShowInFlightError(InFlightError error, string message)
+    {
+        _runError = message;
+        _inFlightError = error;
+        StateHasChanged();
+    }
+
+    private void ClearInFlightError()
+    {
+        _runError = null;
+        _inFlightError = InFlightError.None;
         StateHasChanged();
     }
 
@@ -904,8 +966,9 @@
     private const string StopRefusedMessage =
         "The server didn't stop the run: it had already ended, or the server no longer has it.";
 
-    // Stop that never reached the server, or got no answer.
-    private const string StopFailedMessage =
+    // Stop the page cannot confirm: any answer but delivered or refused, or
+    // none.
+    private const string StopUnconfirmedMessage =
         "Stop didn't reach the server, so the run may still be going. Press Stop to try again.";
 
     // The page says why a refused start started nothing.

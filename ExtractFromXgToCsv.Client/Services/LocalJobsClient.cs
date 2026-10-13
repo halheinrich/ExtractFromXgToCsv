@@ -10,16 +10,61 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <c>ProcessController</c>. It retries nothing: a call that fails throws, and
 /// what to do then — retry, show the run error, reconcile — is its caller's.
 /// </summary>
-internal sealed class LocalJobsClient(HttpClient http)
+/// <remarks>
+/// A service, so an answer is a seam: a test can hold one after it has
+/// arrived, at the point the page decides what to do with it — a Stop pressed
+/// meanwhile, say — which the real wire cannot express, its own cancellation
+/// of the request intervening first. The application's is
+/// <see cref="LocalJobsClient"/>.
+/// </remarks>
+internal interface ILocalJobs
 {
     /// <summary>The server's instance and its whole XGP ledger.</summary>
     /// <exception cref="HttpRequestException">The server could not be reached, or did not answer.</exception>
+    Task<LedgerSnapshot> ReadLedgerAsync(CancellationToken cancellationToken);
+
+    /// <summary>Sends a start: admitted — new, or a repeat that started nothing — or refused, for its reason.</summary>
+    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer either way.</exception>
+    Task<StartAnswer> StartAsync(StartRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The job's current snapshot; <see langword="null"/> when the server does
+    /// not hold the job — never started there, released, or lost with an
+    /// earlier instance.
+    /// </summary>
+    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer.</exception>
+    Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asks the server to cancel the job: <see langword="true"/> when it
+    /// signalled the running job, <see langword="false"/> when it refused —
+    /// the job had ended, or the server does not hold it.
+    /// </summary>
+    /// <exception cref="HttpRequestException">The server could not be reached, or answered neither way.</exception>
+    Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken);
+
+    /// <summary>Acknowledges the job's terminal result, releasing it on the server.</summary>
+    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer.</exception>
+    Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Settles an owed identity of <paramref name="instance"/>: retired or
+    /// admitted; <see langword="null"/> when the server is another instance
+    /// now, and refused it.
+    /// </summary>
+    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer either way.</exception>
+    Task<SettleOutcome?> SettleAsync(string jobId, string instance, CancellationToken cancellationToken);
+}
+
+/// <summary>The application's <see cref="ILocalJobs"/>: the wire, over HTTP.</summary>
+internal sealed class LocalJobsClient(HttpClient http) : ILocalJobs
+{
+    /// <inheritdoc />
     public async Task<LedgerSnapshot> ReadLedgerAsync(CancellationToken cancellationToken) =>
         await http.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger", cancellationToken)
         ?? throw new HttpRequestException("The server answered no ledger.");
 
-    /// <summary>Sends a start: admitted — new, or a repeat that started nothing — or refused, for its reason.</summary>
-    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer either way.</exception>
+    /// <inheritdoc />
     public async Task<StartAnswer> StartAsync(StartRequest request, CancellationToken cancellationToken)
     {
         using var response = await http.PostAsJsonAsync("/api/process/start", request, cancellationToken);
@@ -29,12 +74,7 @@ internal sealed class LocalJobsClient(HttpClient http)
         return new StartAnswer.Admitted((await ReadAsync<StartResponse>(response, cancellationToken)).LedgerNumber);
     }
 
-    /// <summary>
-    /// The job's current snapshot; <see langword="null"/> when the server does
-    /// not hold the job — never started there, released, or lost with an
-    /// earlier instance.
-    /// </summary>
-    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer.</exception>
+    /// <inheritdoc />
     public async Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken)
     {
         using var response = await http.GetAsync($"/api/process/{jobId}/status", cancellationToken);
@@ -44,12 +84,7 @@ internal sealed class LocalJobsClient(HttpClient http)
         return await ReadAsync<ProcessingProgress>(response, cancellationToken);
     }
 
-    /// <summary>
-    /// Asks the server to cancel the job: <see langword="true"/> when it
-    /// signalled the running job, <see langword="false"/> when it refused —
-    /// the job had ended, or the server does not hold it.
-    /// </summary>
-    /// <exception cref="HttpRequestException">The server could not be reached, or answered neither way.</exception>
+    /// <inheritdoc />
     public async Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken)
     {
         using var response = await http.PostAsync($"/api/process/{jobId}/cancel", content: null, cancellationToken);
@@ -59,20 +94,14 @@ internal sealed class LocalJobsClient(HttpClient http)
         return true;
     }
 
-    /// <summary>Acknowledges the job's terminal result, releasing it on the server.</summary>
-    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer.</exception>
+    /// <inheritdoc />
     public async Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken)
     {
         using var response = await http.PostAsync($"/api/process/{jobId}/acknowledge", content: null, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
-    /// <summary>
-    /// Settles an owed identity of <paramref name="instance"/>: retired or
-    /// admitted; <see langword="null"/> when the server is another instance
-    /// now, and refused it.
-    /// </summary>
-    /// <exception cref="HttpRequestException">The server could not be reached, or did not answer either way.</exception>
+    /// <inheritdoc />
     public async Task<SettleOutcome?> SettleAsync(string jobId, string instance, CancellationToken cancellationToken)
     {
         using var response = await http.PostAsJsonAsync(

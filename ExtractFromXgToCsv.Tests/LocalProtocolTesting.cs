@@ -22,7 +22,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// The real Local server, in memory, for the recovery protocol's tests (the
 /// umbrella's <c>SPEC-notices.md</c> §7.5): its real controller and job store,
 /// its real processor over a real input folder, reached over a
-/// <see cref="ProtocolWire"/> a test can fault. Its XGP file creation can be
+/// <see cref="ProtocolWire"/> a test can fault. Opening an output file — an
+/// XGP file's create-new, or the one file another format replaces — can be
 /// held (<see cref="Gate"/>), so a job can be kept running.
 /// </summary>
 internal sealed class LocalServer : IDisposable
@@ -31,20 +32,30 @@ internal sealed class LocalServer : IDisposable
 
     private readonly string _root = Directory.CreateTempSubdirectory("xg-protocol-").FullName;
     private readonly Action<IWebHostBuilder>? _configure;
+    private readonly IOutputDestination _destination;
     private WebApplicationFactory<AppModeService> _factory;
 
     /// <summary>A server over a fresh input folder holding one fixture match.</summary>
     /// <param name="configure">Anything more the test's host needs — a logger, say.</param>
-    public LocalServer(Action<IWebHostBuilder>? configure = null)
+    /// <param name="destination">Where the runs write, behind the gate; the file system by default.</param>
+    public LocalServer(Action<IWebHostBuilder>? configure = null, IOutputDestination? destination = null)
     {
         InputFolder = Directory.CreateDirectory(Path.Combine(_root, "matches")).FullName;
         OutputFolder = Path.Combine(_root, "positions");
         File.Copy(Path.Combine(FixtureHelper.FixtureDir, Fixture), Path.Combine(InputFolder, Fixture));
 
         _configure = configure;
+        _destination = destination ?? FileSystemDestination.Instance;
         _factory = Start();
         Wire = new ProtocolWire(_factory.Server.CreateHandler());
     }
+
+    /// <summary>A second fixture match in the input folder, so a cancel is seen between the files: a file is the cancellation's granularity.</summary>
+    public void AddASecondMatch() =>
+        File.Copy(Path.Combine(FixtureHelper.FixtureDir, Fixture), Path.Combine(InputFolder, "second.xg"));
+
+    /// <summary>A CSV output path beside the XGP output folder.</summary>
+    public string CsvOutputPath => Path.Combine(_root, "out.csv");
 
     /// <summary>
     /// Restarts the server, as Exit and a fresh start, or a crash, do: a new
@@ -71,7 +82,7 @@ internal sealed class LocalServer : IDisposable
                 AppRanking.Ranking,
                 bookProvider: null,
                 XgpPayload.Prepare,
-                new GatedDestination(Gate))));
+                new GatedDestination(Gate, _destination))));
             _configure?.Invoke(builder);
         });
 
@@ -129,18 +140,22 @@ internal sealed class LocalServer : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    /// <summary>The file system, with every XGP file's create-new passing <see cref="Gate"/> first.</summary>
-    private sealed class GatedDestination(FileGate gate) : IOutputDestination
+    /// <summary><paramref name="inner"/>, with every output file's opening — create-new or replace — passing <see cref="Gate"/> first.</summary>
+    private sealed class GatedDestination(FileGate gate, IOutputDestination inner) : IOutputDestination
     {
-        public Stream Replace(string path) => FileSystemDestination.Instance.Replace(path);
+        public Stream Replace(string path)
+        {
+            gate.Pass();
+            return inner.Replace(path);
+        }
 
         public Stream CreateNew(string path)
         {
             gate.Pass();
-            return FileSystemDestination.Instance.CreateNew(path);
+            return inner.CreateNew(path);
         }
 
-        public void Delete(string path) => FileSystemDestination.Instance.Delete(path);
+        public void Delete(string path) => inner.Delete(path);
     }
 }
 
@@ -197,6 +212,13 @@ internal sealed class ProtocolWire(HttpMessageHandler server) : HttpMessageHandl
 
     /// <summary>Every request made over the wire, as "METHOD path", in order.</summary>
     public List<string> Requests { get; } = [];
+
+    /// <summary>How many requests made so far <paramref name="match"/> takes, counted under the wire's lock.</summary>
+    public int CountRequests(Func<string, bool> match)
+    {
+        lock (_gate)
+            return Requests.Count(match);
+    }
 
     /// <summary>Starts.</summary>
     public static bool Start(HttpRequestMessage r) => r.Method == HttpMethod.Post && r.RequestUri!.AbsolutePath == "/api/process/start";
@@ -435,7 +457,9 @@ internal sealed class LocalPage : IAsyncDisposable
 
     private readonly BunitContext _context = new();
 
-    private LocalPage(LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, bool reconciled)
+    private LocalPage(
+        LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, bool reconciled,
+        Func<ILocalJobs, ILocalJobs>? jobs)
     {
         _context.JSInterop.Mode = JSRuntimeMode.Loose;
         _context.Services.AddClientServices();
@@ -444,6 +468,8 @@ internal sealed class LocalPage : IAsyncDisposable
         _context.Services.AddSingleton(FastTiming);
         var stub = new StubAppModeHandler("Local") { Processing = server.Wire };
         _context.Services.AddSingleton(new HttpClient(stub) { BaseAddress = new Uri("http://localhost/") });
+        if (jobs is not null)
+            _context.Services.AddScoped(services => jobs(new LocalJobsClient(services.GetRequiredService<HttpClient>())));
 
         Home = _context.Render<Home>();
         if (reconciled)
@@ -455,10 +481,13 @@ internal sealed class LocalPage : IAsyncDisposable
     /// <summary>
     /// Opens a page over <paramref name="server"/> and <paramref name="storage"/>,
     /// and waits — unless <paramref name="reconciled"/> is false — until it
-    /// has reconciled.
+    /// has reconciled. <paramref name="jobs"/>, when given, wraps the page's
+    /// jobs client.
     /// </summary>
-    public static LocalPage Open(LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, bool reconciled = true) =>
-        new(server, storage, identities, reconciled);
+    public static LocalPage Open(
+        LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, bool reconciled = true,
+        Func<ILocalJobs, ILocalJobs>? jobs = null) =>
+        new(server, storage, identities, reconciled, jobs);
 
     /// <summary>The page.</summary>
     public IRenderedComponent<Home> Home { get; }
@@ -490,4 +519,48 @@ internal sealed class LocalPage : IAsyncDisposable
     public void WaitForScreen(Action assertion) => Home.WaitForAssertion(assertion, NoticeTesting.OperationBound);
 
     public async ValueTask DisposeAsync() => await _context.DisposeAsync();
+}
+
+/// <summary>
+/// A page's jobs client with its first start's answer held after it has
+/// arrived: the start reaches the server and is answered, and the answer
+/// reaches the page only once released — whatever the page does meanwhile, a
+/// Stop included, which this wrapper does not let cancel what has already
+/// been answered. The real wire cannot express that order: its own
+/// cancellation of the request intervenes first. Every other call passes
+/// straight through.
+/// </summary>
+internal sealed class AnswerHeldJobs(ILocalJobs inner) : ILocalJobs
+{
+    private readonly TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _starts;
+
+    /// <summary>Completes when the first start's answer has arrived, and is held.</summary>
+    public Task Arrived => _arrived.Task;
+
+    /// <summary>Hands the held answer to the page.</summary>
+    public void Release() => _release.TrySetResult();
+
+    public async Task<StartAnswer> StartAsync(StartRequest request, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Increment(ref _starts) != 1)
+            return await inner.StartAsync(request, cancellationToken);
+        var answer = await inner.StartAsync(request, CancellationToken.None);
+        _arrived.TrySetResult();
+        await _release.Task.WaitAsync(NoticeTesting.OperationBound);
+        return answer;
+    }
+
+    public Task<LedgerSnapshot> ReadLedgerAsync(CancellationToken cancellationToken) => inner.ReadLedgerAsync(cancellationToken);
+
+    public Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken) =>
+        inner.ReadStatusAsync(jobId, cancellationToken);
+
+    public Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken) => inner.CancelAsync(jobId, cancellationToken);
+
+    public Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken) => inner.AcknowledgeAsync(jobId, cancellationToken);
+
+    public Task<SettleOutcome?> SettleAsync(string jobId, string instance, CancellationToken cancellationToken) =>
+        inner.SettleAsync(jobId, instance, cancellationToken);
 }

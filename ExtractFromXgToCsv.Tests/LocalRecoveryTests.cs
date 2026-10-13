@@ -3,6 +3,7 @@ using System.Text.Json;
 using BgUiPrimitives_Razor;
 using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
+using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
@@ -59,11 +60,19 @@ public class LocalRecoveryTests : IAsyncLifetime
         _server.Dispose();
     }
 
-    private LocalPage Open(bool reconciled = true)
+    private LocalPage Open(bool reconciled = true, Func<ILocalJobs, ILocalJobs>? jobs = null)
     {
-        var page = LocalPage.Open(_server, _storage, _identities, reconciled);
+        var page = LocalPage.Open(_server, _storage, _identities, reconciled, jobs);
         _pages.Add(page);
         return page;
+    }
+
+    /// <summary>A page whose output format is CSV, written beside the XGP folder.</summary>
+    private LocalPage OpenCsv()
+    {
+        _storage[HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.Csv);
+        _storage[HomeStoragePlan.OutputPathKey] = _server.CsvOutputPath;
+        return Open();
     }
 
     /// <summary>A reload: the page goes, and its app with it, before a new one opens over the same server and storage.</summary>
@@ -467,24 +476,36 @@ public class LocalRecoveryTests : IAsyncLifetime
     private static AngleSharp.Dom.IElement StopButton(LocalPage page) =>
         page.Home.FindAll("button").Single(b => b.TextContent.Trim() == "Stop");
 
-    // A second match, so a cancel is seen between the files: a file is the
-    // cancellation's granularity.
-    private void AddASecondMatch() =>
-        File.Copy(Path.Combine(FixtureHelper.FixtureDir, "MTCH4064.xg"), Path.Combine(_server.InputFolder, "second.xg"));
+    private static string RunErrorShown(LocalPage page) =>
+        Assert.Single(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error).Content.TextContent.Trim();
+
+    private int StatusReads => _server.Wire.CountRequests(r => r.EndsWith("/status", StringComparison.Ordinal));
+
+    // Waits for a condition no render of the page signals.
+    private static void Poll(Func<bool> condition) =>
+        Assert.True(SpinWait.SpinUntil(condition, NoticeTesting.OperationBound), "The condition never held.");
+
+    private const string StillTryingMessage = "Can't reach the server. This run's result hasn't arrived yet — still trying…";
+    private const string UnknownJobMessage = "The server no longer has this run — it may have restarted — so its result can't be shown.";
+    private const string StopUnconfirmedMessage = "Stop didn't reach the server, so the run may still be going. Press Stop to try again.";
 
     /// <summary>
     /// Stop before the start is answered settles the job's identity. Here the
     /// start reaches the server first: settling answers admitted, so Stop
-    /// cancels the job, and the page follows it to its stopped result.
+    /// cancels the job, and the page follows it to its stopped result. The
+    /// cancel's response is held until the server has answered it — the
+    /// server has cancelled — and only then is the job let past its first
+    /// file.
     /// </summary>
     [Fact]
     public async Task StopBeforeTheAnswer_WithTheStartWinning_CancelsTheJob_AndFollowsItToItsStoppedResult()
     {
-        AddASecondMatch();
+        _server.AddASecondMatch();
         var page = Open();
         _server.Gate.Close();
         var heldStart = _server.Wire.Hold(ProtocolWire.Start);
         var heldSettle = _server.Wire.Hold(ProtocolWire.Settle);
+        var cancel = _server.Wire.HoldResponse(ProtocolWire.Cancel);
         var run = page.RunAsync();
         await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
 
@@ -496,7 +517,8 @@ public class LocalRecoveryTests : IAsyncLifetime
         // arrives, so it commits them and stops before the second.
         await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
         heldSettle.Release();
-        page.WaitFor(() => _server.Wire.Requests.Contains("POST /api/process/job-1/cancel"));
+        await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        cancel.Release();
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);
 
@@ -562,6 +584,195 @@ public class LocalRecoveryTests : IAsyncLifetime
         await run.WaitAsync(NoticeTesting.OperationBound);
         Assert.Contains("Done", page.Home.Markup);
         Assert.DoesNotContain("Stopped", page.Home.Markup);
+    }
+
+    /// <summary>
+    /// Stop pressed after the start's admitted answer has arrived, but before
+    /// the page has taken it and begun following the job — the job not yet
+    /// known to Stop — is delivered before the job is followed, and the run
+    /// ends stopped. The answer is held at the point the page takes it
+    /// (<see cref="AnswerHeldJobs"/>): the real wire's own cancellation would
+    /// otherwise turn a late Stop into the settle path.
+    /// </summary>
+    [Fact]
+    public async Task AStopPressedAfterTheAdmittedAnswerArrived_BeforeTheJobIsFollowed_IsDelivered()
+    {
+        _server.AddASecondMatch();
+        AnswerHeldJobs? jobs = null;
+        var page = Open(jobs: inner => jobs = new AnswerHeldJobs(inner));
+        _server.Gate.Close();
+        var cancel = _server.Wire.HoldResponse(ProtocolWire.Cancel);
+        var run = page.RunAsync();
+        await jobs!.Arrived.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        jobs.Release();
+        await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        cancel.Release();
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        Assert.Equal(0, _server.Wire.CountRequests(r => r.EndsWith("/settle", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A Stop not delivered stands until a Stop is delivered or the run ends:
+    /// status reads then fail past the persistent-failure threshold, and
+    /// contact returns, and the Stop failure is still what the run error says.
+    /// Stop pressed again, and delivered, takes it down; the run ends stopped.
+    /// </summary>
+    [Fact]
+    public async Task AStopNotDelivered_StandsThroughAPersistentFailureAndContactReturning_UntilAStopIsDelivered()
+    {
+        _server.AddASecondMatch();
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+        _server.Wire.Respond(ProtocolWire.Cancel, System.Net.HttpStatusCode.InternalServerError);
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        page.WaitForScreen(() => Assert.Equal(StopUnconfirmedMessage, RunErrorShown(page)));
+
+        // Failed reads render nothing while the Stop failure stands, so the
+        // wire is polled, not the page.
+        var failing = _server.Wire.Fail(ProtocolWire.Status);
+        var reads = StatusReads;
+        Poll(() => StatusReads > reads + LocalPage.FastTiming.FailuresBeforeError);
+        failing.Stop();
+        reads = StatusReads;
+        Poll(() => StatusReads >= reads + 2);
+        page.WaitForScreen(() => Assert.Equal(StopUnconfirmedMessage, RunErrorShown(page)));
+
+        var cancel = _server.Wire.HoldResponse(ProtocolWire.Cancel);
+        var stopping = StopButton(page).ClickAsync(new MouseEventArgs());
+        await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        cancel.Release();
+        await stopping.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error));
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+    }
+
+    /// <summary>
+    /// Stop before the answer, in a format the ledger does not admit: the
+    /// start wins, settling answers admitted, Stop cancels the CSV job — held
+    /// opening its file until the server has cancelled — and the page follows
+    /// it to its stopped result.
+    /// </summary>
+    [Fact]
+    public async Task ACsvStopBeforeTheAnswer_WithTheStartWinning_CancelsTheJob_AndFollowsItToItsStoppedResult()
+    {
+        var page = OpenCsv();
+        _server.Gate.Close();
+        var heldStart = _server.Wire.Hold(ProtocolWire.Start);
+        var heldSettle = _server.Wire.Hold(ProtocolWire.Settle);
+        var cancel = _server.Wire.HoldResponse(ProtocolWire.Cancel);
+        var run = page.RunAsync();
+        await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        await heldSettle.Reached.WaitAsync(NoticeTesting.OperationBound);
+        heldStart.Release();
+        await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        heldSettle.Release();
+        await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        cancel.Release();
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        Assert.Empty((await LedgerAsync()).Entries);
+    }
+
+    /// <summary>
+    /// Stop while the settle goes unanswered: the page keeps settling, says
+    /// meanwhile that the result hasn't arrived, and Stop pressed again
+    /// changes nothing. Once the settle is answered — retired, since the start
+    /// is still on the wire — nothing ran, the start that arrives after is
+    /// refused, and nothing is shown.
+    /// </summary>
+    [Fact]
+    public async Task StopWhileTheSettleGoesUnanswered_KeepsSettling_AndNothingRuns()
+    {
+        var page = OpenCsv();
+        var heldStart = _server.Wire.Hold(ProtocolWire.Start);
+        var failing = _server.Wire.Fail(ProtocolWire.Settle);
+        var run = page.RunAsync();
+        await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        page.WaitForScreen(() => Assert.Equal(StillTryingMessage, RunErrorShown(page)));
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        Assert.False(run.IsCompleted);
+        failing.Stop();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        heldStart.Release();
+        await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        Assert.False(File.Exists(_server.CsvOutputPath));
+    }
+
+    /// <summary>
+    /// A settle the server refuses as another instance's — it restarted while
+    /// Stop was settling — is shown, and the page reconciles, whatever the
+    /// format: the server does not hold the run, whether or not it ran.
+    /// </summary>
+    [Theory]
+    [InlineData(OutputFormat.Csv)]
+    [InlineData(OutputFormat.Xgp)]
+    public async Task ASettleAnsweredByAnotherInstance_IsShown_AndThePageReconciles_InEveryFormat(OutputFormat format)
+    {
+        var page = format == OutputFormat.Csv ? OpenCsv() : Open();
+        var heldStart = _server.Wire.Hold(ProtocolWire.Start);
+        var heldSettle = _server.Wire.Hold(ProtocolWire.Settle);
+        var run = page.RunAsync();
+        await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        await heldSettle.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await RestartAsync();
+        heldSettle.Release();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() => Assert.Equal(UnknownJobMessage, RunErrorShown(page)));
+        page.WaitFor(() => page.StartState.Instance == _instance);
+        heldStart.Release();
+        await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+    }
+
+    /// <summary>
+    /// Stop pressed twice before the start is answered settles the identity
+    /// once: the second press, while the first's settle is on its way,
+    /// changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task StopPressedTwiceBeforeTheAnswer_SettlesTheIdentityOnce()
+    {
+        var page = Open();
+        var heldStart = _server.Wire.Hold(ProtocolWire.Start);
+        var heldSettle = _server.Wire.Hold(ProtocolWire.Settle);
+        var run = page.RunAsync();
+        await heldStart.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        await heldSettle.Reached.WaitAsync(NoticeTesting.OperationBound);
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        heldSettle.Release();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        heldStart.Release();
+        await heldStart.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(1, _server.Wire.CountRequests(r => r.EndsWith("/settle", StringComparison.Ordinal)));
+        Assert.Empty((await LedgerAsync()).Entries);
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        Assert.Empty(OwedIds(Record!.Value));
     }
 
     // ── What counts as an edit ──────────────────────────────────────────────
