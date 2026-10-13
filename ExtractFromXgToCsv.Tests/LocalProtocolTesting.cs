@@ -522,6 +522,67 @@ internal sealed class LocalPage : IAsyncDisposable
 }
 
 /// <summary>
+/// A page's jobs client whose cancels the test answers, each in its own time
+/// and order: every cancel the page sends waits where the page awaits it until
+/// the test answers it — delivered, by sending it on to the server, or not
+/// confirmed, a request that never reached it. Every other call passes
+/// straight through.
+/// </summary>
+internal sealed class CancelAnsweringJobs(ILocalJobs inner) : ILocalJobs
+{
+    private readonly object _gate = new();
+    private readonly List<(string JobId, TaskCompletionSource<bool> Answer)> _cancels = [];
+
+    /// <summary>How many cancels the page has sent.</summary>
+    public int Sent
+    {
+        get
+        {
+            lock (_gate)
+                return _cancels.Count;
+        }
+    }
+
+    /// <summary>
+    /// Answers cancel number <paramref name="index"/> (from 0, in the order
+    /// sent): <paramref name="deliver"/> sends it on to the server and hands
+    /// the page the server's answer; otherwise the page learns it never
+    /// reached the server.
+    /// </summary>
+    public async Task AnswerAsync(int index, bool deliver)
+    {
+        (string JobId, TaskCompletionSource<bool> Answer) cancel;
+        lock (_gate)
+            cancel = _cancels[index];
+        if (deliver)
+            cancel.Answer.SetResult(await inner.CancelAsync(cancel.JobId, CancellationToken.None));
+        else
+            cancel.Answer.SetException(new HttpRequestException("The request never reached the server."));
+    }
+
+    public Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+            _cancels.Add((jobId, answer));
+        return answer.Task.WaitAsync(NoticeTesting.OperationBound, cancellationToken);
+    }
+
+    public Task<StartAnswer> StartAsync(StartRequest request, CancellationToken cancellationToken) =>
+        inner.StartAsync(request, cancellationToken);
+
+    public Task<LedgerSnapshot> ReadLedgerAsync(CancellationToken cancellationToken) => inner.ReadLedgerAsync(cancellationToken);
+
+    public Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken) =>
+        inner.ReadStatusAsync(jobId, cancellationToken);
+
+    public Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken) => inner.AcknowledgeAsync(jobId, cancellationToken);
+
+    public Task<SettleOutcome?> SettleAsync(string jobId, string instance, CancellationToken cancellationToken) =>
+        inner.SettleAsync(jobId, instance, cancellationToken);
+}
+
+/// <summary>
 /// A page's jobs client with its first start's answer held after it has
 /// arrived: the start reaches the server and is answered, and the answer
 /// reaches the page only once released — whatever the page does meanwhile, a

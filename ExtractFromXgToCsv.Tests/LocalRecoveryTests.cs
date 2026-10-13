@@ -728,6 +728,95 @@ public class LocalRecoveryTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Two Stops for one run, their cancels answered in either order — one
+    /// delivered, the other not confirmed — and whichever of the two was sent
+    /// first. Once a cancel for the job is confirmed delivered, no failure
+    /// undoes it, whether it answers a request sent before or after: a failure
+    /// answered first shows until the delivery takes it down, and one answered
+    /// after the delivery shows nothing. The run ends stopped either way.
+    /// </summary>
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(1, false)]
+    public async Task TwoStopsAnsweredInEitherOrder_AConfirmedDeliveryStands(int delivered, bool deliveryAnsweredFirst)
+    {
+        _server.AddASecondMatch();
+        CancelAnsweringJobs? jobs = null;
+        var page = Open(jobs: inner => jobs = new CancelAnsweringJobs(inner));
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+
+        var stops = new[]
+        {
+            StopButton(page).ClickAsync(new MouseEventArgs()),
+            StopButton(page).ClickAsync(new MouseEventArgs()),
+        };
+        Poll(() => jobs!.Sent == 2);
+        var failed = 1 - delivered;
+        if (deliveryAnsweredFirst)
+        {
+            await jobs!.AnswerAsync(delivered, deliver: true);
+            await stops[delivered].WaitAsync(NoticeTesting.OperationBound);
+            await jobs.AnswerAsync(failed, deliver: false);
+            await stops[failed].WaitAsync(NoticeTesting.OperationBound);
+        }
+        else
+        {
+            await jobs!.AnswerAsync(failed, deliver: false);
+            await stops[failed].WaitAsync(NoticeTesting.OperationBound);
+            page.WaitForScreen(() => Assert.Equal(StopUnconfirmedMessage, RunErrorShown(page)));
+            await jobs.AnswerAsync(delivered, deliver: true);
+            await stops[delivered].WaitAsync(NoticeTesting.OperationBound);
+        }
+
+        page.WaitForScreen(() => Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error));
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+    }
+
+    /// <summary>
+    /// A Stop's answer belongs to its run: a cancel for one run's job stalls,
+    /// the job ends, the next run starts, and only then does the cancel fail.
+    /// Its failure is the ended run's, so nothing is shown on the run in hand,
+    /// which goes on to its own result.
+    /// </summary>
+    [Fact]
+    public async Task AStaleCancelsFailure_ArrivingAfterTheNextRunStarts_IsNotShown()
+    {
+        CancelAnsweringJobs? jobs = null;
+        var page = Open(jobs: inner => jobs = new CancelAnsweringJobs(inner));
+        _server.Gate.Close();
+        var first = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+        var stopping = StopButton(page).ClickAsync(new MouseEventArgs());
+        Poll(() => jobs!.Sent == 1);
+
+        _server.Gate.Open();
+        await first.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => page.StartState.XgpBlock is null);
+        _server.Gate.Close();
+        var next = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+
+        await jobs!.AnswerAsync(0, deliver: false);
+        await stopping.WaitAsync(NoticeTesting.OperationBound);
+        await page.Home.InvokeAsync(() => { });
+
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        _server.Gate.Open();
+        await next.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Contains("Done", page.Home.Markup));
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+    }
+
+    /// <summary>
     /// Stop before the answer, in a format the ledger does not admit: the
     /// start wins, settling answers admitted, Stop cancels the CSV job — held
     /// opening its file until the server has cancelled — and the page follows

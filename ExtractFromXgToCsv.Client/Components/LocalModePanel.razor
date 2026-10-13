@@ -376,8 +376,34 @@
 
     private string _outputPath = string.Empty;
     private ProcessingProgress? _progress = null;
-    private string? _currentJobId = null;
     private bool _busy = false;
+
+    // The job the run in hand follows, once an answer has made it known; null
+    // before then, and while no run is in hand. Stop cancels it, and each
+    // cancel's answer is that job's run's alone (DeliverStopAsync).
+    private JobInHand? _jobInHand;
+
+    /// <summary>
+    /// The job a run follows, once known: its identity, and whether a Stop for
+    /// it has been confirmed delivered. One per run, compared by reference, so
+    /// a Stop's answer that arrives after its run has ended — or after the next
+    /// run has begun — is told apart from the run in hand's.
+    /// </summary>
+    private sealed class JobInHand(string jobId)
+    {
+        /// <summary>The job's identity, as minted for its start.</summary>
+        public string JobId { get; } = jobId;
+
+        /// <summary>
+        /// Whether a cancel for the job has been confirmed delivered. Once it
+        /// has, no cancel's failure undoes it — not even one for a request
+        /// sent later.
+        /// </summary>
+        public bool StopDelivered { get; private set; }
+
+        /// <summary>A cancel for the job was confirmed delivered.</summary>
+        public void ConfirmStopDelivered() => StopDelivered = true;
+    }
 
     // Stop pressed for the run in hand before its job was known: it ends the
     // sending of the start, and once the start's answer admits the job, it is
@@ -576,38 +602,46 @@
     // (RunLocalAsync).
     private async Task StopLocalAsync()
     {
-        if (_currentJobId is { } jobId)
-            await DeliverStopAsync(jobId);
+        if (_jobInHand is { } job)
+            await DeliverStopAsync(job);
         else
             _stopBeforeTheJob?.Cancel();
     }
 
     /// <summary>
-    /// Asks the server to cancel the admitted job. Delivered, the page goes on
-    /// following the job to its stopped result, which says so, and a Stop
-    /// failure standing ends. Refused, or not confirmed — any other answer, or
-    /// none — the page says so, Stop is never shown as delivered when it was
-    /// not, and that stands until a Stop is delivered or the run ends; the page
-    /// goes on following, and Stop can be pressed again.
+    /// Asks the server to cancel <paramref name="job"/>, the job the run in
+    /// hand follows. The answer is that run's alone: one that arrives once the
+    /// run has ended, or the next has begun, changes nothing. Delivered, the
+    /// page goes on following the job to its stopped result, which says so,
+    /// and a Stop failure standing ends; the delivery stands for the job from
+    /// then on, so no cancel's failure undoes it, whichever request it
+    /// answers. Refused, or not confirmed — any other answer, or none — with
+    /// no Stop for the job delivered, the page says so: Stop is never shown as
+    /// delivered when it was not, and that stands until a Stop is delivered or
+    /// the run ends. The page goes on following, and Stop can be pressed again.
     /// </summary>
-    private async Task DeliverStopAsync(string jobId)
+    private async Task DeliverStopAsync(JobInHand job)
     {
+        string? failure;
         try
         {
-            if (await Jobs.CancelAsync(jobId, _lifetime.Token))
-            {
-                if (_inFlightError == InFlightError.StopNotDelivered)
-                    ClearInFlightError();
-            }
-            else
-            {
-                ShowInFlightError(InFlightError.StopNotDelivered, StopRefusedMessage);
-            }
+            failure = await Jobs.CancelAsync(job.JobId, _lifetime.Token) ? null : StopRefusedMessage;
         }
         catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
         {
-            ShowInFlightError(InFlightError.StopNotDelivered, StopUnconfirmedMessage);
+            failure = StopUnconfirmedMessage;
         }
+
+        if (!ReferenceEquals(job, _jobInHand) || job.StopDelivered)
+            return;
+        if (failure is not null)
+        {
+            ShowInFlightError(InFlightError.StopNotDelivered, failure);
+            return;
+        }
+        job.ConfirmStopDelivered();
+        if (_inFlightError == InFlightError.StopNotDelivered)
+            ClearInFlightError();
     }
 
     // Cancelled, not disposed: a run still in flight reads its token, and
@@ -639,7 +673,7 @@
         var run = new RunInputs(_visit, filter, filter.Build().IsEmpty, _outputPath);
         _run = run;
         _busy = true; _runError = null; _inFlightError = InFlightError.None;
-        _progress = null; _currentJobId = null;
+        _progress = null; _jobInHand = null;
         // The next run replaces the last one's record: this run's is shown
         // when it ends, never while it is still growing.
         _lastRun = null;
@@ -683,11 +717,12 @@
                 switch (started.Answer)
                 {
                     case StartAnswer.Admitted:
-                        _currentJobId = jobId;
+                    {
+                        var job = _jobInHand = new JobInHand(jobId);
                         // A Stop pressed while the answer was on its way, before
                         // the job was known, is delivered before it is followed.
                         if (stop.IsCancellationRequested)
-                            await DeliverStopAsync(jobId);
+                            await DeliverStopAsync(job);
                         terminal = await FollowAsync(jobId);
                         if (terminal is null && !_lifetime.IsCancellationRequested)
                         {
@@ -695,6 +730,7 @@
                             reconcile = true;
                         }
                         break;
+                    }
                     case StartAnswer.Refused refused:
                         failure = RefusedMessage(refused.Reason);
                         // A start refused on every attempt never ran; one any
@@ -720,8 +756,7 @@
                             case SettleOutcome.Admitted:
                                 // It arrived: Stop cancels it, and the page
                                 // follows it to its stopped result.
-                                _currentJobId = jobId;
-                                await DeliverStopAsync(jobId);
+                                await DeliverStopAsync(_jobInHand = new JobInHand(jobId));
                                 terminal = await FollowAsync(jobId);
                                 if (terminal is null && !_lifetime.IsCancellationRequested)
                                 {
@@ -763,7 +798,7 @@
         // The run has ended: its outcome replaces whatever the run error
         // showed while it went on.
         _busy = false;
-        _currentJobId = null;
+        _jobInHand = null;
         _inFlightError = InFlightError.None;
 
         // Judge before publishing: the outcome is shown only while the run's
