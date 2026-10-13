@@ -577,7 +577,7 @@
 
     private void ApplyPatternEdit(string pattern)
     {
-        NoteEdit();
+        _edits.NoteEdit();
         _xgpPattern = pattern;
         // Continue the recorded numbering only while the pattern matches the
         // one it was recorded under; a different pattern starts a fresh
@@ -607,7 +607,7 @@
 
     private void OnXgpNextNumberChanged(ChangeEventArgs e)
     {
-        NoteEdit();
+        _edits.NoteEdit();
         if (int.TryParse(e.Value?.ToString(), out var n))
             _xgpNextNumber = n;
         RebuildXgpOptions();
@@ -645,94 +645,72 @@
     /// checkpoint of the numbering record — the whole document, from a fresh
     /// read, in one write; a refused write leaves it recorded in this page.
     /// When the record took the download — it committed something — the
-    /// controls follow that taking (<see cref="FollowRecord"/>), as of the
-    /// moment the download began (<see cref="OnXgpExportStarting"/>): each
-    /// download taken is followed, though its numbering may equal the one the
-    /// record held.
+    /// controls follow that taking (<see cref="FollowRecord"/>), unless the
+    /// user has edited since the download began (<see cref="OnXgpExportStarting"/>):
+    /// each download taken is followed, though its numbering may equal the one
+    /// the record held.
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
-        if (await _numbering.RecordExportAsync(commit))
-            FollowRecord(_webExportStartedAt);
+        if (await _numbering.RecordExportAsync(commit) && _edits.FollowsWebDownload())
+            FollowRecord();
         StateHasChanged();
     }
 
     // ── The controls follow the record ──────────────────────────────────────
-    //
-    // A moment on this page's own clock — a count of its events, never
-    // wall-clock time — for every user edit of the next number or the pattern,
-    // every export this page starts, and every time the page sets the controls
-    // itself. An edit made after an export started is the user's choice, and
-    // the controls keep it (SPEC-notices.md §7.5).
-    private long _clock;
 
-    // The moment of the user's last edit of the next number or the pattern;
-    // zero for none. A value the page restored or set is not an edit, and
-    // changing a control away and back is one.
-    private long _lastEditAt;
-
-    // The moment the page last set the controls itself — restored them, or
-    // followed the record: zero until it follows anything.
-    private long _controlsSetAt;
-
-    // The moment each Local XGP job this page started was recorded as owed,
-    // by its identity.
-    private readonly Dictionary<string, long> _startedAt = new(StringComparer.Ordinal);
-
-    // The moment the Web panel's XGP download in hand began.
-    private long _webExportStartedAt;
-
-    private void NoteEdit() => _lastEditAt = ++_clock;
+    // What counts as an edit (SPEC-notices.md §7.5): this page's own clock of
+    // the user's edits, the exports it starts and its own setting of the
+    // controls, which decides whether the controls follow an export the
+    // record took.
+    private readonly XgpEditClock _edits = new();
 
     // A Local XGP job about to start: its moment is noted, and the host
     // records it as owed and answers whether its start may be sent. A job
     // held back is never sent, so its moment orders nothing.
     private async Task<bool> OnXgpJobStartingAsync(OwedXgpJob job)
     {
-        _startedAt[job.JobId] = ++_clock;
+        _edits.NoteLocalStart(job.JobId);
         if (await _reconciler.RecordOwedAsync(job))
             return true;
-        _startedAt.Remove(job.JobId);
+        _edits.ForgetLocalStart(job.JobId);
         return false;
     }
 
     // A Web XGP download beginning: its moment is noted.
-    private void OnXgpExportStarting() => _webExportStartedAt = ++_clock;
+    private void OnXgpExportStarting() => _edits.NoteWebDownloadStart();
 
     // The controls' half of a Local reconciliation's taking: they follow the
-    // record, as of the start of the export whose numbering it now holds —
-    // known when this page started it; otherwise as of the last time the page
-    // set the controls, the latest moment this page knows the export can have
-    // started by. A taking whose exports committed nothing changes no number.
+    // record unless the user has edited since the export whose numbering it
+    // now holds started — or, of one another page started, since the latest
+    // moment the page knows it started after (XgpEditClock).
     private Task FollowRecordAfterPassAsync(LedgerTaking taking)
     {
-        if (taking.Export is { } export)
-            FollowRecord(_startedAt.TryGetValue(export.JobId, out var startedAt) ? startedAt : _controlsSetAt);
+        if (_edits.Follows(taking))
+            FollowRecord();
         return Task.CompletedTask;
     }
 
     /// <summary>
     /// The controls follow the record's taking of an export
     /// (SPEC-notices.md §7.5): the event, not a change in the numbering's
-    /// value, which a new export may leave as it was. The next number follows
-    /// the record, unless the user has edited the next number or the pattern
-    /// since that export started (<paramref name="exportStartedAt"/>), and
-    /// while the pattern is the one the numbering continues. Its callers offer
-    /// only what the record took, and only once: a replay is no taking, and an
-    /// export that committed nothing moved no number, which is the record's
-    /// own rule (<see cref="XgpNumberingRecord.WithCommit"/>). The number
-    /// length decides nothing here: it says nothing about which number comes
-    /// next.
+    /// value, which a new export may leave as it was. Its callers have
+    /// established that the user has not edited the next number or the
+    /// pattern since that export started (<see cref="XgpEditClock"/>), and
+    /// offer only what the record took, and only once: a replay is no taking,
+    /// and an export that committed nothing moved no number, which is the
+    /// record's own rule (<see cref="XgpNumberingRecord.WithCommit"/>). The
+    /// next number follows while the pattern is the one the numbering
+    /// continues. The number length decides nothing here: it says nothing
+    /// about which number comes next.
     /// </summary>
-    /// <param name="exportStartedAt">The moment the export the record took started, on this page's clock.</param>
-    private void FollowRecord(long exportStartedAt)
+    private void FollowRecord()
     {
-        var numbering = _numbering.Record.Numbering;
-        if (numbering is null || _lastEditAt > exportStartedAt || numbering.Pattern != _xgpPattern)
+        if (_numbering.Record.Numbering is not { } numbering || numbering.Pattern != _xgpPattern)
             return;
         _xgpNextNumber = numbering.LastNumber + 1;
         RebuildXgpOptions();
-        _controlsSetAt = ++_clock;
+        _edits.NoteControlsSet();
     }
 
     // The lost-export notice's action: the user's deliberate resolution.

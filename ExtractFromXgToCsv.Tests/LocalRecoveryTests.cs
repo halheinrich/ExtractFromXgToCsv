@@ -651,6 +651,74 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Equal(2 * _decisions, LastNumber(Record!.Value));
     }
 
+    // ── When an export another page started began ───────────────────────────
+
+    // Status reads of this page's first job fail until stopped, so the page
+    // does not see that job end, nor reconcile, while another page acts.
+    private ProtocolWire.Rule BlindToTheFirstJob() =>
+        _server.Wire.Fail(r => ProtocolWire.Status(r) && r.RequestUri!.AbsolutePath.Contains("/job-1/", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The review's sequence: page P edits the next number, then starts job J;
+    /// tab Q applies J — P has not seen it end — and runs K; then P's pass
+    /// takes the record with K's mark from storage. K is not P's, but the
+    /// ledger admitted J before it, and P started J after its edit: no edit
+    /// followed either start, so P's control follows K.
+    /// </summary>
+    [Fact]
+    public async Task AnExportAnotherPageStarted_AdmittedAfterOneThisPageStartedPastItsEdit_IsFollowed()
+    {
+        var p = Open();
+        await p.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
+        var blind = BlindToTheFirstJob();
+        var j = p.RunAsync();
+        await WaitUntilAsync(async () => (await LedgerAsync()).Entries is [{ Running: false }]);
+
+        var q = Open();
+        Assert.Equal(new LedgerMark(_instance, 1), q.StartState.Mark);
+        Assert.Equal(50 + _decisions, q.Options.StartNumber);
+        await q.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(2, MarkNumber(Record!.Value));
+
+        blind.Stop();
+        await j.WaitAsync(NoticeTesting.OperationBound);
+        p.WaitFor(() => p.StartState.Mark == new LedgerMark(_instance, 2));
+
+        Assert.Equal(50 + 2 * _decisions, p.Options.StartNumber);
+    }
+
+    /// <summary>
+    /// An earlier entry of another instance supplies no bound: P edits the
+    /// next number, then starts job E, which ends in an instance a restart
+    /// then ends. Tab Q, in the new instance, resolves E as a lost export and
+    /// runs K; P's pass takes the record with K's mark from storage. P started
+    /// E after its edit, but no ledger of K's instance holds E, so nothing
+    /// orders K after the edit: P's edit stands.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryOfAnotherInstance_SuppliesNoBound_AndTheEditStands()
+    {
+        var p = Open();
+        await p.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "500" });
+        var blind = BlindToTheFirstJob();
+        var e = p.RunAsync();
+        await WaitUntilAsync(async () => (await LedgerAsync()).Entries is [{ Running: false }]);
+        await RestartAsync();
+
+        var q = Open();
+        Assert.Equal(XgpStartBlock.LostExport, q.StartState.XgpBlock);
+        await q.Home.FindAll(".lost-export-notice button").Single().ClickAsync(new MouseEventArgs());
+        q.WaitFor(() => q.StartState.XgpBlock is null);
+        await q.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(1, MarkNumber(Record!.Value));
+
+        blind.Stop();
+        await e.WaitAsync(NoticeTesting.OperationBound);
+        p.WaitFor(() => p.StartState.Mark == new LedgerMark(_instance, 1));
+
+        Assert.Equal(500, p.Options.StartNumber);
+    }
+
     // ── The controls follow the record's taking ─────────────────────────────
 
     /// <summary>
