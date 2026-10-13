@@ -175,7 +175,7 @@
                     {
                         <span class="text-success fw-bold">
                             ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec) → @_run?.OutputPath
+                            (@_progress.FilesPerSec files/sec) → @_progress.WrittenPath
                         </span>
                         @if (_progress.TotalRows == 0 && _run is { FilterRestrictsNothing: false }
                              && _progress.Skipped.Count == 0)

@@ -3,6 +3,7 @@ using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuestPDF.Infrastructure;
 using System.Text;
 using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
@@ -31,6 +32,13 @@ namespace ExtractFromXgToCsv.Tests;
 public class LocalFolderProcessorNoOverwriteTests : IDisposable
 {
     private const string Fixture = "MTCH4064.xg";
+
+    // The PDF run renders through QuestPDF, whose license must be set before
+    // any call; as the suite's other PDF tests do, this class sets its own.
+    static LocalFolderProcessorNoOverwriteTests()
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+    }
 
     private readonly string _root = Directory.CreateTempSubdirectory("xg-no-overwrite-").FullName;
     private readonly string _folder;
@@ -338,8 +346,10 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
     /// <summary>
     /// The one file a CSV, Diagram JSON, PPTX or PDF run writes, where a file
     /// of the name the user gave exists: the run writes its output beside it
-    /// as <c>name (2).ext</c>, and the existing file keeps its contents. The
-    /// run is filtered to one decision, so a deck renders one slide pair.
+    /// as <c>name (2).ext</c>, the existing file keeps its contents, and the
+    /// run's completed result names the file it wrote, not the one it was
+    /// asked for. The run is filtered to one decision, so a deck renders one
+    /// slide pair.
     /// </summary>
     [Theory]
     [InlineData(OutputFormat.Csv)]
@@ -353,11 +363,12 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
         File.WriteAllBytes(OutputFile("out" + extension), theirs);
         var record = new RunRecord();
 
-        await RunSingleFileAsync(format, OutputFile("out" + extension), record);
+        var completed = await RunSingleFileAsync(format, OutputFile("out" + extension), record);
 
         Assert.Equal(theirs, File.ReadAllBytes(OutputFile("out" + extension)));
         AssertWrittenAs(format, File.ReadAllBytes(OutputFile($"out (2){extension}")));
         Assert.Equal(["out (2)" + extension, "out" + extension], OutputNames());
+        Assert.Equal(OutputFile($"out (2){extension}"), completed.WrittenPath);
         Assert.Empty(record.Skips);
     }
 
@@ -376,19 +387,32 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
         AssertWrittenAs(OutputFormat.Csv, File.ReadAllBytes(OutputFile("out (3).csv")));
     }
 
-    private Task RunSingleFileAsync(OutputFormat format, string outputPath, RunRecord record)
+    /// <summary>Runs <paramref name="format"/>'s pathway over the first decision alone.</summary>
+    /// <returns>The run's completed snapshot: the last it reported.</returns>
+    private async Task<ProcessingProgress> RunSingleFileAsync(OutputFormat format, string outputPath, RunRecord record)
     {
         var processor = Processor();
         var filters = new DecisionFilterSet().Add(new FirstDecisionOnly());
-        var progress = new Progress<ProcessingProgress>();
-        return format switch
+        var progress = new LastReport();
+        await (format switch
         {
             OutputFormat.Csv => processor.ProcessAsync(_folder, outputPath, filters, progress, record),
             OutputFormat.DiagramJson => processor.ProcessDiagramAsync(_folder, outputPath, filters, progress, record),
             OutputFormat.Pptx => processor.ProcessPptxAsync(_folder, outputPath, filters, progress, record),
             OutputFormat.Pdf => processor.ProcessPdfAsync(_folder, outputPath, filters, progress, record),
             _ => throw new ArgumentOutOfRangeException(nameof(format)),
-        };
+        });
+        var completed = progress.Value!;
+        Assert.True(completed.Complete);
+        return completed;
+    }
+
+    /// <summary>A synchronous <see cref="IProgress{T}"/> that keeps the last snapshot reported.</summary>
+    private sealed class LastReport : IProgress<ProcessingProgress>
+    {
+        public ProcessingProgress? Value { get; private set; }
+
+        public void Report(ProcessingProgress value) => Value = value;
     }
 
     private static string Extension(OutputFormat format) => format switch

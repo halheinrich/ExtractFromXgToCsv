@@ -50,6 +50,21 @@ public sealed record ProcessingProgress
     /// <summary>Throughput, in input files processed per second.</summary>
     public int FilesPerSec { get; init; }
 
+    /// <summary>
+    /// On a successful terminal snapshot, where the run wrote its output, as
+    /// the code that created it reports it (the umbrella's
+    /// <c>SPEC-notices.md</c> §7.5): for a CSV, Diagram JSON, PPTX or PDF run,
+    /// the one file's path — the path the user named, or the next free name
+    /// beside it where a file of that name existed; for an XGP run, the
+    /// output folder. <see langword="null"/> on every other snapshot: it is
+    /// reported only once the output is written and closed.
+    /// </summary>
+    /// <remarks>
+    /// An output fact, never the request's path: the client shows it as it
+    /// is, and neither rebuilds a numbered name nor looks for the file.
+    /// </remarks>
+    public string? WrittenPath { get; init; }
+
     /// <summary>Failure message; non-null only on the terminal error state.</summary>
     public string? ErrorMessage { get; init; }
 

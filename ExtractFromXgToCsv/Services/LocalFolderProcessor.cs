@@ -258,10 +258,12 @@ public class LocalFolderProcessor
     /// (<see cref="CreateOutput"/>), and closes it before returning — so a
     /// failure finishing the file is the caller's, before it reports success.
     /// </summary>
-    private Task WriteOutputAsync(string outputPath, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    /// <returns>The path the file was written at, once it is written and closed.</returns>
+    private async Task<string> WriteOutputAsync(string outputPath, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
     {
         var (file, path) = CreateOutput(outputPath);
-        return WriteThenCloseAsync(file, path, () => file.WriteAsync(bytes, cancellationToken).AsTask());
+        await WriteThenCloseAsync(file, path, () => file.WriteAsync(bytes, cancellationToken).AsTask());
+        return path;
     }
 
     /// <summary>
@@ -561,7 +563,7 @@ public class LocalFolderProcessor
                 cancellationToken);
         });
 
-        run.ReportDone();
+        run.ReportDone(path);
     }
 
     /// <summary>
@@ -599,12 +601,12 @@ public class LocalFolderProcessor
             cancellationToken);
 
         // The commit to the destination.
-        await WriteOutputAsync(
+        var written = await WriteOutputAsync(
             outputPath,
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(allItems, new JsonSerializerOptions { WriteIndented = true })),
             cancellationToken);
 
-        run.ReportDone();
+        run.ReportDone(written);
     }
 
     /// <summary>
@@ -700,7 +702,7 @@ public class LocalFolderProcessor
             },
             cancellationToken);
 
-        run.ReportDone();
+        run.ReportDone(outputPath);
     }
 
     /// <summary>
@@ -797,9 +799,9 @@ public class LocalFolderProcessor
                 "No decisions matched the filter — nothing to render.");
 
         var deckBytes = renderer(requests, new DiagramOptions());
-        await WriteOutputAsync(outputPath, deckBytes, cancellationToken);
+        var written = await WriteOutputAsync(outputPath, deckBytes, cancellationToken);
 
-        run.ReportDone();
+        run.ReportDone(written);
     }
 
     /// <summary>
@@ -837,8 +839,14 @@ public class LocalFolderProcessor
         /// <summary>Reports the deck's atomic render, under <paramref name="line"/>.</summary>
         public void ReportRendering(string line) => progress.Report(Final(JobPhase.Rendering, line, complete: false));
 
-        /// <summary>Reports the run's successful end.</summary>
-        public void ReportDone() => progress.Report(Final(JobPhase.Processing, "Done", complete: true));
+        /// <summary>
+        /// Reports the run's successful end, with <paramref name="writtenPath"/>
+        /// — the one file as it was created, or an XGP run's folder — as
+        /// <see cref="ProcessingProgress.WrittenPath"/>. Called only once the
+        /// output is written and closed.
+        /// </summary>
+        public void ReportDone(string writtenPath) =>
+            progress.Report(Final(JobPhase.Processing, "Done", complete: true) with { WrittenPath = writtenPath });
 
         private ProcessingProgress Final(JobPhase phase, string line, bool complete)
         {
