@@ -211,13 +211,56 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
-    /// Writes <paramref name="bytes"/> as the one file <paramref name="path"/>
-    /// names, replacing one of that name, and closes it before returning — so
-    /// a failure finishing the file is the caller's, before it reports success.
+    /// Creates a new file for <paramref name="name"/> in
+    /// <paramref name="folder"/>: under that name, or, where a file of it
+    /// exists, under the next free name of its sequence
+    /// (<see cref="NumberedFileName.Next"/>). A Local output is never
+    /// overwritten (the umbrella's <c>SPEC-notices.md</c> §7.5), and the run
+    /// carries on under the numbered name.
     /// </summary>
-    private Task ReplaceWithAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Each attempt is one create-new, never an existence check followed by a
+    /// write; only the destination's own classification of its refusal as a
+    /// collision moves on to the next name. Any other failure to create the
+    /// file is the run's destination failure, and creates nothing.
+    /// </remarks>
+    /// <returns>The created file, open for writing, and the path it was created at.</returns>
+    private (Stream File, string Path) CreateUnderFreeName(string folder, NumberedFileName name)
     {
-        var file = _destination.Replace(path);
+        while (true)
+        {
+            var path = Path.Combine(folder, name.Name);
+            try
+            {
+                return (_destination.CreateNew(path), path);
+            }
+            catch (OutputFileExistsException)
+            {
+                name = name.Next();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates the one output file a CSV, Diagram JSON or deck run writes: at
+    /// <paramref name="outputPath"/>, the path the user named, or under the
+    /// next free name beside it (<see cref="CreateUnderFreeName"/>).
+    /// </summary>
+    /// <returns>The created file, open for writing, and the path it was created at.</returns>
+    private (Stream File, string Path) CreateOutput(string outputPath) =>
+        CreateUnderFreeName(
+            Path.GetDirectoryName(outputPath) ?? string.Empty,
+            NumberedFileName.FirstOf(Path.GetFileName(outputPath)));
+
+    /// <summary>
+    /// Writes <paramref name="bytes"/> as the one output file
+    /// <paramref name="outputPath"/> names, created new
+    /// (<see cref="CreateOutput"/>), and closes it before returning — so a
+    /// failure finishing the file is the caller's, before it reports success.
+    /// </summary>
+    private Task WriteOutputAsync(string outputPath, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    {
+        var (file, path) = CreateOutput(outputPath);
         return WriteThenCloseAsync(file, path, () => file.WriteAsync(bytes, cancellationToken).AsTask());
     }
 
@@ -279,44 +322,34 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
-    /// Writes <paramref name="payload"/> as a new file at
-    /// <paramref name="path"/>, which no file of its name may precede — Local
-    /// XGP files are never overwritten (the umbrella's <c>SPEC-notices.md</c>
-    /// §7.5) — and closes it before returning, so the caller counts it only
-    /// once it is written and closed. Not cancellable: a file is the
-    /// cancellation's granularity.
+    /// Writes <paramref name="payload"/> as a new XGP position file for
+    /// <paramref name="name"/> in <paramref name="folder"/> — under that name,
+    /// or the next free one where a file of it exists
+    /// (<see cref="CreateUnderFreeName"/>) — and closes it before returning, so
+    /// the caller counts it only once it is written and closed. Not
+    /// cancellable: a file is the cancellation's granularity.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The file belongs to the run only once its create-new succeeds. A
-    /// collision, or any other failure to create the file, removes nothing.
+    /// The file belongs to the run only once its create-new succeeds, under
+    /// the name it was created with. A failure to create it removes nothing,
+    /// and a file that existed before the run is never touched.
     /// </para>
     /// <para>
-    /// If writing or closing it fails, the run removes it, so it never blocks
-    /// a later export as an existing file, and the run fails with that
-    /// failure; a failure to close or remove it is reported beside that one,
-    /// never in its place (<see cref="UnfinishedFileException"/>). Every
-    /// failure here is the destination's, never a skip.
+    /// If writing or closing it fails, the run removes it, under the name it
+    /// was created with, and fails with that failure; a failure to close or
+    /// remove it is reported beside that one, never in its place
+    /// (<see cref="UnfinishedFileException"/>). Every failure here is the
+    /// destination's, never a skip.
     /// </para>
     /// </remarks>
-    /// <param name="path">The file to create.</param>
+    /// <param name="folder">The run's output folder.</param>
+    /// <param name="name">The name the allocator issued the decision.</param>
     /// <param name="payload">Its whole content.</param>
-    /// <param name="written">The files the run has written before this one, for a collision's message.</param>
-    /// <exception cref="XgpFileExistsException">A file of that name exists.</exception>
     /// <exception cref="UnfinishedFileException">The file was created, and writing or closing it failed.</exception>
-    private async Task WriteNewFileAsync(string path, ReadOnlyMemory<byte> payload, int written)
+    private async Task WriteNewFileAsync(string folder, NumberedFileName name, ReadOnlyMemory<byte> payload)
     {
-        Stream file;
-        try
-        {
-            file = _destination.CreateNew(path);
-        }
-        // The destination says which refusal it was; that decides only the
-        // wording of the run's error.
-        catch (OutputFileExistsException ex)
-        {
-            throw new XgpFileExistsException(Path.GetFileName(path), written, ex);
-        }
+        var (file, path) = CreateUnderFreeName(folder, name);
 
         var writing = true;
         Exception primary;
@@ -510,8 +543,9 @@ public class LocalFolderProcessor
         // reported beside that ending, never in its place.
         CreateParentFolder(outputPath);
         var run = new RunProgress(files.Count, progress, record);
-        var writer = new StreamWriter(_destination.Replace(outputPath), Encoding.UTF8);
-        await WriteThenCloseAsync(writer, outputPath, async () =>
+        var (file, path) = CreateOutput(outputPath);
+        var writer = new StreamWriter(file, Encoding.UTF8);
+        await WriteThenCloseAsync(writer, path, async () =>
         {
             await writer.WriteLineAsync(DecisionRow.CsvHeader);
             await ForEachFileAsync(
@@ -565,7 +599,7 @@ public class LocalFolderProcessor
             cancellationToken);
 
         // The commit to the destination.
-        await ReplaceWithAsync(
+        await WriteOutputAsync(
             outputPath,
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(allItems, new JsonSerializerOptions { WriteIndented = true })),
             cancellationToken);
@@ -577,9 +611,9 @@ public class LocalFolderProcessor
     /// Xgp pathway: writes one .xgp position file per filtered decision into
     /// the <paramref name="outputPath"/> <b>folder</b> (created if absent).
     /// A file is never overwritten: each is created only if no file of its
-    /// name exists, and an existing one stops the run there — a destination
-    /// failure naming the file, with the files written before it committed
-    /// and counted (the umbrella's <c>SPEC-notices.md</c> §7.5). Filenames
+    /// name exists, and where one does it is created under the next free name
+    /// of its sequence, <c>" (2)"</c>, <c>" (3)"</c>, …, and the run carries
+    /// on (the umbrella's <c>SPEC-notices.md</c> §7.5). Filenames
     /// come from <paramref name="options"/>' pattern via
     /// an <see cref="XgpNameAllocator"/>: batch-constant tokens draw from
     /// <paramref name="filters"/>, per-item tokens from each decision, and
@@ -658,7 +692,7 @@ public class LocalFolderProcessor
                     // run. The slot is consumed, and the run's commit counts
                     // the file, only once it is written and closed. Not
                     // cancellable: a file is the cancellation's granularity.
-                    await WriteNewFileAsync(Path.Combine(outputPath, allocator.Peek(row)), payload, allocator.CommittedCount);
+                    await WriteNewFileAsync(outputPath, allocator.Peek(row), payload);
                     allocator.Commit(row);
                     record.Commit(new XgpExportCommit(options, allocator.CommittedCount));
                     run.Add(1);
@@ -763,7 +797,7 @@ public class LocalFolderProcessor
                 "No decisions matched the filter — nothing to render.");
 
         var deckBytes = renderer(requests, new DiagramOptions());
-        await ReplaceWithAsync(outputPath, deckBytes, cancellationToken);
+        await WriteOutputAsync(outputPath, deckBytes, cancellationToken);
 
         run.ReportDone();
     }

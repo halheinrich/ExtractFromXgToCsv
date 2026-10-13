@@ -140,7 +140,7 @@ internal class XgProcessingService
 
                 // Preparation of the commit: the entry, under the
                 // provisional allocator's next name.
-                var entry = zip.CreateEntry(allocator.Next(row), CompressionLevel.Fastest);
+                var entry = zip.CreateEntry(allocator.Next(row).Name, CompressionLevel.Fastest);
                 using var entryStream = entry.Open();
                 entryStream.Write(payload.Span);
             }

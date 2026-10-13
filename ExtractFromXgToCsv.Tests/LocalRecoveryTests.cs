@@ -1236,7 +1236,7 @@ public class LocalRecoveryTests : IAsyncLifetime
     /// numbering only if the user has not edited since they were last set:
     /// unedited, the next number continues the other page's export, and the
     /// next run, admitted by the empty instance, writes past its files rather
-    /// than stopping at the first of them; edited, the edit stands. Before the
+    /// than meeting them; edited, the edit stands. Before the
     /// correction the taking was never offered, and the unedited page stopped
     /// at an existing file.
     /// </summary>

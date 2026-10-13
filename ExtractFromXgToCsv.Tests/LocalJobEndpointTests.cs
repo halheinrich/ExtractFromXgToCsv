@@ -248,7 +248,7 @@ public class LocalJobEndpointTests : IDisposable
     // ── A collision ─────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task AnExistingFile_IsTheRunError_NamingIt_AndTheFilesBeforeItAreCounted()
+    public async Task AnExistingFile_IsLeftAsItWas_AndTheRunCompletes_CountingEveryFileItWrote()
     {
         Directory.CreateDirectory(_server.OutputFolder);
         File.WriteAllBytes(Path.Combine(_server.OutputFolder, "pos002.xgp"), [7]);
@@ -257,12 +257,10 @@ public class LocalJobEndpointTests : IDisposable
 
         var terminal = await TerminalAsync("job-1");
 
-        Assert.Equal(
-            "pos002.xgp already exists in the output folder, and XGP export never overwrites a file, "
-            + "so the run stopped there. The 1 file(s) before it were written.",
-            terminal.ErrorMessage);
+        Assert.Null(terminal.ErrorMessage);
         Assert.Empty(terminal.Skipped);
-        Assert.Equal(new XgpExportCommit(new XgpExportOptions(), 1), terminal.XgpCommit);
+        Assert.Contains("pos002 (2).xgp", _server.XgpFiles());
+        Assert.Equal(new XgpExportCommit(new XgpExportOptions(), _server.XgpFiles().Count - 1), terminal.XgpCommit);
         Assert.Equal(terminal.XgpCommit, Assert.Single((await LedgerAsync())!.Entries).Commit);
         Assert.Equal([7], File.ReadAllBytes(Path.Combine(_server.OutputFolder, "pos002.xgp")));
     }

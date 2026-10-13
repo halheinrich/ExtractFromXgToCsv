@@ -15,17 +15,11 @@ namespace ExtractFromXgToCsv.Services;
 internal interface IOutputDestination
 {
     /// <summary>
-    /// Opens <paramref name="path"/> for writing, creating the file or
-    /// replacing one of that name — the one file a CSV, Diagram JSON or deck
-    /// run writes, which the user named.
-    /// </summary>
-    Stream Replace(string path);
-
-    /// <summary>
     /// Creates <paramref name="path"/> for writing only if no file of that name
-    /// exists, in one operation — an XGP position file, which is never
-    /// overwritten (§7.5). There is no existence check before it: the create
-    /// itself refuses, and the destination says which refusal it was.
+    /// exists, in one operation — every output file, since a Local output is
+    /// never overwritten (§7.5). There is no existence check before it: the
+    /// create itself refuses, and the destination says which refusal it was,
+    /// so the run can take the next free name.
     /// </summary>
     /// <exception cref="OutputFileExistsException">A file of that name exists; nothing was created.</exception>
     /// <exception cref="IOException">The file could not be created for any other reason.</exception>
@@ -46,9 +40,6 @@ internal sealed class FileSystemDestination : IOutputDestination
     public static FileSystemDestination Instance { get; } = new();
 
     /// <inheritdoc />
-    public Stream Replace(string path) => Open(path, FileMode.Create);
-
-    /// <inheritdoc />
     /// <remarks>
     /// <see cref="FileMode.CreateNew"/>: the operating system creates the file
     /// only if none of its name exists, and throws an
@@ -59,7 +50,7 @@ internal sealed class FileSystemDestination : IOutputDestination
     {
         try
         {
-            return Open(path, FileMode.CreateNew);
+            return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
         }
         catch (IOException ex) when (File.Exists(path))
         {
@@ -69,9 +60,6 @@ internal sealed class FileSystemDestination : IOutputDestination
 
     /// <inheritdoc />
     public void Delete(string path) => File.Delete(path);
-
-    private static FileStream Open(string path, FileMode mode) =>
-        new(path, mode, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 }
 
 /// <summary>

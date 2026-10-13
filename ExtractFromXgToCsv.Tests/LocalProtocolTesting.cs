@@ -140,15 +140,9 @@ internal sealed class LocalServer : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    /// <summary><paramref name="inner"/>, with every output file's opening — create-new or replace — passing <see cref="Gate"/> first.</summary>
+    /// <summary><paramref name="inner"/>, with every output file's create-new passing <see cref="Gate"/> first.</summary>
     private sealed class GatedDestination(FileGate gate, IOutputDestination inner) : IOutputDestination
     {
-        public Stream Replace(string path)
-        {
-            gate.Pass();
-            return inner.Replace(path);
-        }
-
         public Stream CreateNew(string path)
         {
             gate.Pass();

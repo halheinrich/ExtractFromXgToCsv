@@ -1,37 +1,12 @@
 namespace ExtractFromXgToCsv.Services;
 
 /// <summary>
-/// An XGP position file the run was to create exists already. Local XGP files
-/// are never overwritten (the umbrella's <c>SPEC-notices.md</c> §7.5), so the
-/// run stops there: a destination failure (§7.1), never a skip. The file is
-/// not the run's, so nothing is removed, and the files written before it stay
-/// committed and counted. Its message is the run error, and names the file.
-/// </summary>
-internal sealed class XgpFileExistsException : IOException
-{
-    /// <summary>The run stopped at <paramref name="fileName"/>, having written <paramref name="written"/> files before it.</summary>
-    /// <param name="fileName">The existing file's name, as the run would have named its own.</param>
-    /// <param name="written">The files the run had written before it.</param>
-    /// <param name="refusal">The create's own refusal.</param>
-    public XgpFileExistsException(string fileName, int written, Exception refusal)
-        : base(MessageFor(fileName, written), refusal)
-    {
-        FileName = fileName;
-    }
-
-    /// <summary>The existing file's name.</summary>
-    public string FileName { get; }
-
-    private static string MessageFor(string fileName, int written) =>
-        $"{fileName} already exists in the output folder, and XGP export never overwrites a file, so the run stopped there. "
-        + (written == 0 ? "Nothing was written." : $"The {written} file(s) before it were written.");
-}
-
-/// <summary>
 /// An XGP position file the run created could not be finished: writing it or
-/// closing it failed. It was the run's — its create-new had succeeded — so the
-/// run removed it, and it can never block a later export as an existing file
-/// (the umbrella's <c>SPEC-notices.md</c> §7.5). A destination failure (§7.1),
+/// closing it failed. It was the run's — its create-new had succeeded, under
+/// the name in <see cref="FileName"/>, numbered if it had to be — so the run
+/// removed it, and no unfinished position file is left beside the run's
+/// counted ones (the umbrella's <c>SPEC-notices.md</c> §7.5). A file that
+/// existed before the run is never touched. A destination failure (§7.1),
 /// never a skip. The message is the primary failure's, with any failure to
 /// close or remove the file reported beside it, never in its place.
 /// </summary>
@@ -50,7 +25,7 @@ internal sealed class UnfinishedFileException : IOException
         RemovalFailure = removalFailure;
     }
 
-    /// <summary>The unfinished file's name.</summary>
+    /// <summary>The unfinished file's name, as the run created it.</summary>
     public string FileName { get; }
 
     /// <summary>A failure closing the file after its write failed; <see langword="null"/> for none.</summary>
@@ -70,9 +45,11 @@ internal sealed class UnfinishedFileException : IOException
 
 /// <summary>
 /// The one output file a CSV, Diagram JSON or deck run writes could not be
-/// finished: its write failed, and closing it failed too. The file is the one
-/// the user named, which the run replaces, so nothing is removed. A
-/// destination failure (the umbrella's <c>SPEC-notices.md</c> §7.1), never a
+/// finished: its write failed, and closing it failed too. The run created the
+/// file new, under the name the user gave or the next free one, so nothing
+/// that existed before it is touched; and, unlike an XGP file, the unfinished
+/// file is not removed — removal is an XGP run's rule alone (the umbrella's
+/// <c>SPEC-notices.md</c> §7.5). A destination failure (§7.1), never a
 /// skip. The write's failure is the run's error, with the close failure
 /// reported beside it, never in its place, as an XGP file's are
 /// (<see cref="UnfinishedFileException"/>).

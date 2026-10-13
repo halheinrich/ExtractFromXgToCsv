@@ -76,7 +76,7 @@ public class LocalFolderProcessorXgpTests
         Assert.True(expected.Count > 0, "fixture folder should yield decisions");
 
         var namer = XgpNameAllocator.Create(options, filters);
-        var expectedNames = expected.Select(namer.Next).ToList();
+        var expectedNames = expected.Select(row => namer.Next(row).Name).ToList();
 
         try
         {
@@ -154,7 +154,7 @@ public class LocalFolderProcessorXgpTests
             // ORDER, not just the set of names or the count.
             var namer = XgpNameAllocator.Create(options, filters);
             var actual = expectedRows
-                .Select(r => Path.Combine(outputDir, namer.Next(r)))
+                .Select(r => Path.Combine(outputDir, namer.Next(r).Name))
                 .Select(p => XgDecisionIterator.IterateDiagramRequests(
                     XgFileReader.ReadFile(p), Path.GetFileName(p)).Single().Xgid)
                 .ToList();
@@ -171,9 +171,8 @@ public class LocalFolderProcessorXgpTests
     public async Task ProcessXgpAsync_CounterlessPattern_UniquifiesOnDisk()
     {
         // A pattern without {n} renders the same base name for every
-        // decision — the per-run uniquifier gives each its own file. Without
-        // it the second would collide with the first, and the run would stop
-        // there: XGP export never overwrites a file.
+        // decision — the per-run uniquifier gives each its own file, under
+        // the names the allocator issues.
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);
         var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-uniq-{Guid.NewGuid():N}");
         var options = new XgpExportOptions { NamePattern = "same" };

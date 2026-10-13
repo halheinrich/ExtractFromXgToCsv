@@ -62,9 +62,6 @@ internal sealed class ScriptedDestination : IOutputDestination
     /// </summary>
     public List<string> RemovalsAsked { get; } = [];
 
-    public Stream Replace(string path) =>
-        new ScriptedStream(FileSystemDestination.Instance.Replace(path), this, Path.GetFileName(path));
-
     public Stream CreateNew(string path)
     {
         var name = Path.GetFileName(path);

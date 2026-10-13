@@ -46,7 +46,7 @@ public class XgpNameAllocatorTests
         allocator.Commit(Row(1));
         allocator.Next(Row(2));
         Assert.Equal(2, allocator.CommittedCount);
-        Assert.Equal("pos003.xgp", allocator.Peek(Row(3)));
+        Assert.Equal("pos003.xgp", allocator.Peek(Row(3)).Name);
     }
 
     [Fact]
@@ -55,9 +55,9 @@ public class XgpNameAllocatorTests
         var allocator = Create("quiz");
         var row = Row();
 
-        Assert.Equal("quiz.xgp", allocator.Next(row));
-        Assert.Equal("quiz (2).xgp", allocator.Next(row));
-        Assert.Equal("quiz (3).xgp", allocator.Next(row));
+        Assert.Equal("quiz.xgp", allocator.Next(row).Name);
+        Assert.Equal("quiz (2).xgp", allocator.Next(row).Name);
+        Assert.Equal("quiz (3).xgp", allocator.Next(row).Name);
     }
 
     [Fact]
@@ -66,9 +66,9 @@ public class XgpNameAllocatorTests
         var allocator = Create("pos{n}");
         var row = Row();
 
-        Assert.Equal("pos001.xgp", allocator.Next(row));
-        Assert.Equal("pos002.xgp", allocator.Next(row));
-        Assert.Equal("pos003.xgp", allocator.Next(row));
+        Assert.Equal("pos001.xgp", allocator.Next(row).Name);
+        Assert.Equal("pos002.xgp", allocator.Next(row).Name);
+        Assert.Equal("pos003.xgp", allocator.Next(row).Name);
     }
 
     [Fact]
@@ -77,8 +77,8 @@ public class XgpNameAllocatorTests
         var allocator = Create("pos{n}", startNumber: 12, suffixLength: 4);
         var row = Row();
 
-        Assert.Equal("pos0012.xgp", allocator.Next(row));
-        Assert.Equal("pos0013.xgp", allocator.Next(row));
+        Assert.Equal("pos0012.xgp", allocator.Next(row).Name);
+        Assert.Equal("pos0013.xgp", allocator.Next(row).Name);
     }
 
     [Fact]
@@ -87,14 +87,14 @@ public class XgpNameAllocatorTests
         var allocator = Create("pos{n}");
         var row = Row();
 
-        Assert.Equal("pos001.xgp", allocator.Peek(row));
-        Assert.Equal("pos001.xgp", allocator.Peek(row));
+        Assert.Equal("pos001.xgp", allocator.Peek(row).Name);
+        Assert.Equal("pos001.xgp", allocator.Peek(row).Name);
 
         // Uniquifier state is untouched by Peek too: two peeks at the same
         // literal name both see the un-suffixed form.
         var literal = Create("same");
-        Assert.Equal("same.xgp", literal.Peek(row));
-        Assert.Equal("same.xgp", literal.Peek(row));
+        Assert.Equal("same.xgp", literal.Peek(row).Name);
+        Assert.Equal("same.xgp", literal.Peek(row).Name);
     }
 
     [Fact]
@@ -105,10 +105,10 @@ public class XgpNameAllocatorTests
         // same counter slot so the persisted counter matches what's on disk.
         var allocator = Create("pos{n}");
 
-        Assert.Equal("pos001.xgp", allocator.Peek(Row(moveNumber: 1))); // write fails
-        Assert.Equal("pos001.xgp", allocator.Peek(Row(moveNumber: 2))); // next decision
+        Assert.Equal("pos001.xgp", allocator.Peek(Row(moveNumber: 1)).Name); // write fails
+        Assert.Equal("pos001.xgp", allocator.Peek(Row(moveNumber: 2)).Name); // next decision
         allocator.Commit(Row(moveNumber: 2));
-        Assert.Equal("pos002.xgp", allocator.Peek(Row(moveNumber: 3)));
+        Assert.Equal("pos002.xgp", allocator.Peek(Row(moveNumber: 3)).Name);
     }
 
     [Fact]

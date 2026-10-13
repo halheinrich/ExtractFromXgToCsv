@@ -6,10 +6,12 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <summary>
 /// Stateful per-export-run name source. Renders the batch's
 /// <see cref="XgpNameTemplate"/> for each decision, appends <c>.xgp</c>, and
-/// applies the Windows-style <c>" (2)"</c>, <c>" (3)"</c>, … suffix when a
-/// base name repeats within the run. Uniquification is per-run only —
-/// cross-run collisions on disk remain governed by the persisted counter
-/// (the <c>{n}</c> token), by design.
+/// numbers a base name that repeats within the run by
+/// <see cref="NumberedFileName"/>'s rule: <c>" (2)"</c>, <c>" (3)"</c>, ….
+/// Uniquification here is per-run only. A Local run that meets a file of the
+/// issued name on disk carries on the issued name's sequence there
+/// (<see cref="NumberedFileName.Next"/>); the persisted counter (the
+/// <c>{n}</c> token) keeps such meetings rare, but never prevents them.
 ///
 /// <para>
 /// The <see cref="Peek"/>/<see cref="Commit"/> split is load-bearing: the
@@ -81,14 +83,15 @@ public sealed class XgpNameAllocator
     }
 
     /// <summary>
-    /// The full filename (uniquifier and <c>.xgp</c> extension included) the
-    /// current slot would assign to <paramref name="row"/>. No state change —
+    /// The file name (uniquifier and <c>.xgp</c> extension included) the
+    /// current slot would assign to <paramref name="row"/>, numbered so that a
+    /// Local run can carry its sequence on past a file on disk. No state change —
     /// idempotent until the slot is consumed by <see cref="Commit"/>.
     /// </summary>
-    public string Peek(DecisionRow row)
+    public NumberedFileName Peek(DecisionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        return Resolve(row).FullName;
+        return Resolve(row);
     }
 
     /// <summary>
@@ -98,9 +101,9 @@ public sealed class XgpNameAllocator
     public void Commit(DecisionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        var (fullName, baseName, attempt) = Resolve(row);
-        _issuedNames.Add(fullName);
-        _baseNameCounts[baseName] = attempt + 1;
+        var name = Resolve(row);
+        _issuedNames.Add(name.Name);
+        _baseNameCounts[name.Stem] = name.Ordinal;
         _index++;
     }
 
@@ -111,14 +114,14 @@ public sealed class XgpNameAllocator
     public int CommittedCount => _index;
 
     /// <summary><see cref="Peek"/> then <see cref="Commit"/> in one call.</summary>
-    public string Next(DecisionRow row)
+    public NumberedFileName Next(DecisionRow row)
     {
         var name = Peek(row);
         Commit(row);
         return name;
     }
 
-    private (string FullName, string BaseName, int Attempt) Resolve(DecisionRow row)
+    private NumberedFileName Resolve(DecisionRow row)
     {
         var baseName = _template.Render(new XgpNameContext
         {
@@ -129,17 +132,13 @@ public sealed class XgpNameAllocator
             Index = _index,
         });
 
-        // The k-th repeat of a base name takes the Windows-style " (k)"
-        // suffix; the issued-name check then skips over any candidate a
-        // colliding literal already produced.
-        int attempt = _baseNameCounts.GetValueOrDefault(baseName);
-        while (true)
-        {
-            var fullName =
-                (attempt == 0 ? baseName : $"{baseName} ({attempt + 1})") + Extension;
-            if (!_issuedNames.Contains(fullName))
-                return (fullName, baseName, attempt);
-            attempt++;
-        }
+        // A base name's next number is one past the last it took; the
+        // issued-name check then skips over any candidate a colliding
+        // literal already produced.
+        var name = NumberedFileName.Create(
+            baseName, _baseNameCounts.GetValueOrDefault(baseName) + 1, Extension);
+        while (_issuedNames.Contains(name.Name))
+            name = name.Next();
+        return name;
     }
 }
