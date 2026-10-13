@@ -977,9 +977,9 @@
         "The server didn't stop the run: it had already ended, or the server no longer has it.";
 
     // Stop the page cannot confirm: any answer but delivered or refused, or
-    // none.
+    // none (Hal's wording, 2026-10-12).
     private const string StopUnconfirmedMessage =
-        "Stop didn't reach the server, so the run may still be going. Press Stop to try again.";
+        "Couldn't confirm the Stop request. The run may still be going. Press Stop to try again.";
 
     // The page says why a refused start started nothing.
     private static string RefusedMessage(RefusalReason reason) => reason switch

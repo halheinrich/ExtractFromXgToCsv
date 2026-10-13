@@ -104,16 +104,21 @@
        either mode, until the user resolves it — so not dismissible (§4), and
        assertive. It suggests no number. Its action is the user's deliberate
        resolution, which replaces the document with a fresh record and nothing
-       more: the page then reconciles before XGP is admitted. *@
+       more: the page then reconciles before XGP is admitted. The wording is
+       Hal's (2026-10-12): one text in both modes, and in Local mode, whose
+       exports write files to a folder, a sentence more. *@
     @if (_numbering.IsUnreadable)
     {
         <Notice class="unreadable-numbering-notice mb-3" style="max-width:800px"
                 Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive">
-            <div>
+            <div id="unreadableNumberingText">
                 This browser's saved XGP numbering couldn't be read: it may be damaged, or saved by
-                a newer version of this app. It may record exports that haven't been accounted for,
-                so XGP export waits until you decide. Continuing replaces it with a fresh record;
-                check the output folder and set the numbering yourself.
+                a newer version of this app. XGP export waits until you decide. Continuing replaces
+                it with a fresh record, so check Next number before you export.
+                @if (_appMode == "Local")
+                {
+                    <text>It may record exports that haven't been accounted for, so check the output folder too.</text>
+                }
             </div>
             <button class="btn btn-sm btn-outline-dark mt-2" @onclick="ResolveUnreadableAsync">
                 Replace it and continue

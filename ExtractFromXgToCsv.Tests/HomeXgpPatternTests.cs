@@ -215,6 +215,13 @@ public class HomeXgpPatternTests : BunitContext
         Assert.True(web.Instance.XgpNumberingUnreadable);
         NoticeBox.ByMarkerClass(cut, "unreadable-numbering-notice").ShouldBe(
             NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class", "style");
+        // Hal's wording (2026-10-12), as both modes show it: Web mode writes
+        // no folder, so it carries no sentence about one.
+        Assert.Equal(
+            "This browser's saved XGP numbering couldn't be read: it may be damaged, or saved by a newer version "
+            + "of this app. XGP export waits until you decide. Continuing replaces it with a fresh record, so "
+            + "check Next number before you export.",
+            System.Text.RegularExpressions.Regex.Replace(cut.Find("#unreadableNumberingText").TextContent, @"\s+", " ").Trim());
 
         _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Stored(unreadable), "{\"version\":1,\"owed\":[]}");
         cut.Find(".unreadable-numbering-notice button").Click();

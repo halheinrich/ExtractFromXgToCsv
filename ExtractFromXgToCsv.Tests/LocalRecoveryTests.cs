@@ -487,7 +487,7 @@ public class LocalRecoveryTests : IAsyncLifetime
 
     private const string StillTryingMessage = "Can't reach the server. This run's result hasn't arrived yet — still trying…";
     private const string UnknownJobMessage = "The server no longer has this run — it may have restarted — so its result can't be shown.";
-    private const string StopUnconfirmedMessage = "Stop didn't reach the server, so the run may still be going. Press Stop to try again.";
+    private const string StopUnconfirmedMessage = "Couldn't confirm the Stop request. The run may still be going. Press Stop to try again.";
 
     /// <summary>
     /// Stop before the start is answered settles the job's identity. Here the
@@ -563,7 +563,7 @@ public class LocalRecoveryTests : IAsyncLifetime
     /// </summary>
     [Theory]
     [InlineData(System.Net.HttpStatusCode.InternalServerError,
-        "Stop didn't reach the server, so the run may still be going. Press Stop to try again.")]
+        "Couldn't confirm the Stop request. The run may still be going. Press Stop to try again.")]
     [InlineData(System.Net.HttpStatusCode.NotFound,
         "The server didn't stop the run: it had already ended, or the server no longer has it.")]
     public async Task ACancelNotDelivered_IsShown_AndFollowingContinues(System.Net.HttpStatusCode answer, string shown)
@@ -1299,8 +1299,15 @@ public class LocalRecoveryTests : IAsyncLifetime
         var box = NoticeBox.ByMarkerClass(page.Home, "unreadable-numbering-notice").ShouldBe(
             NoticeKind.Warning, NoticeAnnouncement.Assertive, dismissible: false, "class", "style");
         var text = System.Text.RegularExpressions.Regex.Replace(box.Content.TextContent, @"\s+", " ");
-        Assert.Contains("saved XGP numbering couldn't be read", text);
         Assert.DoesNotMatch(@"\d", text);
+        // Hal's wording (2026-10-12): the text both modes show, and Local
+        // mode's sentence more.
+        Assert.Equal(
+            "This browser's saved XGP numbering couldn't be read: it may be damaged, or saved by a newer version "
+            + "of this app. XGP export waits until you decide. Continuing replaces it with a fresh record, so "
+            + "check Next number before you export. It may record exports that haven't been accounted for, so "
+            + "check the output folder too.",
+            System.Text.RegularExpressions.Regex.Replace(page.Home.Find("#unreadableNumberingText").TextContent, @"\s+", " ").Trim());
 
         await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
         Assert.Equal(unreadable, _storage[NumberingKey]);
