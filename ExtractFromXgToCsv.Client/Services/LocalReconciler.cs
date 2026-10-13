@@ -26,7 +26,11 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// hold is applied, in order, in one checkpoint each (numbering, mark and owed
 /// together) — an entry of another instance than the record's mark only from
 /// the state the pass started with, while it stands (<see cref="XgpNumberingKeeper.ApplyAsync"/>).
-/// The controls then follow the record, if it took anything. A result the
+/// The controls are then offered the record's taking (<see cref="LedgerTaking"/>):
+/// the event they follow is the record's mark moving, whether by an entry
+/// applied here or by another page's accounting taken from storage — never a
+/// change in the numbering's value, which a new export may leave unchanged,
+/// and never a replay, which moves no mark. A result the
 /// panel's follower received carries no authority of its own: it is applied
 /// through a pass (<see cref="ApplyEndedAsync"/>). An owed job of this
 /// instance with no entry is settled: retired resolves it; admitted means its
@@ -46,13 +50,18 @@ internal sealed class LocalReconciler
     private readonly LocalJobsClient _client;
     private readonly XgpNumberingKeeper _numbering;
     private readonly LocalJobTiming _timing;
-    private readonly Func<LedgerEntry?, Task> _followRecord;
+    private readonly Func<LedgerTaking, Task> _followRecord;
     private readonly ILogger _logger;
     private readonly CancellationToken _lifetime;
 
     private Task? _pass;
     private bool _again;
     private CancellationTokenSource? _scheduled;
+
+    // The record's mark when the controls were last offered a taking — the
+    // restored record's until the first — so a mark that has not moved since
+    // is no new taking: a replay offers nothing.
+    private LedgerMark? _offered;
 
     /// <summary>
     /// A reconciliation over <paramref name="client"/> and the record
@@ -63,9 +72,9 @@ internal sealed class LocalReconciler
     /// <param name="numbering">Home's numbering record.</param>
     /// <param name="timing">How often to follow and retry.</param>
     /// <param name="followRecord">
-    /// Home's controls following the record: after each entry the record took,
-    /// given that entry, and after a pass, given the entry the record's mark
-    /// names when the pass's ledger holds it.
+    /// Home's controls following the record: offered each taking — the
+    /// entries of the pass's ledger the record took since the last offer, once
+    /// its mark has moved to one of them.
     /// </param>
     /// <param name="logger">Logs a reconciliation that failed for any reason but the server's absence.</param>
     /// <param name="lifetime">The page's lifetime: nothing runs after it ends.</param>
@@ -73,7 +82,7 @@ internal sealed class LocalReconciler
         LocalJobsClient client,
         XgpNumberingKeeper numbering,
         LocalJobTiming timing,
-        Func<LedgerEntry?, Task> followRecord,
+        Func<LedgerTaking, Task> followRecord,
         ILogger logger,
         CancellationToken lifetime)
     {
@@ -105,8 +114,15 @@ internal sealed class LocalReconciler
     /// <summary>Raised after <see cref="State"/> or <see cref="LostJobs"/> may have changed.</summary>
     public event Action? Changed;
 
-    /// <summary>Begins reconciling, for a page that has just restored the record.</summary>
-    public Task StartAsync() => ReconcileAsync();
+    /// <summary>
+    /// Begins reconciling, for a page that has just restored the record: the
+    /// controls were restored from it, so its mark is no taking to follow.
+    /// </summary>
+    public Task StartAsync()
+    {
+        _offered = _numbering.Record.Mark;
+        return ReconcileAsync();
+    }
 
     /// <summary>Reconciles now, or once more after the pass under way.</summary>
     public Task ReconcileAsync()
@@ -228,8 +244,8 @@ internal sealed class LocalReconciler
             switch (await _numbering.ApplyAsync(start, instance, entry))
             {
                 case EntryApplied.Taken:
-                    // The record took it, so the controls follow it.
-                    await _followRecord(entry);
+                    // The record took it: the controls are offered the taking.
+                    await OfferTakingAsync(ledger);
                     break;
                 case EntryApplied.StateChanged:
                     // Nothing was written, and the changed state was taken:
@@ -264,11 +280,9 @@ internal sealed class LocalReconciler
                 unresolved = true;
         }
 
-        // The controls follow what the record took from storage too — another
-        // page's accounting — named by the entry its mark names, where this
-        // ledger holds it.
-        var mark = _numbering.Record.Mark;
-        await _followRecord(ledger.Entries.FirstOrDefault(entry => mark == new LedgerMark(instance, entry.Number)));
+        // The record can take another page's accounting from storage too, at
+        // any read: the controls are offered that taking as well.
+        await OfferTakingAsync(ledger);
 
         var lost = _numbering.Record.Owed.Any(job => job.Instance != instance);
         Publish(new LocalStartState(
@@ -282,6 +296,25 @@ internal sealed class LocalReconciler
 
         if (running || unresolved)
             ScheduleAfter(_timing.PollInterval);
+    }
+
+    /// <summary>
+    /// Offers the controls the record's taking since the last offer: the
+    /// entries of <paramref name="ledger"/> its mark has moved past. The event
+    /// is the mark moving, so a replay — an entry the record already holds —
+    /// offers nothing, and a new export offers itself though its numbering
+    /// equals the record's. A mark this ledger does not hold is not offered
+    /// yet: its entries cannot be named, nor ordered against this page's
+    /// starts, until a pass reads that instance's ledger.
+    /// </summary>
+    private async Task OfferTakingAsync(LedgerSnapshot ledger)
+    {
+        if (_numbering.Record.Mark is not { } mark || mark == _offered || mark.Instance != ledger.Instance)
+            return;
+        var after = _offered?.Instance == mark.Instance ? _offered.Number : 0;
+        _offered = mark;
+        await _followRecord(new LedgerTaking(
+            ledger, [.. ledger.Entries.Where(entry => entry.Number > after && entry.Number <= mark.Number)]));
     }
 
     /// <summary>What settling found, with the server's refusal — it is another instance now — as its own answer.</summary>
@@ -350,4 +383,27 @@ internal sealed class LocalReconciler
         _scheduled?.Dispose();
         _scheduled = null;
     }
+}
+
+/// <summary>
+/// The numbering record's taking of Local XGP exports, as a reconciliation
+/// pass offers it to the controls (the umbrella's <c>SPEC-notices.md</c>
+/// §7.5): the event they follow. A taking is the record's mark moving to an
+/// entry it did not hold — never a change in the numbering's value, which a
+/// new export may leave as it was, and never a replay, which moves no mark.
+/// </summary>
+/// <param name="Ledger">
+/// The ledger the pass read: its instance's entries are the ones taken, and
+/// it orders them against the exports this page started.
+/// </param>
+/// <param name="Taken">The entries of <paramref name="Ledger"/> the record took, in admission order.</param>
+internal sealed record LedgerTaking(LedgerSnapshot Ledger, IReadOnlyList<LedgerEntry> Taken)
+{
+    /// <summary>
+    /// The export whose numbering the record now holds: the last entry taken
+    /// that committed something. <see langword="null"/> when none did — an
+    /// export that committed nothing changes no number, so there is nothing
+    /// for the controls to follow.
+    /// </summary>
+    public LedgerEntry? Export => Taken.LastOrDefault(entry => entry.Commit is { CommittedNothing: false });
 }

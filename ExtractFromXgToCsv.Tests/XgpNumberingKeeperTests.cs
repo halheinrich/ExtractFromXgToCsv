@@ -82,7 +82,7 @@ public class XgpNumberingKeeperTests : BunitContext
     {
         _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Absent,
             HomeStoragePlan.NumberingDocument("pos{n}", 4, 3), BrowserStorageWriteAnswer.Refused);
-        Assert.False(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
+        Assert.True(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
         Assert.Equal(new XgpNumbering("pos{n}", 4, 3), _keeper.Record.Numbering);
 
         // The stored record is an older one; this page's numbering, which
@@ -94,11 +94,29 @@ public class XgpNumberingKeeperTests : BunitContext
     }
 
     [Fact]
-    public async Task AnExportThatCommittedNothing_WritesNothing()
+    public async Task AnExportThatCommittedNothing_WritesNothing_AndIsNoTaking()
     {
-        Assert.True(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 0)));
+        Assert.False(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 0)));
 
         Assert.Null(_keeper.Record.Numbering);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// A download whose numbering equals the record's is still taken — written
+    /// whole, from a fresh read — and is a taking of its own: the record's
+    /// value not changing does not make it nothing.
+    /// </summary>
+    [Fact]
+    public async Task ADownloadWhoseNumberingEqualsTheRecords_IsStillTakenAndWritten()
+    {
+        var record = HomeStoragePlan.NumberingDocument("pos{n}", 4, 3);
+        await RestoreFromAsync(record);
+
+        _storage.ExpectNumberingCheckpoint(Stored(record), record);
+        Assert.True(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
+
+        Assert.Equal(new XgpNumbering("pos{n}", 4, 3), _keeper.Record.Numbering);
         _storage.Verify();
     }
 
@@ -396,7 +414,7 @@ public class XgpNumberingKeeperTests : BunitContext
         Assert.Null(_keeper.Record.Numbering);
 
         ExpectRead(Stored(unreadable));
-        Assert.False(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
+        await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4));
         var start = await BeginPassOverAsync(unreadable);
         ExpectRead(Stored(unreadable));
         Assert.Equal(EntryApplied.Unreadable, await _keeper.ApplyAsync(start, Current, Ended(1, "j1", 2)));

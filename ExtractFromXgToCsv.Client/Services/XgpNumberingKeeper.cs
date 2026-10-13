@@ -209,16 +209,23 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
 
     /// <summary>
     /// Records what a Web download committed, as Home sets it from an export
-    /// (<see cref="XgpNumberingRecord.WithCommit"/>). An export that committed
-    /// nothing changes no number, so nothing is written.
+    /// (<see cref="XgpNumberingRecord.WithCommit"/>), in one checkpoint. An
+    /// export that committed nothing changes no number: nothing is written,
+    /// and the record takes nothing.
     /// </summary>
-    /// <returns>Whether the record now stored holds it, or there was nothing to hold.</returns>
-    public Task<bool> RecordExportAsync(XgpExportCommit commit)
+    /// <returns>
+    /// Whether the record took the export — it committed something, so the
+    /// record's numbering is now its — whether or not storage stored it. Each
+    /// download the record takes is its own taking, though its numbering may
+    /// equal what the record held.
+    /// </returns>
+    public async Task<bool> RecordExportAsync(XgpExportCommit commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
-        return Record.WithCommit(commit).Equals(Record)
-            ? Task.FromResult(true)
-            : CheckpointAsync(record => record.WithCommit(commit));
+        if (commit.CommittedNothing)
+            return false;
+        await CheckpointAsync(record => record.WithCommit(commit));
+        return true;
     }
 
     /// <summary>

@@ -604,6 +604,53 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Equal(2 * _decisions, LastNumber(Record!.Value));
     }
 
+    // ── The controls follow the record's taking ─────────────────────────────
+
+    /// <summary>
+    /// The controls follow the record's taking of an export — the event — not
+    /// a change in its value: the user sets the next number back to 1 and
+    /// exports again, into another folder, so the new entry's numbering equals
+    /// what the record held. The record takes it, its mark moving, and the
+    /// control advances past the numbers the export used.
+    /// </summary>
+    [Fact]
+    public async Task ANewEntryWhoseNumberingEqualsTheRecords_AdvancesTheControl()
+    {
+        var page = Open();
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(_decisions + 1, page.Options.StartNumber);
+
+        await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+        await page.Home.SetOutputPathAsync(Path.Combine(_server.OutputFolder, "again"));
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(2, MarkNumber(Record!.Value));
+        Assert.Equal(_decisions, LastNumber(Record!.Value));
+        Assert.Equal(_decisions + 1, page.Options.StartNumber);
+    }
+
+    /// <summary>
+    /// A replay of another page's export the record already took is no new
+    /// taking: the user's edit made after this page followed it stands
+    /// through every reconciliation that finds the entry again.
+    /// </summary>
+    [Fact]
+    public async Task AReplayOfAnotherPagesExport_DoesNotOverrideALaterEdit()
+    {
+        var page = Open();
+        await ExportElsewhereAsync("elsewhere-1", mark: null);
+        await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        page.WaitFor(() => page.StartState.Mark == new LedgerMark(_instance, 1));
+        Assert.Equal(_decisions + 1, page.Options.StartNumber);
+
+        await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "7" });
+        await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+
+        Assert.Equal(7, page.Options.StartNumber);
+        Assert.Equal(1, MarkNumber(Record!.Value));
+    }
+
     // ── Ordering across instances ───────────────────────────────────────────
 
     /// <summary>

@@ -73,7 +73,7 @@ internal sealed record XgpNumberingRecord
     public XgpNumberingRecord WithCommit(XgpExportCommit commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
-        return commit.Count > 0 ? this with { Numbering = XgpNumbering.After(commit) } : this;
+        return commit.CommittedNothing ? this : this with { Numbering = XgpNumbering.After(commit) };
     }
 
     /// <summary>This record owing <paramref name="job"/> too; a job already owed is owed once.</summary>

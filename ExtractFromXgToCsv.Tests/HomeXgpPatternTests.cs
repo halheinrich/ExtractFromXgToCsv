@@ -266,6 +266,36 @@ public class HomeXgpPatternTests : BunitContext
         _storage.Verify();
     }
 
+    /// <summary>
+    /// The controls follow the record's taking of a download — the event —
+    /// not a change in its value: two downloads, each started from a next
+    /// number the user set back to 1, each commit the numbering the record
+    /// already holds. Each is taken, written whole from a fresh read, and the
+    /// control advances past it; neither is discarded because its values
+    /// match.
+    /// </summary>
+    [Fact]
+    public async Task TwoDownloadsWhoseNumberingEqualsTheRecords_AreEachTaken_AndEachAdvancesTheControl()
+    {
+        var stored = HomeStoragePlan.NumberingDocument("pos{n}", 10, 3);
+        var cut = RenderHomeWithXgpSelected(new() { [HomeStoragePlan.NumberingKey] = stored });
+        var web = cut.FindComponent<WebModePanel>();
+        Assert.Equal(11, web.Instance.XgpOptions.StartNumber);
+
+        foreach (var download in new[] { 1, 2 })
+        {
+            await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+            var started = web.Instance.XgpOptions;
+            await cut.InvokeAsync(() => web.Instance.OnXgpExportStarting.InvokeAsync());
+            _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Stored(stored), stored);
+
+            await cut.InvokeAsync(() => web.Instance.OnXgpExported.InvokeAsync(new XgpExportCommit(started, 10)));
+
+            Assert.True(11 == web.Instance.XgpOptions.StartNumber, $"Download {download} was not followed.");
+        }
+        _storage.Verify();
+    }
+
     [Fact]
     public async Task Export_RecordsTheNumbering_AsOneDocument_InOneWrite()
     {

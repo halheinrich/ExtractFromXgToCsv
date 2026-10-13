@@ -53,6 +53,13 @@ public sealed record XgpExportCommit
     public int Count { get; }
 
     /// <summary>
+    /// Whether the export committed no file: it consumed no number, so it
+    /// changes no numbering, and nothing follows from it.
+    /// </summary>
+    [JsonIgnore]
+    public bool CommittedNothing => Count == 0;
+
+    /// <summary>
     /// The number the next export under the same pattern continues at: the
     /// one after the last this export used, or its own start when it
     /// committed nothing.
