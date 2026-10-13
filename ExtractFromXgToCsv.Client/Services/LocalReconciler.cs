@@ -139,21 +139,19 @@ internal sealed class LocalReconciler
     /// <summary>
     /// Records <paramref name="job"/> as owed — durably where storage allows —
     /// before the page sends its start, and answers whether the start may be
-    /// sent. None is sent while the state is unknown, or while this browser
-    /// owes a job it has not resolved (§7.5), and the read the record takes
-    /// before it is written can show what the last pass did not: a record that
-    /// cannot be read, or another job owed — one lost with an earlier
-    /// instance, or another page's not yet resolved. Then the start may not be
-    /// sent: the job is resolved as never sent, and the page says why once it
-    /// has reconciled. Until a job that may be sent is resolved, no other XGP
-    /// start is.
+    /// sent: the record's half of admission (§7.5,
+    /// <see cref="HoldsBack"/>). The read the record takes before it is
+    /// written can show what the last pass did not. When the start is held
+    /// back, it is not sent: the job is resolved as never sent, and the page
+    /// says why once it has reconciled. Until a job that may be sent is
+    /// resolved, this page sends no other XGP start.
     /// </summary>
     /// <returns>Whether the page may send the start.</returns>
     public async Task<bool> RecordOwedAsync(OwedXgpJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
         await _numbering.OweAsync(job);
-        if (!_numbering.IsUnreadable && _numbering.Record.Owed.All(owed => owed.JobId == job.JobId))
+        if (!HoldsBack())
         {
             Publish(State with { XgpBlock = XgpStartBlock.Checking });
             return true;
@@ -166,6 +164,22 @@ internal sealed class LocalReconciler
         });
         return false;
     }
+
+    /// <summary>
+    /// Whether the record's half of admission (§7.5) holds an XGP start back:
+    /// while the state is unknown, while the record cannot be read, or while
+    /// the record owes a job of an instance other than the one the page
+    /// reconciled with — lost with it, which the server cannot know of. A
+    /// start naming an instance the page no longer knows is such a job itself.
+    /// A job of the current instance, this page's or another's, holds nothing
+    /// back: it is the server's half, whose admission refuses a start while one
+    /// runs or has ended unapplied, and reconciliation settles one that never
+    /// started. So the rule has one owner.
+    /// </summary>
+    private bool HoldsBack() =>
+        _numbering.IsUnreadable
+        || State is not { Instance: { } instance, XgpBlock: not XgpStartBlock.Checking }
+        || _numbering.Record.Owed.Any(owed => owed.Instance != instance);
 
     /// <summary>
     /// Resolves an owed job whose start never ran — every attempt the page

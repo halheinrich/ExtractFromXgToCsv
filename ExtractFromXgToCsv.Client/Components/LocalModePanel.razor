@@ -300,9 +300,11 @@
     /// sent: the host records it as owed in its numbering record — the panel
     /// never writes the record — and answers whether the start may be sent.
     /// The record's read can show what the panel's gate did not: a record that
-    /// cannot be read, or a job this browser owes and has not resolved. Then
-    /// the host has resolved the job as never sent, the panel sends nothing,
-    /// and the page reconciles. A delegate, not an event callback, because the
+    /// cannot be read, or a job this browser owes from an earlier instance.
+    /// Then the host has resolved the job as never sent, the panel sends
+    /// nothing, and the page reconciles. A job of the current instance holds
+    /// nothing back: the server's admission answers for it (SPEC-notices.md
+    /// §7.5). A delegate, not an event callback, because the
     /// panel needs the answer. EditorRequired: a silently splatted binding
     /// would leave a job nobody could find again.
     /// </summary>

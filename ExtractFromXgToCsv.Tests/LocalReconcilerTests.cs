@@ -100,6 +100,33 @@ public class LocalReconcilerTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// The owe step — the record's half of admission (§7.5) — holds an XGP
+    /// start back while the state is unknown: before the page has reconciled,
+    /// the job is resolved as never sent. Once it has, a job of this instance
+    /// that another page recorded holds nothing back: it is the server's half.
+    /// </summary>
+    [Fact]
+    public async Task TheOweStep_HoldsAStartBackWhileTheStateIsUnknown_ButNotForAnotherPagesJobOfThisInstance()
+    {
+        var keeper = await RestoredKeeperAsync();
+        var reconciler = ReconcilerOver(keeper);
+
+        Assert.False(await reconciler.RecordOwedAsync(OwedJob("job-1")));
+        Assert.Empty(keeper.Record.Owed);
+
+        await reconciler.StartAsync();
+        Assert.Null(reconciler.State.XgpBlock);
+        var anotherPage = await RestoredKeeperAsync();
+        Assert.True(await anotherPage.OweAsync(OwedJob("another-pages")));
+
+        Assert.True(await reconciler.RecordOwedAsync(OwedJob("job-2")));
+        Assert.Equal(["another-pages", "job-2"], keeper.Record.Owed.Select(job => job.JobId));
+    }
+
+    private OwedXgpJob OwedJob(string jobId) =>
+        new(jobId, _instance, new XgpExportOptions(), _server.OutputFolder);
+
+    /// <summary>
     /// A page restored from a record that already holds the entries offers
     /// nothing: its controls were restored from that record.
     /// </summary>

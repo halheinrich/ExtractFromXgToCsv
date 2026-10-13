@@ -431,6 +431,35 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Empty((await LedgerAsync()).Entries);
     }
 
+    /// <summary>
+    /// Two pages click at nearly the same moment: the first page's start is on
+    /// the wire, its job owed in storage, when the second page clicks. That job
+    /// is of the current instance — the server's half (§7.5) — so the second
+    /// page's owe step learns of it and still sends its start. The server
+    /// admits the start that arrives first and refuses the other, so one
+    /// export runs. Held back for it, the second page reconciled, retired the
+    /// first page's job before its start arrived, and neither ran.
+    /// </summary>
+    [Fact]
+    public async Task AnotherPagesOwedJobOfThisInstance_DoesNotHoldTheStartBack()
+    {
+        var first = Open();
+        var second = Open();
+        var held = _server.Wire.Hold(ProtocolWire.Start);
+        var firstRun = first.RunAsync();
+        await held.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Assert.Equal(["job-1"], OwedIds(Record!.Value));
+
+        await second.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        held.Release();
+        await firstRun.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal("job-2", Assert.Single((await LedgerAsync()).Entries).JobId);
+        Assert.Equal(_decisions, _server.XgpFiles().Count);
+        Assert.Contains("Done", second.Home.Markup);
+        Assert.Equal(_decisions + 1, second.Options.StartNumber);
+    }
+
     [Fact]
     public void WhileTheServerCannotBeReached_TheStateIsUnknown_AndRunWaits()
     {
