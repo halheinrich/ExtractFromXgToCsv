@@ -275,7 +275,12 @@ public class LocalModePanelGateTests : BunitContext
         Assert.DoesNotContain("Starting…", cut.Markup);
     }
 
-    /// <summary>A click past the gate while a run is in hand sends no second start.</summary>
+    /// <summary>
+    /// A click past the gate while a run is in hand sends no second start.
+    /// Both clicks are awaited only once the held run is released, so a
+    /// second run, were one started, ends too and is counted rather than
+    /// holding the test.
+    /// </summary>
     [Fact]
     public async Task AClickWhileARunIsInHand_SendsNoSecondStart()
     {
@@ -285,11 +290,11 @@ public class LocalModePanelGateTests : BunitContext
         await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
         Assert.True(RunButton(cut).IsDisabled);
 
-        await RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        var second = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        _server.ReleaseStatus();
+        await Task.WhenAll(run, second).WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Equal(1, _server.Starts);
-        _server.ReleaseStatus();
-        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
     }
 
     /// <summary>A ready panel whose run has completed, its result on screen.</summary>
