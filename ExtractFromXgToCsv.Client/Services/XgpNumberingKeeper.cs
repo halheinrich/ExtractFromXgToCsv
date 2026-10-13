@@ -13,7 +13,20 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <b>Always whole, from a fresh read, in one write.</b> A checkpoint reads
 /// the stored record afresh, merges it with this page's, applies its change,
 /// and writes the result as one document. The numbering, the mark and the
-/// owed jobs are saved together or not at all.
+/// owed jobs are saved together or not at all. Without a fresh read that
+/// shows what is stored — a record, or nothing — nothing is written: a
+/// refused read shows nothing, and the change stands in this page's record,
+/// as a refused write's does.
+/// </para>
+/// <para>
+/// <b>One operation at a time.</b> Every operation — a restore, a pass's
+/// first read, an entry applied, a checkpoint, the user's resolution — runs
+/// alone: none starts until the one before it has ended. Each awaits storage
+/// between its read and its write, and other work interleaves there, so
+/// without this a pass's guard could compare a copy of this page's record that
+/// a resolution had since changed, and a write could mark as seen a job
+/// another operation had just recorded. The page's work outside the keeper
+/// still interleaves, which a pass's guard is for.
 /// </para>
 /// <para>
 /// <b>The merge.</b> The page remembers what it last saw stored — read, or
@@ -52,13 +65,21 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// </para>
 /// <para>
 /// <b>A record that cannot be read</b> is kept as it is (<see cref="IsUnreadable"/>):
-/// neither migration nor a checkpoint replaces it, and XGP export waits on the
-/// user. Their resolution (<see cref="ResolveUnreadableAsync"/>) authorizes
-/// replacing that document with a fresh record, and nothing more.
+/// neither migration nor a checkpoint replaces it — nor applies anything over
+/// it, while this page knows it is stored — and XGP export waits on the user.
+/// Their resolution (<see cref="ResolveUnreadableAsync"/>) authorizes
+/// replacing that document with a fresh record, and nothing more. The
+/// replacement is written only once a fresh read shows that document, or
+/// nothing stored; the authorization ends once the fresh record is stored, or
+/// once a read shows anything else.
 /// </para>
 /// </remarks>
 internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
 {
+    // The keeper's one operation in progress, held from its first read to its
+    // last write (see the remarks).
+    private readonly SemaphoreSlim _turn = new(1, 1);
+
     // The owed jobs this page has resolved: never owed again here, whatever a
     // stored record still says.
     private readonly HashSet<string> _resolved = new(StringComparer.Ordinal);
@@ -80,7 +101,8 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
 
     // The unreadable document the user resolved: replacing it is authorized,
     // so a read that finds it still stored reads as nothing stored. Null until
-    // a resolution.
+    // a resolution, and again once the fresh record is stored or a read shows
+    // anything else.
     private string? _replaceable;
 
     /// <summary>This page's record.</summary>
@@ -99,7 +121,7 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     /// nothing, the page working from memory; and when what is stored cannot
     /// be read, nothing either, the document kept and XGP blocked.
     /// </summary>
-    public async Task RestoreAsync()
+    public Task RestoreAsync() => AloneAsync(async () =>
     {
         var read = await ReadAsync();
         if (read is NumberingRead.Missing && await store.MigrateAsync() is { } migrated)
@@ -112,22 +134,21 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         if (read is NumberingRead.Valid valid)
             Record = valid.Record;
         NoteRead(read);
-    }
+    });
 
     /// <summary>
     /// Begins a reconciliation pass: the stored record read first, before the
     /// pass asks the server anything, and merged into this page's record.
     /// </summary>
     /// <returns>The state the pass starts from, which bounds its authority (<see cref="ApplyAsync"/>).</returns>
-    public async Task<PassStart> BeginPassAsync()
+    public Task<PassStart> BeginPassAsync() => AloneAsync(async () =>
     {
-        var page = Record;
         var read = await ReadAsync();
         if (read is NumberingRead.Valid valid)
-            Record = Merge(valid.Record, page);
+            Record = Merge(valid.Record, Record);
         NoteRead(read);
         return new PassStart(Fresh(read), Record);
-    }
+    });
 
     /// <summary>
     /// Applies one ended ledger entry of <paramref name="instance"/> for a
@@ -142,19 +163,28 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     /// is taken, and the caller reconciles again. A fresh read that is refused
     /// cannot show the stored record unchanged: nothing is written, and the
     /// entry is applied in this page's memory alone — an entry of another
-    /// instance only while this page's record is unchanged. Over a record that
-    /// cannot be read nothing is applied at all. An entry that changes nothing
-    /// writes nothing.
+    /// instance only while this page's record is unchanged. Over a record this
+    /// page knows cannot be read — this read showed it, or a refused read
+    /// cannot show it replaced — nothing is applied at all. An entry that
+    /// changes nothing writes nothing.
     /// </remarks>
-    public async Task<EntryApplied> ApplyAsync(PassStart start, string instance, LedgerEntry entry)
+    public Task<EntryApplied> ApplyAsync(PassStart start, string instance, LedgerEntry entry)
     {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(entry);
+        return AloneAsync(() => ApplyAloneAsync(start, instance, entry));
+    }
 
-        var page = Record;
+    private async Task<EntryApplied> ApplyAloneAsync(PassStart start, string instance, LedgerEntry entry)
+    {
         var read = await ReadAsync();
-        if (read is NumberingRead.Unreadable)
+        if (IsUnreadable)
             return EntryApplied.Unreadable;
+
+        // This page's record as it stands — no other operation of the keeper
+        // can have changed it during the read — against the one the pass
+        // started from.
+        var page = Record;
         var current = read is NumberingRead.Valid valid ? Merge(valid.Record, page) : page;
         var fresh = Fresh(read);
         NoteRead(read);
@@ -199,8 +229,11 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     public Task<bool> OweAsync(OwedXgpJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
-        _unseen.Add(job.JobId);
-        return CheckpointAsync(record => record.Owing(job));
+        return AloneAsync(() =>
+        {
+            _unseen.Add(job.JobId);
+            return CheckpointAloneAsync(record => record.Owing(job));
+        });
     }
 
     /// <summary>Resolves the owed job <paramref name="jobId"/>: this page will never owe it again.</summary>
@@ -232,40 +265,57 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     /// The user's deliberate resolution of a record that cannot be read: it
     /// authorizes replacing that document with a fresh record, and nothing
     /// more. The fresh record is written as every record is, from a fresh
-    /// read; whatever the page then may do is the ordinary admission's to
-    /// decide.
+    /// read, and only once one shows that document, or nothing stored. A read
+    /// the browser refuses shows neither: nothing is written, the replacement
+    /// stands in this page, and the next checkpoint whose read shows the
+    /// document writes it. A read that shows another page's record has
+    /// replaced it already: that record is taken, and nothing is written.
+    /// Whatever the page then may do is the ordinary admission's to decide.
     /// </summary>
-    public async Task ResolveUnreadableAsync()
+    public Task ResolveUnreadableAsync() => AloneAsync(async () =>
     {
         if (_unreadable is not { } document)
             return;
         _replaceable = document;
         _unreadable = null;
         Record = XgpNumberingRecord.Empty;
-        await CheckpointAsync(record => record);
-    }
+
+        var read = await ReadAsync();
+        if (read is NumberingRead.Valid valid)
+            Record = Merge(valid.Record, Record);
+        NoteRead(read);
+        if (read is NumberingRead.Missing)
+            await WriteAsync(Record);
+        else if (read is NumberingRead.Refused)
+            _unsaved = true;
+    });
 
     /// <summary>
     /// One checkpoint: the stored record read afresh and merged with this
     /// page's, <paramref name="change"/> applied, and the result written whole
     /// in one storage write. The result is this page's record whether or not
-    /// storage stored it. A stored record that cannot be read is never
-    /// replaced: the change stands in this page's record alone.
+    /// storage stored it. It is written only from a fresh read that showed what
+    /// is stored — a record, or nothing: under a refused read, or over a stored
+    /// record this page knows cannot be read, nothing is written, and the
+    /// change stands in this page's record alone.
     /// </summary>
     /// <param name="change">The change, applied to the merged record.</param>
     /// <returns>Whether storage stored the record.</returns>
-    public async Task<bool> CheckpointAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change)
+    public Task<bool> CheckpointAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change)
     {
         ArgumentNullException.ThrowIfNull(change);
+        return AloneAsync(() => CheckpointAloneAsync(change));
+    }
 
-        var page = Record;
+    private async Task<bool> CheckpointAloneAsync(Func<XgpNumberingRecord, XgpNumberingRecord> change)
+    {
         var read = await ReadAsync();
-        var merged = read is NumberingRead.Valid valid ? Merge(valid.Record, page) : page;
+        var merged = read is NumberingRead.Valid valid ? Merge(valid.Record, Record) : Record;
         NoteRead(read);
         var changed = change(merged);
         Take(merged, changed);
 
-        if (read is NumberingRead.Unreadable)
+        if (Fresh(read) is null)
         {
             _unsaved = true;
             return false;
@@ -273,10 +323,34 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         return await WriteAsync(changed);
     }
 
+    // Runs operation as the keeper's one operation in progress: none other
+    // starts until it has ended, whatever is scheduled at its storage awaits.
+    private async Task<T> AloneAsync<T>(Func<Task<T>> operation)
+    {
+        await _turn.WaitAsync();
+        try
+        {
+            return await operation();
+        }
+        finally
+        {
+            _turn.Release();
+        }
+    }
+
+    private Task AloneAsync(Func<Task> operation) =>
+        AloneAsync(async () =>
+        {
+            await operation();
+            return true;
+        });
+
     // Reads the stored record: one of its four outcomes, the document the user
-    // authorized replacing reading as nothing stored. A readable read ends a
-    // standing unreadable one — the document has been replaced since — and a
-    // refused one establishes nothing.
+    // authorized replacing reading as nothing stored. A read that shows
+    // anything else — a record, nothing, or another unreadable document — ends
+    // that authorization, and a readable one ends a standing unreadable one:
+    // the document has been replaced since. A refused read establishes
+    // nothing.
     private async Task<NumberingRead> ReadAsync()
     {
         var read = await store.ReadAsync();
@@ -286,9 +360,11 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
                 return NumberingRead.Missing.Value;
             case NumberingRead.Unreadable unreadable:
                 _unreadable = unreadable.Document;
+                _replaceable = null;
                 break;
             case NumberingRead.Missing or NumberingRead.Valid:
                 _unreadable = null;
+                _replaceable = null;
                 break;
         }
         return read;
@@ -328,8 +404,11 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         Record = changed;
     }
 
-    // Writes record whole; stored, it is what this page has seen stored, and
-    // every owed job it holds has been seen stored.
+    // Writes record whole; stored, it is what this page has seen stored —
+    // the document the user resolved, if any, is replaced, its authorization
+    // spent — and every owed job it holds has been seen stored. The record is
+    // the merged one, which holds every job this page recorded and has not
+    // resolved, and no other operation runs meanwhile to record another.
     private async Task<bool> WriteAsync(XgpNumberingRecord record)
     {
         var stored = await store.WriteAsync(record);
@@ -337,6 +416,7 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
         if (stored)
         {
             _seen = new StoredRecord(record);
+            _replaceable = null;
             _unseen.Clear();
         }
         return stored;

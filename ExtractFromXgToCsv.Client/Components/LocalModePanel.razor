@@ -295,12 +295,17 @@
     [Parameter, EditorRequired] public LocalStartState StartState { get; set; } = LocalStartState.Checking;
 
     /// <summary>
-    /// Raised with an XGP job the panel is about to start, before its start is
+    /// Called with an XGP job the panel is about to start, before its start is
     /// sent: the host records it as owed in its numbering record — the panel
-    /// never writes the record — and the start waits for it. EditorRequired: a
-    /// silently splatted binding would leave a job nobody could find again.
+    /// never writes the record — and answers whether the start may be sent.
+    /// The record's read can show what the panel's gate did not: a record that
+    /// cannot be read, or a job this browser owes and has not resolved. Then
+    /// the host has resolved the job as never sent, the panel sends nothing,
+    /// and the page reconciles. A delegate, not an event callback, because the
+    /// panel needs the answer. EditorRequired: a silently splatted binding
+    /// would leave a job nobody could find again.
     /// </summary>
-    [Parameter, EditorRequired] public EventCallback<OwedXgpJob> OnXgpJobStarting { get; set; }
+    [Parameter, EditorRequired] public Func<OwedXgpJob, Task<bool>> OnXgpJobStarting { get; set; } = default!;
 
     /// <summary>
     /// Raised when the panel has taken an XGP job's terminal result —
@@ -617,53 +622,59 @@
         try
         {
             // An XGP job is owed from before its start is sent, so a page that
-            // loses track of it can find it again.
-            if (xgp)
-                await OnXgpJobStarting.InvokeAsync(new OwedXgpJob(jobId, instance, XgpOptions, run.OutputPath));
-
-            var started = await StartAsync(start, abandon.Token);
-            switch (started.Answer)
+            // loses track of it can find it again. The owe step can hold the
+            // start back: then nothing is sent, the host has resolved the job
+            // as never sent, and the page reconciles, which says why.
+            if (xgp && !await OnXgpJobStarting(new OwedXgpJob(jobId, instance, XgpOptions, run.OutputPath)))
             {
-                case StartAnswer.Admitted:
-                    _currentJobId = jobId;
-                    terminal = await FollowAsync(jobId);
-                    if (terminal is null && !_lifetime.IsCancellationRequested)
-                    {
-                        failure = UnknownJobMessage;
+                reconcile = true;
+            }
+            else
+            {
+                var started = await StartAsync(start, abandon.Token);
+                switch (started.Answer)
+                {
+                    case StartAnswer.Admitted:
+                        _currentJobId = jobId;
+                        terminal = await FollowAsync(jobId);
+                        if (terminal is null && !_lifetime.IsCancellationRequested)
+                        {
+                            failure = UnknownJobMessage;
+                            reconcile = true;
+                        }
+                        break;
+                    case StartAnswer.Refused refused:
+                        failure = RefusedMessage(refused.Reason);
+                        // A start refused on every attempt never ran; one any
+                        // of whose attempts went unanswered may have arrived,
+                        // and stays owed for reconciliation to resolve.
+                        if (xgp && started.EveryAttemptAnswered)
+                            await OnXgpJobNeverStarted.InvokeAsync(jobId);
                         reconcile = true;
-                    }
-                    break;
-                case StartAnswer.Refused refused:
-                    failure = RefusedMessage(refused.Reason);
-                    // A start refused on every attempt never ran; one any of
-                    // whose attempts went unanswered may have arrived, and
-                    // stays owed for reconciliation to resolve.
-                    if (xgp && started.EveryAttemptAnswered)
-                        await OnXgpJobNeverStarted.InvokeAsync(jobId);
-                    reconcile = true;
-                    break;
-                default:
-                    // Stopped before the server answered: the start may yet
-                    // arrive, so Stop settles its identity.
-                    switch (await SettleAsync(jobId, instance))
-                    {
-                        case SettleOutcome.Retired:
-                            // It never ran, and now never can.
-                            if (xgp)
-                                await OnXgpJobNeverStarted.InvokeAsync(jobId);
-                            break;
-                        case SettleOutcome.Admitted:
-                            // It arrived: Stop cancels it, and the page
-                            // follows it to its stopped result.
-                            _currentJobId = jobId;
-                            await DeliverStopAsync(jobId);
-                            terminal = await FollowAsync(jobId);
-                            if (terminal is null && !_lifetime.IsCancellationRequested)
-                                failure = UnknownJobMessage;
-                            break;
-                    }
-                    reconcile = xgp;
-                    break;
+                        break;
+                    default:
+                        // Stopped before the server answered: the start may
+                        // yet arrive, so Stop settles its identity.
+                        switch (await SettleAsync(jobId, instance))
+                        {
+                            case SettleOutcome.Retired:
+                                // It never ran, and now never can.
+                                if (xgp)
+                                    await OnXgpJobNeverStarted.InvokeAsync(jobId);
+                                break;
+                            case SettleOutcome.Admitted:
+                                // It arrived: Stop cancels it, and the page
+                                // follows it to its stopped result.
+                                _currentJobId = jobId;
+                                await DeliverStopAsync(jobId);
+                                terminal = await FollowAsync(jobId);
+                                if (terminal is null && !_lifetime.IsCancellationRequested)
+                                    failure = UnknownJobMessage;
+                                break;
+                        }
+                        reconcile = xgp;
+                        break;
+                }
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)

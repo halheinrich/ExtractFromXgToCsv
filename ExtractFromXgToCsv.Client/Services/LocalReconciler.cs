@@ -138,14 +138,33 @@ internal sealed class LocalReconciler
 
     /// <summary>
     /// Records <paramref name="job"/> as owed — durably where storage allows —
-    /// before the page sends its start. Until the job is resolved, no other XGP
-    /// start is sent.
+    /// before the page sends its start, and answers whether the start may be
+    /// sent. None is sent while the state is unknown, or while this browser
+    /// owes a job it has not resolved (§7.5), and the read the record takes
+    /// before it is written can show what the last pass did not: a record that
+    /// cannot be read, or another job owed — one lost with an earlier
+    /// instance, or another page's not yet resolved. Then the start may not be
+    /// sent: the job is resolved as never sent, and the page says why once it
+    /// has reconciled. Until a job that may be sent is resolved, no other XGP
+    /// start is.
     /// </summary>
-    public async Task RecordOwedAsync(OwedXgpJob job)
+    /// <returns>Whether the page may send the start.</returns>
+    public async Task<bool> RecordOwedAsync(OwedXgpJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
         await _numbering.OweAsync(job);
-        Publish(State with { XgpBlock = XgpStartBlock.Checking });
+        if (!_numbering.IsUnreadable && _numbering.Record.Owed.All(owed => owed.JobId == job.JobId))
+        {
+            Publish(State with { XgpBlock = XgpStartBlock.Checking });
+            return true;
+        }
+
+        await _numbering.ResolveAsync(job.JobId);
+        Publish(State with
+        {
+            XgpBlock = _numbering.IsUnreadable ? XgpStartBlock.UnreadableRecord : XgpStartBlock.Checking,
+        });
+        return false;
     }
 
     /// <summary>

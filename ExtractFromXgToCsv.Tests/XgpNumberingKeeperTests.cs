@@ -5,6 +5,7 @@ using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -472,5 +473,209 @@ public class XgpNumberingKeeperTests : BunitContext
         Assert.False(_keeper.IsUnreadable);
         Assert.Equal(XgpNumberingRecord.Empty, _keeper.Record);
         _storage.Verify();
+    }
+
+    /// <summary>
+    /// The resolution's authorization ends once the fresh record is stored:
+    /// the same unreadable text stored again afterwards — an older version of
+    /// this app writing it once more — is unreadable again, gates again, and
+    /// is kept.
+    /// </summary>
+    [Fact]
+    public async Task TheSameUnreadableTextAgain_AfterASuccessfulReplacement_GatesAgain()
+    {
+        const string unreadable = "not json";
+        await RestoreFromAsync(unreadable);
+        _storage.ExpectNumberingCheckpoint(Stored(unreadable), FreshDocument);
+        await _keeper.ResolveUnreadableAsync();
+        Assert.False(_keeper.IsUnreadable);
+
+        ExpectRead(Stored(unreadable));
+        Assert.False(await _keeper.CheckpointAsync(r => r));
+
+        Assert.True(_keeper.IsUnreadable);
+        _storage.Verify();
+    }
+
+    /// <summary>
+    /// The authorization ends too once a read shows anything else: a
+    /// resolution held back by a refused read, then another page's record
+    /// read, then the resolved text stored again — which is unreadable again.
+    /// </summary>
+    [Fact]
+    public async Task TheResolvedTextAgain_AfterAReadShowedOtherContent_GatesAgain()
+    {
+        const string unreadable = "not json";
+        await RestoreFromAsync(unreadable);
+        ExpectRead(BrowserStorageReadAnswer.Refused);
+        await _keeper.ResolveUnreadableAsync();
+        ExpectRead(Stored(HomeStoragePlan.NumberingDocument("pos{n}", 9, 3, (Current, 2))));
+        await _keeper.BeginPassAsync();
+
+        ExpectRead(Stored(unreadable));
+        Assert.False(await _keeper.CheckpointAsync(r => r));
+
+        Assert.True(_keeper.IsUnreadable);
+        _storage.Verify();
+    }
+
+    // ── One operation at a time ─────────────────────────────────────────────
+
+    /// <summary>
+    /// The keeper's operations run one at a time, whatever the scheduler
+    /// interleaves at their storage awaits. A pass's entry is being applied —
+    /// its read held — when the user resolves a lost export. The resolution
+    /// waits its turn: the entry's write lands first, from the record as it
+    /// stands, and then the resolution reads that write and removes the job,
+    /// so the resolution is preserved. Run interleaved, the resolution would
+    /// write first and the pass would then publish its stale copy of this
+    /// page's record over it, owing the lost job again.
+    /// </summary>
+    [Fact]
+    public async Task ACompetingResolution_QueuedWhileAPassesReadIsHeld_RunsAfterIt_AndIsPreserved()
+    {
+        var lost = HomeStoragePlan.OwedJob("lost", Earlier, "pos{n}", 5, 3, @"D:\xg\lost");
+        var before = HomeStoragePlan.NumberingDocument("pos{n}", 9, 3, (Earlier, 4), lost);
+        var applied = HomeStoragePlan.NumberingDocument("pos{n}", 2, 3, (Current, 1), lost);
+        var resolved = HomeStoragePlan.NumberingDocument("pos{n}", 2, 3, (Current, 1));
+        await RestoreFromAsync(before);
+        var start = await BeginPassOverAsync(before);
+
+        var heldRead = _storage.ExpectHeldRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey);
+        var applyWrite = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, applied,
+            BrowserStorageWriteAnswer.Succeeded);
+        var resolveRead = _storage.ExpectRead(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, Stored(applied));
+        var resolveWrite = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.NumberingKey, resolved,
+            BrowserStorageWriteAnswer.Succeeded);
+        _storage.RequireOrder(heldRead, applyWrite, resolveRead, resolveWrite);
+
+        var applying = _keeper.ApplyAsync(start, Current, Ended(1, "j1", 2));
+        Assert.True(SpinWait.SpinUntil(() => heldRead.IsReached, NoticeTesting.OperationBound));
+        var resolving = _keeper.ResolveAsync("lost");
+        heldRead.Release(Stored(before));
+
+        Assert.Equal(EntryApplied.Taken, await applying.WaitAsync(NoticeTesting.OperationBound));
+        Assert.True(await resolving.WaitAsync(NoticeTesting.OperationBound));
+        Assert.Empty(_keeper.Record.Owed);
+        Assert.Equal(new LedgerMark(Current, 1), _keeper.Record.Mark);
+        _storage.Verify();
+    }
+
+    // ── Written only from a fresh read ──────────────────────────────────────
+
+    /// <summary>
+    /// A keeper over a browser storage held in memory, which a test can make
+    /// refuse every read while it accepts writes — so that a write made
+    /// without a fresh read would land, and be seen.
+    /// </summary>
+    private static XgpNumberingKeeper KeeperOver(MemoryBrowserStorage memory) =>
+        new(new XgpNumberingStore(new SettingsStorage(
+            new BrowserStorage(memory), new BrowserStorageCondition(NullLogger<BrowserStorageCondition>.Instance))));
+
+    /// <summary>
+    /// With no fresh read, nothing is written: a checkpoint under a refused
+    /// read leaves another page's record as it stored it — not re-storing a
+    /// job that page resolved, nor putting this page's older instance's mark
+    /// back — and the change stands in this page's record, as a refused
+    /// write's does.
+    /// </summary>
+    [Fact]
+    public async Task ACheckpointUnderARefusedRead_WritesNothing_AndTheChangeStandsInThisPage()
+    {
+        var memory = new MemoryBrowserStorage
+        {
+            [HomeStoragePlan.NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 2, 3, (Earlier, 1),
+                HomeStoragePlan.OwedJob("j2", Earlier, "pos{n}", 1, 3, @"D:\xg\out")),
+        };
+        var keeper = KeeperOver(memory);
+        await keeper.RestoreAsync();
+        var theirs = HomeStoragePlan.NumberingDocument("pos{n}", 9, 3, (Current, 3));
+        memory[HomeStoragePlan.NumberingKey] = theirs;
+        memory.RefuseReads = true;
+
+        Assert.False(await keeper.OweAsync(Job("j9")));
+
+        Assert.Equal(theirs, memory[HomeStoragePlan.NumberingKey]);
+        Assert.Empty(memory.Writes);
+        Assert.Contains(keeper.Record.Owed, job => job.JobId == "j9");
+    }
+
+    /// <summary>
+    /// While this page knows the stored document cannot be read, no ordinary
+    /// checkpoint writes, nor does a pass apply anything, though a refused
+    /// read cannot show the document again: it is kept.
+    /// </summary>
+    [Fact]
+    public async Task WhileTheDocumentIsKnownUnreadable_NothingWritesUnderARefusedRead()
+    {
+        const string unreadable = "not json";
+        var memory = new MemoryBrowserStorage { [HomeStoragePlan.NumberingKey] = unreadable };
+        var keeper = KeeperOver(memory);
+        await keeper.RestoreAsync();
+        Assert.True(keeper.IsUnreadable);
+        memory.RefuseReads = true;
+
+        await keeper.OweAsync(Job("j9"));
+        await keeper.ResolveAsync("j9");
+        await keeper.RecordExportAsync(new XgpExportCommit(Pos, 4));
+        await keeper.CheckpointAsync(record => record);
+        var start = await keeper.BeginPassAsync();
+        Assert.Equal(EntryApplied.Unreadable, await keeper.ApplyAsync(start, Current, Ended(1, "j1", 2)));
+
+        Assert.Equal(unreadable, memory[HomeStoragePlan.NumberingKey]);
+        Assert.Empty(memory.Writes);
+        Assert.True(keeper.IsUnreadable);
+        Assert.Null(keeper.Record.Mark);
+    }
+
+    /// <summary>
+    /// The resolution writes only once a fresh read shows the document it
+    /// resolved, or nothing: under a refused read it writes nothing — not an
+    /// empty record over whatever is stored — and the replacement stands in
+    /// this page; the next checkpoint whose read shows the document writes the
+    /// fresh record over it.
+    /// </summary>
+    [Fact]
+    public async Task TheResolutionUnderARefusedRead_WritesNothing_UntilAFreshReadShowsTheDocument()
+    {
+        const string unreadable = "not json";
+        var memory = new MemoryBrowserStorage { [HomeStoragePlan.NumberingKey] = unreadable };
+        var keeper = KeeperOver(memory);
+        await keeper.RestoreAsync();
+        memory.RefuseReads = true;
+
+        await keeper.ResolveUnreadableAsync();
+
+        Assert.Equal(unreadable, memory[HomeStoragePlan.NumberingKey]);
+        Assert.Empty(memory.Writes);
+        Assert.False(keeper.IsUnreadable);
+
+        memory.RefuseReads = false;
+        Assert.True(await keeper.OweAsync(Job("j9")));
+        Assert.Equal(OwingDocument("j9"), memory[HomeStoragePlan.NumberingKey]);
+    }
+
+    /// <summary>
+    /// A resolution held back by a refused read, then another page's record
+    /// stored before the next read: that read shows other content, so nothing
+    /// replaces it — the record is taken, and the next checkpoint writes on
+    /// top of it.
+    /// </summary>
+    [Fact]
+    public async Task TheResolutionUnderARefusedRead_ThenAnotherPagesRecord_IsTaken_NeverReplaced()
+    {
+        var memory = new MemoryBrowserStorage { [HomeStoragePlan.NumberingKey] = "not json" };
+        var keeper = KeeperOver(memory);
+        await keeper.RestoreAsync();
+        memory.RefuseReads = true;
+        await keeper.ResolveUnreadableAsync();
+        memory[HomeStoragePlan.NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 9, 3, (Current, 3));
+        memory.RefuseReads = false;
+
+        Assert.True(await keeper.OweAsync(Job("j9")));
+
+        Assert.Equal(HomeStoragePlan.NumberingDocument("pos{n}", 9, 3, (Current, 3), JobDocument("j9")),
+            memory[HomeStoragePlan.NumberingKey]);
+        Assert.Equal(new LedgerMark(Current, 3), keeper.Record.Mark);
     }
 }

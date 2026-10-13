@@ -451,7 +451,7 @@ public class HomeWiringTests : BunitContext
         // bound: a silently splatted one would lose a job or its accounting.
         var localPanel = cut.FindComponent<LocalModePanel>();
         Assert.NotNull(localPanel.Instance.XgpOptions);
-        Assert.True(localPanel.Instance.OnXgpJobStarting.HasDelegate);
+        Assert.NotNull(localPanel.Instance.OnXgpJobStarting);
         Assert.True(localPanel.Instance.OnXgpJobEnded.HasDelegate);
         Assert.True(localPanel.Instance.OnReconcileNeeded.HasDelegate);
     }

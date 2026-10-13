@@ -391,6 +391,53 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Equal(5, page.Options.StartNumber);
     }
 
+    // ── The owe step's answer ───────────────────────────────────────────────
+
+    /// <summary>
+    /// The owe step's read finds the record unreadable — a newer version of
+    /// the app wrote it after this page reconciled — so no start is sent: the
+    /// job is resolved as never sent, the document is kept, and the gate
+    /// reason shows.
+    /// </summary>
+    [Fact]
+    public async Task TheOweStepFindingTheRecordUnreadable_SendsNoStart()
+    {
+        var page = Open();
+        var starts = Starts;
+        _storage[NumberingKey] = "not json";
+
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(starts, Starts);
+        Assert.Equal("not json", _storage[NumberingKey]);
+        page.WaitFor(() => page.StartState.XgpBlock == XgpStartBlock.UnreadableRecord);
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll(".unreadable-numbering-notice")));
+        Assert.Empty((await LedgerAsync()).Entries);
+    }
+
+    /// <summary>
+    /// The owe step learns of a job lost with an earlier instance — another
+    /// page recorded it after this one reconciled — so no start is sent: the
+    /// job is resolved as never sent, only the lost one stays owed, and its
+    /// gate reason shows once the page has reconciled.
+    /// </summary>
+    [Fact]
+    public async Task TheOweStepLearningOfALostJob_SendsNoStart()
+    {
+        var page = Open();
+        var starts = Starts;
+        _storage[NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 4, 3, null,
+            HomeStoragePlan.OwedJob("lost-1", "instance-before", "pos{n}", 5, 3, @"D:\xg\lost"));
+
+        await page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(starts, Starts);
+        Assert.Equal(["lost-1"], OwedIds(Record!.Value));
+        page.WaitFor(() => page.StartState.XgpBlock == XgpStartBlock.LostExport);
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll(".lost-export-notice")));
+        Assert.Empty((await LedgerAsync()).Entries);
+    }
+
     [Fact]
     public void WhileTheServerCannotBeReached_TheStateIsUnknown_AndRunWaits()
     {

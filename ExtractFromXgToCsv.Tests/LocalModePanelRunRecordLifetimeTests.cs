@@ -55,6 +55,7 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false)
+            .Add(c => c.OnXgpJobStarting, LocalPanelRuns.MaySend)
             .Add(c => c.OnXgpJobEnded, () => ended?.Invoke()));
         cut.Find("#outputPath").Input(new ChangeEventArgs { Value = format == OutputFormat.Xgp ? @"D:\xg\positions" : @"D:\xg\out.csv" });
         return cut;

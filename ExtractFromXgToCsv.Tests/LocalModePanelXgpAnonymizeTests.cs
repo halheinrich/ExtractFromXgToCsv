@@ -39,6 +39,7 @@ public class LocalModePanelXgpAnonymizeTests : BunitContext
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, anonymize)
+            .Add(c => c.OnXgpJobStarting, LocalPanelRuns.MaySend)
             .Add(c => c.FolderPath, "D:\\xg"));
 
         // The folder path is a parameter since the source hoist; the output

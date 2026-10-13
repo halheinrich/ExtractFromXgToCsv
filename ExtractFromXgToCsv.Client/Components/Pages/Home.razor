@@ -685,11 +685,15 @@
     private void NoteEdit() => _lastEditAt = ++_clock;
 
     // A Local XGP job about to start: its moment is noted, and the host
-    // records it as owed.
-    private Task OnXgpJobStartingAsync(OwedXgpJob job)
+    // records it as owed and answers whether its start may be sent. A job
+    // held back is never sent, so its moment orders nothing.
+    private async Task<bool> OnXgpJobStartingAsync(OwedXgpJob job)
     {
         _startedAt[job.JobId] = ++_clock;
-        return _reconciler.RecordOwedAsync(job);
+        if (await _reconciler.RecordOwedAsync(job))
+            return true;
+        _startedAt.Remove(job.JobId);
+        return false;
     }
 
     // A Web XGP download beginning: its moment is noted.

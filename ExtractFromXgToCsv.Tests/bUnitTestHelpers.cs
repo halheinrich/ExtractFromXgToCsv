@@ -457,6 +457,12 @@ internal static class LocalPanelRuns
     public static LocalStartState Ready { get; } = new(CapturingProcessHandler.Instance, Mark: null, XgpBlock: null);
 
     /// <summary>
+    /// A host's owe step for a panel with no host: every XGP start may be sent,
+    /// as a host whose record is readable and owes nothing else answers.
+    /// </summary>
+    public static Func<OwedXgpJob, Task<bool>> MaySend { get; } = _ => Task.FromResult(true);
+
+    /// <summary>
     /// Renders the panel over <see cref="Folder"/> with
     /// <paramref name="filter"/> in effect, and types an output path.
     /// </summary>
