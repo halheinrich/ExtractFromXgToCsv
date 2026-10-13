@@ -64,12 +64,14 @@
        gesture the user made failed. One occurrence is one failed run, and
        _runError is non-null exactly while one stands, so closing the box ends
        the occurrence — the field is cleared, as the next Run, and inputs that
-       no longer match the run's, already clear it — and there is no dismissed bit anywhere,
-       here or in the Notice (the binding makes it caller-held, so it keeps
-       none). A second failure assigns the field again and shows fresh although
-       its text may be identical: the text was never the occurrence. While the
-       run goes on, what the field shows of it is _inFlightError's to say. No
-       @if around it — one fact, read once. *@
+       no longer match the run's, already clear it — and the Notice keeps no
+       dismissed bit (the binding makes it caller-held). A second failure
+       assigns the field again and shows fresh although its text may be
+       identical: the text was never the occurrence. While the run goes on,
+       what the field shows of it is ShowInFlight's to say; there the one
+       remembered dismissal is the persistent-failure notice's, which holds
+       for the rest of its failure streak (StillTryingNotice). No @if around
+       it — one fact, read once. *@
     <Notice class="mt-2" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
             Dismissible="true"
             @bind-Dismissed:get="_runError is null"
@@ -421,23 +423,48 @@
     // follow one.
     private string? _runError;
 
-    // What the run error shows of the run in hand while it goes on.
-    private InFlightError _inFlightError;
+    // What the run error shows of the run in hand while it goes on is made
+    // from the two facts below (ShowInFlight): a Stop failure standing, which
+    // the persistent-failure notice never replaces, or else that notice,
+    // while it is shown.
 
-    /// <summary>What the run error shows of a run still in hand, beside nothing at all.</summary>
-    private enum InFlightError
+    // A Stop for the run in hand that was refused, or could not be
+    // confirmed, as its message; null while none stands. It stands until a
+    // Stop for the job is delivered, the user closes it, or the run ends,
+    // whatever contact does meanwhile.
+    private string? _stopFailure;
+
+    // The persistent-failure notice within the current failure streak.
+    private StillTryingNotice _stillTrying;
+
+    /// <summary>
+    /// The persistent-failure notice within one failure streak — the requests
+    /// that fail in a row until contact returns (SPEC-notices.md §7.5).
+    /// </summary>
+    private enum StillTryingNotice
     {
-        /// <summary>Nothing of the run in hand.</summary>
+        /// <summary>
+        /// Not on screen and not held back: no streak has reached the
+        /// threshold, or one has and nothing has shown it yet. The next failure
+        /// at or past the threshold shows it.
+        /// </summary>
         None,
 
-        /// <summary>The persistent-failure error: taken down when contact returns.</summary>
-        StillTrying,
+        /// <summary>
+        /// Due, but a Stop failure stands in its place. It is shown once a
+        /// Stop is confirmed delivered, while failures continue; if the user
+        /// closes the Stop failure instead, it is due again at the next failure.
+        /// </summary>
+        Suppressed,
+
+        /// <summary>On screen as the run error, until contact returns.</summary>
+        Shown,
 
         /// <summary>
-        /// A Stop that was refused, or could not be confirmed: it stands until a
-        /// Stop is delivered or the run ends, whatever contact does meanwhile.
+        /// Closed by the user: it stays closed until contact returns and a new
+        /// streak begins, however many more requests fail.
         /// </summary>
-        StopNotDelivered,
+        Dismissed,
     }
 
     /// <summary>
@@ -589,11 +616,23 @@
         _runError = null;
     }
 
-    // The user closed the run error: the occurrence ends, whatever it was.
+    // The user closed the run error: the occurrence it showed ends, whatever
+    // it was. A Stop failure closed ends, and a persistent-failure notice it
+    // held back is due again at the next failure; a persistent-failure notice
+    // closed stays closed for the rest of its streak.
     private void DismissRunError()
     {
         _runError = null;
-        _inFlightError = InFlightError.None;
+        if (_stopFailure is not null)
+        {
+            _stopFailure = null;
+            if (_stillTrying == StillTryingNotice.Suppressed)
+                _stillTrying = StillTryingNotice.None;
+        }
+        else if (_stillTrying == StillTryingNotice.Shown)
+        {
+            _stillTrying = StillTryingNotice.Dismissed;
+        }
     }
 
     // Stop (SPEC-notices.md §7.5): once the job is known, it cancels it;
@@ -619,6 +658,8 @@
     /// no Stop for the job delivered, the page says so: Stop is never shown as
     /// delivered when it was not, and that stands until a Stop is delivered or
     /// the run ends. The page goes on following, and Stop can be pressed again.
+    /// A Stop failure holds back the persistent-failure notice; once a Stop is
+    /// delivered, a notice it held back is shown, since requests still fail.
     /// </summary>
     private async Task DeliverStopAsync(JobInHand job)
     {
@@ -636,12 +677,19 @@
             return;
         if (failure is not null)
         {
-            ShowInFlightError(InFlightError.StopNotDelivered, failure);
+            _stopFailure = failure;
+            if (_stillTrying == StillTryingNotice.Shown)
+                _stillTrying = StillTryingNotice.Suppressed;
+            ShowInFlight();
             return;
         }
         job.ConfirmStopDelivered();
-        if (_inFlightError == InFlightError.StopNotDelivered)
-            ClearInFlightError();
+        if (_stopFailure is null)
+            return;
+        _stopFailure = null;
+        if (_stillTrying == StillTryingNotice.Suppressed)
+            _stillTrying = StillTryingNotice.Shown;
+        ShowInFlight();
     }
 
     // Cancelled, not disposed: a run still in flight reads its token, and
@@ -672,7 +720,7 @@
         var xgp = OutputFormat == OutputFormat.Xgp;
         var run = new RunInputs(_visit, filter, filter.Build().IsEmpty, _outputPath);
         _run = run;
-        _busy = true; _runError = null; _inFlightError = InFlightError.None;
+        _busy = true; _runError = null; _stopFailure = null; _stillTrying = StillTryingNotice.None;
         _progress = null; _jobInHand = null;
         // The next run replaces the last one's record: this run's is shown
         // when it ends, never while it is still growing.
@@ -799,7 +847,8 @@
         // showed while it went on.
         _busy = false;
         _jobInHand = null;
-        _inFlightError = InFlightError.None;
+        _stopFailure = null;
+        _stillTrying = StillTryingNotice.None;
 
         // Judge before publishing: the outcome is shown only while the run's
         // source visit is the current one and the filter values on screen are
@@ -959,34 +1008,35 @@
         }
     }
 
-    // The persistent-failure run error: shown once failures reach the
-    // threshold, and taken down when contact returns, unless the user has
-    // closed it already. A Stop not delivered stands: the persistent failure
+    // The persistent-failure run error (StillTryingNotice): due at every
+    // failure at or past the threshold, and shown then unless a Stop failure
+    // stands in its place — which holds it back — or the user has closed it
+    // in this streak. A Stop not delivered stands: the persistent failure
     // never replaces it, and contact returning never takes it down.
     private void StillTryingAfter(int failures)
     {
-        if (failures != Timing.FailuresBeforeError || _inFlightError == InFlightError.StopNotDelivered)
+        if (failures < Timing.FailuresBeforeError || _stillTrying != StillTryingNotice.None)
             return;
-        ShowInFlightError(InFlightError.StillTrying, StillTryingMessage);
+        _stillTrying = _stopFailure is null ? StillTryingNotice.Shown : StillTryingNotice.Suppressed;
+        ShowInFlight();
     }
 
+    // Contact has returned: the failure streak is over. A notice shown is
+    // taken down, and one held back or closed is forgotten, so the next
+    // streak begins afresh. A Stop failure stands.
     private void ContactReturned()
     {
-        if (_inFlightError == InFlightError.StillTrying)
-            ClearInFlightError();
+        if (_stillTrying == StillTryingNotice.None)
+            return;
+        _stillTrying = StillTryingNotice.None;
+        ShowInFlight();
     }
 
-    private void ShowInFlightError(InFlightError error, string message)
+    // Puts what the run error shows of the run in hand on screen: a Stop
+    // failure standing, or else the persistent-failure notice while shown.
+    private void ShowInFlight()
     {
-        _runError = message;
-        _inFlightError = error;
-        StateHasChanged();
-    }
-
-    private void ClearInFlightError()
-    {
-        _runError = null;
-        _inFlightError = InFlightError.None;
+        _runError = _stopFailure ?? (_stillTrying == StillTryingNotice.Shown ? StillTryingMessage : null);
         StateHasChanged();
     }
 

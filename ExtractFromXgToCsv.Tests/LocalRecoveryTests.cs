@@ -727,6 +727,111 @@ public class LocalRecoveryTests : IAsyncLifetime
         page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
     }
 
+    // ── The persistent-failure notice: held back, shown, closed ─────────────
+
+    /// <summary>
+    /// The persistent-failure notice held back by a Stop failure: status reads
+    /// fail past the threshold while a Stop not delivered stands, so the
+    /// notice is due but held back. A Stop then delivered, the reads still
+    /// failing, takes the Stop failure down and shows the notice in its place;
+    /// contact returning takes it down, and the run ends stopped. Before the
+    /// correction the notice fired only at the threshold, so once a delivered
+    /// Stop had cleared the Stop failure nothing said the result was still owed.
+    /// </summary>
+    [Fact]
+    public async Task APersistentFailureHeldBackByAStopFailure_ShowsOnceAStopIsDelivered_WhileFailuresContinue()
+    {
+        _server.AddASecondMatch();
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+        _server.Wire.Respond(ProtocolWire.Cancel, System.Net.HttpStatusCode.InternalServerError);
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        page.WaitForScreen(() => Assert.Equal(StopUnconfirmedMessage, RunErrorShown(page)));
+
+        var failing = _server.Wire.Fail(ProtocolWire.Status);
+        var reads = StatusReads;
+        Poll(() => StatusReads > reads + LocalPage.FastTiming.FailuresBeforeError);
+        page.WaitForScreen(() => Assert.Equal(StopUnconfirmedMessage, RunErrorShown(page)));
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        page.WaitForScreen(() => Assert.Equal(StillTryingMessage, RunErrorShown(page)));
+
+        failing.Stop();
+        page.WaitForScreen(() => Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error));
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+    }
+
+    /// <summary>
+    /// A persistent-failure notice the user closes stays closed for the rest
+    /// of its failure streak, however many more reads fail. Once contact
+    /// returns, a new streak that reaches the threshold shows it again.
+    /// </summary>
+    [Fact]
+    public async Task APersistentFailureNoticeClosed_StaysClosedForItsStreak_AndANewStreakShowsItAgain()
+    {
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+
+        var failing = _server.Wire.Fail(ProtocolWire.Status);
+        page.WaitForScreen(() => Assert.Equal(StillTryingMessage, RunErrorShown(page)));
+        await Assert.Single(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error)
+            .DismissAndSettleAsync(page.Home, NoticeDismissGesture.CloseButton);
+        var reads = StatusReads;
+        Poll(() => StatusReads > reads + LocalPage.FastTiming.FailuresBeforeError);
+        await page.Home.InvokeAsync(() => { });
+        Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+
+        failing.Stop();
+        reads = StatusReads;
+        Poll(() => StatusReads >= reads + 2);
+        failing = _server.Wire.Fail(ProtocolWire.Status);
+        page.WaitForScreen(() => Assert.Equal(StillTryingMessage, RunErrorShown(page)));
+
+        failing.Stop();
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Contains("Done", page.Home.Markup));
+    }
+
+    /// <summary>
+    /// A Stop failure the user closes while it holds the persistent-failure
+    /// notice back: the notice was never shown, so it was not what the user
+    /// closed, and the reads still fail, so it shows at the next failure.
+    /// </summary>
+    [Fact]
+    public async Task AStopFailureClosed_WhileItHoldsThePersistentFailureBack_ShowsTheNoticeAtTheNextFailure()
+    {
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+        _server.Wire.Respond(ProtocolWire.Cancel, System.Net.HttpStatusCode.InternalServerError);
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        page.WaitForScreen(() => Assert.Equal(StopUnconfirmedMessage, RunErrorShown(page)));
+        var failing = _server.Wire.Fail(ProtocolWire.Status);
+        var reads = StatusReads;
+        Poll(() => StatusReads > reads + LocalPage.FastTiming.FailuresBeforeError);
+
+        await Assert.Single(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error)
+            .DismissAndSettleAsync(page.Home, NoticeDismissGesture.CloseButton);
+        page.WaitForScreen(() => Assert.Equal(StillTryingMessage, RunErrorShown(page)));
+
+        failing.Stop();
+        page.WaitForScreen(() => Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error));
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Contains("Done", page.Home.Markup));
+    }
+
     /// <summary>
     /// Two Stops for one run, their cancels answered in either order — one
     /// delivered, the other not confirmed — and whichever of the two was sent
