@@ -264,25 +264,30 @@ numbering. This section says how the code meets it, not what it rules.
   midway contributes nothing), and the commit — the CSV writer, the JSON
   write, the deck build, an XGP file write — is outside it and fails the
   run. Every output file is opened through the destination seam
-  (`IOutputDestination`), and finished before the run reports success: the
-  CSV writer, and the one file a Diagram JSON or deck run replaces, are
+  (`IOutputDestination`), **created new, never overwriting** (§7.5): each
+  attempt is one create-new (`IOutputDestination.CreateNew`), the
+  destination classifies its own refusal (`OutputFileExistsException`), and
+  a collision moves the run on to the next free name of the file's sequence
+  (`LocalFolderProcessor.CreateUnderFreeName`, numbered by
+  `NumberedFileName`, the one statement of the ` (n)` rule), and the run
+  carries on. Every output is finished before the run reports success: the
+  CSV writer, and the one file a Diagram JSON or deck run writes, are
   written and then closed whatever the write did (`WriteThenCloseAsync`),
   so a failure flushing one is the run's error, never a success already
   published. The write's own ending stands (§7.1): a cancellation stays a
   stopped run, with a failure closing the unfinished file reported beside it
   (`CancelledWithUnfinishedOutputException`, carried to the client as
   `ProcessingProgress.CloseFailureMessage`), and a failed write stays the
-  run's error, the close failure beside it (`UnfinishedOutputException`).
-  An XGP payload is
+  run's error, the close failure beside it (`UnfinishedOutputException`);
+  that one file is never removed. An XGP payload is
   prepared within its decision's own boundary (`XgpPayload`; a failure is an
-  export skip and consumes no number) and written outside it, **created new,
-  never overwriting** (§7.5): the destination classifies its own create
-  refusal (`OutputFileExistsException`), and an existing file stops the run
-  as a destination failure naming it (`XgpFileExistsException`); a file the
-  run created but could not write or close is removed, any failure to close
-  or remove it reported beside the primary one (`UnfinishedFileException`,
-  in the wording `DestinationFailureText` states once); a collision, or any
-  other failure to create, removes nothing. The run's
+  export skip and consumes no number) and written outside it, created new
+  under the allocator's name or the next free one: a file the run created
+  but could not write or close is removed under the name it was created
+  with, any failure to close or remove it reported beside the primary one
+  (`UnfinishedFileException`, in the wording `DestinationFailureText` states
+  once); a failure to create removes nothing, and a file that existed
+  before the run is never touched. The run's
   `RunRecord` holds its skips and, for XGP, its `XgpExportCommit`, replaced
   as each file is written and closed; the job runner's cancelled and failed
   snapshots are built from it (`CancelledSnapshot`, `FailedSnapshot`).
@@ -571,9 +576,10 @@ when the attempt began (`WebSession.BeginDownload`), and the panel never
 touches an `XgFile`. In Local mode `LocalFolderProcessor.ProcessXgpAsync`
 writes the files server-side into the output **folder** (`OutputPath` is a
 directory for this format, created if absent), each **created new**: an
-existing file is never overwritten — it stops the run, naming the file
-(`SPEC-notices.md` §7.5; see "Reading, converting, skipping and
-committing"). Per decision, both pathways
+existing file is never overwritten — the decision's file takes the next
+free name, ` (2)`, ` (3)`, …, and the run carries on (`SPEC-notices.md`
+§7.5; see "Reading, converting, skipping and committing"). Per decision,
+both pathways
 prepare the payload through one statement of the routing rule,
 `XgpPayload.Prepare`, within the decision's own boundary (a failure skips
 that decision and consumes no number), and commit outside it:
@@ -1448,10 +1454,10 @@ records what a run was computed from when the run starts.
   JSON write whose close fails keeps the write's error, the close failure
   beside it; and a logger that throws stops no run at any kind of skip, the
   record whole and the later files written.
-- `LocalFolderProcessorNoOverwriteTests` — Local XGP files are never
-  overwritten (`SPEC-notices.md` §7.5): an existing file stops the run with
-  an error naming it, its bytes untouched and the files before it counted;
-  a failure to create the file — a folder of its name — asks no removal and
+- `LocalFolderProcessorNoOverwriteTests` — Local output files are never
+  overwritten (`SPEC-notices.md` §7.5): an existing file is left as it was
+  and the run's file takes the next free name and the run carries on; a
+  failure to create the file — a folder of its name — asks no removal and
   leaves the folder's contents as they were; a write that fails partway
   and a failed close each remove the run's unfinished file, the files before
   it standing; a close or a removal that also fails is reported beside the
@@ -2549,8 +2555,8 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   Nothing scans previously exported files, and no number is ever inferred
   from file names (Hal's F3 ruling): a user who bypasses the counter (edits
   "next number" backwards, exports into the same place twice with a reset
-  pattern) gets colliding names, and in Local mode the run stops at the
-  first existing file rather than replace it.
+  pattern) gets colliding names, and in Local mode each such file is
+  written under the next free name instead of replacing the existing one.
 - **Write the numbering record only through `XgpNumberingKeeper`.** Each
   checkpoint reads afresh, merges, and writes the whole document once;
   writing a field on its own, or from the page's copy without the fresh
@@ -2607,12 +2613,16 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   ` (2)`, ` (3)`, … within one export run; it never looks at the output
   folder. Across runs the counter (`{n}`) keeps names apart, and in Local
   mode the create-new write is the last guard: a pattern without `{n}`, a
-  reused number or a re-export into the same folder stops at the first
-  existing file instead of replacing it (`SPEC-notices.md` §7.5).
-- **Never check for a file and then write it.** Local XGP files are created
-  with `FileMode.CreateNew` in one operation (`IOutputDestination.CreateNew`);
-  an existence check followed by a write has a window another process can
-  fill. The `File.Exists` after a refused create only words the error.
+  reused number or a re-export into the same folder carries the issued
+  name's sequence on past the existing files (`SPEC-notices.md` §7.5).
+  Number a name only through `NumberedFileName`: the allocator and the
+  free-name loop share its one ` (n)` rule, so don't format a suffix
+  anywhere else.
+- **Never check for a file and then write it.** Every Local output file is
+  created with `FileMode.CreateNew` in one operation
+  (`IOutputDestination.CreateNew`); an existence check followed by a write
+  has a window another process can fill. The `File.Exists` after a refused
+  create only classifies the refusal as a collision.
 - **A file is the run's only once its create-new succeeds.** Remove an
   unfinished file only if this run created it (its write or close failed);
   a collision, or any other failure to create, removes nothing — the file
@@ -2632,8 +2642,9 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `TotalRows` could stand in for the count; that special case is gone.)
 - **Xgp `OutputPath` is a folder.** `ProcessXgpAsync` treats it as a
   directory (created if absent) and `LocalModePanel` skips the
-  extension-swap logic for Xgp. Same-named files are never overwritten (see
-  above); the other formats still replace the one file the user named.
+  extension-swap logic for Xgp. No Local output file is overwritten (see
+  above): the one file the other formats write takes the next free name
+  beside the path the user named, as each XGP file does in its folder.
 - **In a bUnit test, wait on the screen for what the screen shows.** A
   condition on a child component's parameter can hold before the child has
   re-rendered — Home's render sets the panel's parameters ahead of the
