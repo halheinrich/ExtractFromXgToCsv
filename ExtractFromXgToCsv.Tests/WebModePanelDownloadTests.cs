@@ -254,6 +254,61 @@ public class WebModePanelDownloadTests : BunitContext
     }
 
     /// <summary>
+    /// The Download gate is the button's and its click's one definition: a
+    /// click that reaches the gesture past any one of the gate's conditions —
+    /// the button dark — begins nothing: no attempt, nothing built or handed
+    /// over, and no XGP export raised to the host.
+    /// </summary>
+    [Theory]
+    [InlineData("a gesture in hand")]
+    [InlineData("no filter")]
+    [InlineData("an unreadable numbering record")]
+    [InlineData("nothing matching")]
+    [InlineData("invalid options")]
+    public async Task AClickPastEachGateCondition_BeginsNothing(string condition)
+    {
+        var starting = 0;
+        var cut = Render<WebModePanel>(p => p
+            .Add(c => c.OutputFormat, OutputFormat.Xgp)
+            .Add(c => c.FilterInEffect, new FilterConfig())
+            .Add(c => c.XgpOptions, Options)
+            .Add(c => c.XgpAnonymize, false)
+            .Add(c => c.OnXgpExportStarting, () => starting++)
+            .Add(c => c.OnXgpExported, (XgpExportCommit c) => _committed.Add(c)));
+        Pick(cut);
+        Assert.False(DownloadButton(cut).HasAttribute("disabled"));
+        var gesture = new TaskCompletionSource();
+        var inHand = Task.CompletedTask;
+        switch (condition)
+        {
+            case "a gesture in hand":
+                inHand = cut.InvokeAsync(() => cut.Instance.RunBusyForTest("Working on it…", () => gesture.Task));
+                break;
+            case "no filter":
+                cut.Render(p => p.Add(c => c.FilterInEffect, (FilterConfig?)null));
+                break;
+            case "an unreadable numbering record":
+                cut.Render(p => p.Add(c => c.XgpNumberingUnreadable, true));
+                break;
+            case "nothing matching":
+                cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 1000 }));
+                break;
+            default:
+                cut.Render(p => p.Add(c => c.XgpOptions, new XgpExportOptions { NamePattern = "a/b" }));
+                break;
+        }
+
+        await cut.InvokeAsync(() => cut.Instance.DownloadForTest());
+
+        Assert.Equal(0, starting);
+        Assert.Empty(JSInterop.Invocations["downloadFile"]);
+        Assert.Null(cut.Instance.Session.LastDownload);
+        Assert.Empty(_committed);
+        gesture.TrySetResult();
+        await inHand.WaitAsync(NoticeTesting.OperationBound);
+    }
+
+    /// <summary>
     /// A held download's hand-off fails after a newer pick has replaced its
     /// selection: the attempt no longer owns its outcome, so its failure is not
     /// the run error, as its record is not "the last download". Before the

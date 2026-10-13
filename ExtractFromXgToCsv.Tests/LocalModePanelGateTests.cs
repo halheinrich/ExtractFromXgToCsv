@@ -234,6 +234,64 @@ public class LocalModePanelGateTests : BunitContext
         return cut;
     }
 
+    // ── A click past the gate starts nothing ────────────────────────────────
+
+    /// <summary>
+    /// The Run gate is the button's and its click's one definition: a click
+    /// that reaches the run past any one of the gate's conditions — the
+    /// button dark — sends no start.
+    /// </summary>
+    [Theory]
+    [InlineData("no folder")]
+    [InlineData("no output path")]
+    [InlineData("no filter")]
+    [InlineData("invalid XGP options")]
+    [InlineData("the server not checked")]
+    [InlineData("an XGP start blocked")]
+    public async Task AClickPastEachGateCondition_SendsNoStart(string condition)
+    {
+        var xgp = condition is "invalid XGP options" or "an XGP start blocked";
+        var cut = Render<LocalModePanel>(p => p
+            .Add(c => c.OutputFormat, xgp ? OutputFormat.Xgp : OutputFormat.Csv)
+            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
+            .Add(c => c.FilterInEffect, condition == "no filter" ? null : new FilterConfig())
+            .Add(c => c.FolderPath, condition == "no folder" ? string.Empty : FolderA)
+            .Add(c => c.XgpOptions, condition == "invalid XGP options" ? new XgpExportOptions { NamePattern = "a/b" } : new XgpExportOptions())
+            .Add(c => c.XgpAnonymize, false)
+            .Add(c => c.OnXgpJobStarting, LocalPanelRuns.MaySend)
+            .Add(c => c.StartState, condition switch
+            {
+                "the server not checked" => LocalStartState.Checking,
+                "an XGP start blocked" => LocalPanelRuns.Ready with { XgpBlock = XgpStartBlock.Running },
+                _ => LocalPanelRuns.Ready,
+            }));
+        if (condition != "no output path")
+            cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
+        Assert.True(RunButton(cut).IsDisabled);
+
+        await RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+
+        Assert.Equal(0, _server.Starts);
+        Assert.DoesNotContain("Starting…", cut.Markup);
+    }
+
+    /// <summary>A click past the gate while a run is in hand sends no second start.</summary>
+    [Fact]
+    public async Task AClickWhileARunIsInHand_SendsNoSecondStart()
+    {
+        var cut = RenderReadyPanel(new FilterConfig());
+        _server.HoldStatus();
+        var run = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+        Assert.True(RunButton(cut).IsDisabled);
+
+        await RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+
+        Assert.Equal(1, _server.Starts);
+        _server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+    }
+
     /// <summary>A ready panel whose run has completed, its result on screen.</summary>
     private async Task<IRenderedComponent<LocalModePanel>> RenderWithCompletedRunAsync(FilterConfig filter)
     {

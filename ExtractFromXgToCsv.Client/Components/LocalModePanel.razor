@@ -80,7 +80,7 @@
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
                 @onclick="RunLocalAsync"
-                disabled="@(_busy || string.IsNullOrWhiteSpace(FolderPath) || string.IsNullOrWhiteSpace(_outputPath) || FilterInEffect is null || XgpRunBlocked || !StartState.Allows(OutputFormat))">
+                disabled="@(!RunReady)">
             Run
         </button>
         @if (_busy)
@@ -338,6 +338,18 @@
 
     private bool XgpRunBlocked =>
         OutputFormat == OutputFormat.Xgp && !XgpOptions.TryValidate(out _);
+
+    // The Run gate — the button's and its click's one definition, so a click
+    // that reaches the run past a dark button starts nothing: no run in hand,
+    // a folder and an output path, a filter in effect, valid options for XGP,
+    // and a start the page may send now.
+    private bool RunReady =>
+        !_busy
+        && !string.IsNullOrWhiteSpace(FolderPath)
+        && !string.IsNullOrWhiteSpace(_outputPath)
+        && FilterInEffect is not null
+        && !XgpRunBlocked
+        && StartState.Allows(OutputFormat);
 
     // Why the start the current format needs cannot be sent now; null when it can.
     private string? StartHint =>
@@ -616,11 +628,9 @@
     /// </summary>
     private async Task RunLocalAsync()
     {
-        // The gate guarantees a filter in effect and a start the page may
-        // send; a stale click past it has nothing to run.
-        if (FilterInEffect is not { } filter
-            || StartState.Instance is not { } instance
-            || !StartState.Allows(OutputFormat))
+        // The gate's own definition: a stale click past it has nothing to
+        // run. It guarantees a filter in effect and an instance to name.
+        if (!RunReady || FilterInEffect is not { } filter || StartState.Instance is not { } instance)
             return;
 
         var xgp = OutputFormat == OutputFormat.Xgp;

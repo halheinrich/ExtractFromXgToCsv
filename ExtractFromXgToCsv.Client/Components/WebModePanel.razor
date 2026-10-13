@@ -689,10 +689,13 @@
         ? $"Converting decisions for {OutputFormat.DiagramJson.ShortName()}…"
         : "Extracting decisions…";
 
-    // Download needs a filter in effect, a selection within the size limit,
-    // and the selected key converted with something in it; Xgp also needs
-    // matching decisions and valid naming options. The text formats tolerate
-    // an empty filtered set (header-only CSV / empty JSON array).
+    // The Download gate — the button's and its click's one definition, so a
+    // click that reaches the gesture past a dark button begins nothing.
+    // Download needs no gesture in hand, a filter in effect, a selection
+    // within the size limit, and the selected key converted with something in
+    // it; Xgp also needs a numbering record that can be read, matching
+    // decisions and valid naming options. The text formats tolerate an empty
+    // filtered set (header-only CSV / empty JSON array).
     private bool DownloadReady =>
         !IsBusy
         && FilterInEffect is not null
@@ -745,7 +748,8 @@
     /// The download gesture. Its attempt begins at the click, before the busy
     /// wrapper's yield hands the thread back, so a format switch, a filter
     /// change or an options edit in that window belongs to a later attempt,
-    /// never this one; and it begins only from a converted representation. The
+    /// never this one; and it begins only past the button's own gate
+    /// (<see cref="DownloadReady"/>), from a converted representation. The
     /// gesture then ends as every gesture does, by converting what the
     /// selected output now needs: a format switch while it was busy was left
     /// to it.
@@ -757,7 +761,7 @@
     /// </remarks>
     private async Task DownloadAsync()
     {
-        if (BeginAttempt() is { } attempt)
+        if (DownloadReady && BeginAttempt() is { } attempt)
         {
             if (attempt.Format == OutputFormat.Xgp)
                 await OnXgpExportStarting.InvokeAsync();
@@ -768,9 +772,8 @@
 
     /// <summary>
     /// Begins an attempt for the selected output, capturing what it depends
-    /// on; <see langword="null"/>, beginning nothing, for a stale click past
-    /// the gate — no filter in effect, or the selected representation not
-    /// converted.
+    /// on; <see langword="null"/>, beginning nothing, when the session has no
+    /// converted representation to begin one from.
     /// </summary>
     private DownloadAttempt? BeginAttempt()
     {

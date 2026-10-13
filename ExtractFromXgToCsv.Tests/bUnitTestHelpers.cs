@@ -352,6 +352,11 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
     /// <summary>The identities acknowledged, in order.</summary>
     public List<string> Acknowledged { get; } = [];
 
+    /// <summary>How many starts have been POSTed.</summary>
+    public int Starts => Volatile.Read(ref _starts);
+
+    private int _starts;
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -363,6 +368,7 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
             CapturedJson = json;
             var start = JsonSerializer.Deserialize<StartRequest>(json, _opts)!;
             CapturedStart = start;
+            Interlocked.Increment(ref _starts);
             int? number = null;
             if (start.Run.OutputFormat == OutputFormat.Xgp)
             {
