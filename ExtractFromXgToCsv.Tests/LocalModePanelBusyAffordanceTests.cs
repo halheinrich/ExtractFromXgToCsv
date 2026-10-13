@@ -109,9 +109,7 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
     public void TerminalSnapshot_StillRendersDone()
     {
         var cut = RenderPanel();
-        var done = RenderingSnapshot(JobPhase.Rendering);
-        done.Complete = true;
-        done.FileName = "Done";
+        var done = RenderingSnapshot(JobPhase.Rendering) with { Complete = true, FileName = "Done" };
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", done);
         cut.Render();
 

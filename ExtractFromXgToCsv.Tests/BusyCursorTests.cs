@@ -116,9 +116,7 @@ public class BusyCursorTests : BunitContext
     public void LocalPanel_DropsTheMarkerWithTheFlag_NotWithTheProgressBlock()
     {
         var cut = RenderLocal();
-        var done = RenderingSnapshot();
-        done.Complete = true;
-        done.FileName = "Done";
+        var done = RenderingSnapshot() with { Complete = true, FileName = "Done" };
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", done);
         cut.Render();
 

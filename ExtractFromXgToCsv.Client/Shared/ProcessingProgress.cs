@@ -5,45 +5,53 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <c>GET /api/process/{jobId}/status</c> once per second. Lives in the Client
 /// project so both server and client code share the one wire shape.
 /// </summary>
-public class ProcessingProgress
+/// <remarks>
+/// Immutable: every property is set when the snapshot is made, and a changed
+/// snapshot is a new one (<c>with</c>). So the job store can keep the snapshot
+/// a run reported, serve it to every status read, and hand it to the builder
+/// of the terminal result, and no holder — the run, the store, a reader, a
+/// builder — can change what another reads, inside the store's lock or out of
+/// it.
+/// </remarks>
+public sealed record ProcessingProgress
 {
     /// <summary>1-based index of the file currently being processed.</summary>
-    public int Current { get; set; }
+    public int Current { get; init; }
 
     /// <summary>Total number of input files discovered for the run.</summary>
-    public int Total { get; set; }
+    public int Total { get; init; }
 
     /// <summary>Name of the file being processed, or a terminal marker such as <c>"Done"</c>.</summary>
     /// <remarks>
     /// Presentation only — a line to show the user. Which stage the run is in is
     /// <see cref="Phase"/>; never re-derive it by inspecting this string.
     /// </remarks>
-    public string FileName { get; set; } = string.Empty;
+    public string FileName { get; init; } = string.Empty;
 
     /// <summary>
     /// Which stage of the run this snapshot describes. Drives the client's
     /// choice of a determinate or indeterminate busy affordance — see
     /// <see cref="JobPhase"/>.
     /// </summary>
-    public JobPhase Phase { get; set; } = JobPhase.Processing;
+    public JobPhase Phase { get; init; } = JobPhase.Processing;
 
     /// <summary>Rows/decisions written so far; on a terminal snapshot, the run's final count.</summary>
-    public int TotalRows { get; set; }
+    public int TotalRows { get; init; }
 
     /// <summary>Whether the job has reached a terminal state (success, cancellation, or failure).</summary>
-    public bool Complete { get; set; }
+    public bool Complete { get; init; }
 
     /// <summary>Whether the terminal state was a cancellation.</summary>
-    public bool Cancelled { get; set; }
+    public bool Cancelled { get; init; }
 
     /// <summary>Wall-clock seconds elapsed since the run started.</summary>
-    public double ElapsedSec { get; set; }
+    public double ElapsedSec { get; init; }
 
     /// <summary>Throughput, in input files processed per second.</summary>
-    public int FilesPerSec { get; set; }
+    public int FilesPerSec { get; init; }
 
     /// <summary>Failure message; non-null only on the terminal error state.</summary>
-    public string? ErrorMessage { get; set; }
+    public string? ErrorMessage { get; init; }
 
     /// <summary>
     /// On a cancelled terminal snapshot, a failure closing the output file the
@@ -52,7 +60,7 @@ public class ProcessingProgress
     /// otherwise; a failed run reports such a failure within
     /// <see cref="ErrorMessage"/>.
     /// </summary>
-    public string? CloseFailureMessage { get; set; }
+    public string? CloseFailureMessage { get; init; }
 
     /// <summary>
     /// Every unit the run has skipped so far, in the order skipped — a file it
@@ -71,7 +79,7 @@ public class ProcessingProgress
     public SkipRecord Skipped
     {
         get => _skipped;
-        set => _skipped = value ?? throw new ArgumentNullException(nameof(value));
+        init => _skipped = value ?? throw new ArgumentNullException(nameof(value));
     }
 
     private SkipRecord _skipped = SkipRecord.Empty;
@@ -89,7 +97,7 @@ public class ProcessingProgress
     /// ends between two progress reports, or by an exception, still accounts
     /// for every file it wrote.
     /// </remarks>
-    public XgpExportCommit? XgpCommit { get; set; }
+    public XgpExportCommit? XgpCommit { get; init; }
 
     /// <summary>Percent complete, derived from <see cref="Current"/> over <see cref="Total"/>.</summary>
     public int PercentComplete => Total == 0 ? 0 : (int)((Current / (double)Total) * 100);

@@ -59,6 +59,31 @@ public class JobStoreTests
         Assert.Same(terminal, _store.ReadStatus("a"));
     }
 
+    /// <summary>
+    /// The snapshot a run reports is the one every status read returns, kept
+    /// as reported — no holder can change it — and the terminal result is
+    /// built from that same snapshot: the builder receives it, and what the
+    /// builder returns is what is recorded.
+    /// </summary>
+    [Fact]
+    public void TheReportedSnapshot_IsServedAsReported_AndHandedToTheTerminalResultsBuilder()
+    {
+        Start(Csv("a"));
+        var reported = new ProcessingProgress { Current = 2, Total = 5, FileName = "b.xg", TotalRows = 9 };
+        _store.Report(_launched[0], reported);
+        Assert.Equal(reported, _store.ReadStatus("a"));
+
+        ProcessingProgress? handed = null;
+        _store.Complete(_launched[0], last =>
+        {
+            handed = last;
+            return last with { Complete = true, Cancelled = true };
+        });
+
+        Assert.Equal(reported, handed);
+        Assert.Equal(reported with { Complete = true, Cancelled = true }, _store.ReadStatus("a"));
+    }
+
     [Fact]
     public void TheAcknowledgement_ReleasesOnlyTheResult_TheDispositionAndTheLedgerStand()
     {

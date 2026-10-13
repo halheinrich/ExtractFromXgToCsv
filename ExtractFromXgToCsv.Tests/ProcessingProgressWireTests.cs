@@ -63,8 +63,24 @@ public class ProcessingProgressWireTests
     [Fact]
     public void Skipped_RefusesNull()
     {
-        var progress = new ProcessingProgress();
+        Assert.Throws<ArgumentNullException>(() => new ProcessingProgress { Skipped = null! });
+    }
 
-        Assert.Throws<ArgumentNullException>(() => progress.Skipped = null!);
+    /// <summary>
+    /// A snapshot is immutable: every property is set when it is made, or
+    /// computed, and none can be set afterwards. The job store keeps the
+    /// snapshot a run reported, serves it to every status read and hands it to
+    /// the builder of the terminal result, so a settable property would let
+    /// any holder change what another reads, outside the store's lock.
+    /// </summary>
+    [Fact]
+    public void ASnapshot_HasNoPropertyThatCanBeSetAfterItIsMade()
+    {
+        var settable = typeof(ProcessingProgress).GetProperties()
+            .Where(property => property.SetMethod is { } setter
+                && !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)))
+            .Select(property => property.Name);
+
+        Assert.Empty(settable);
     }
 }

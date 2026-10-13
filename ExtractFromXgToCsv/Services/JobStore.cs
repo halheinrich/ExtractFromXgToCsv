@@ -28,6 +28,12 @@ namespace ExtractFromXgToCsv.Services;
 /// entry ends in the same step as its job's terminal result, and is kept for
 /// the instance's lifetime.
 /// </para>
+/// <para>
+/// <b>Snapshots are immutable</b> (<see cref="ProcessingProgress"/>), so the
+/// store keeps the one a run reported, serves it to every status read, and
+/// hands it to the builder of a terminal result, as it is: no holder can
+/// change one another holds, inside the lock or out of it.
+/// </para>
 /// </remarks>
 public sealed class JobStore(ServerInstance instance)
 {
