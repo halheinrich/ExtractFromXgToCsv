@@ -27,6 +27,9 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// made before then no longer shows. A request that was refused, or that
 /// named another instance, is in no ledger of the export's instance, so it
 /// orders nothing; where nothing orders the export, the user's edit stands.
+/// A taking of an instance the pass's ledger does not show is ordered by
+/// nothing at all, so it is bounded by the moment the page last set the
+/// controls alone: followed only if the user has not edited since.
 /// </para>
 /// <para>
 /// <b>What it keeps.</b> The starts of this page's Local jobs a later taking
@@ -114,17 +117,31 @@ internal sealed class XgpEditClock
     public bool FollowsWebDownload() => _lastEdit <= _webDownloadStart;
 
     /// <summary>
-    /// Whether the controls follow <paramref name="taking"/>'s export: unless
-    /// the user has edited since it started, or, where only a lower bound on
-    /// its start is known, since that bound. A taking whose exports committed
-    /// nothing changes no number, so there is nothing to follow.
+    /// Whether the controls follow <paramref name="taking"/>'s numbering:
+    /// unless the user has edited since its export started, or, where only a
+    /// lower bound on its start is known, since that bound. A taking the
+    /// pass's ledger does not order (<see cref="LedgerTaking.Unordered"/>) has
+    /// no known start, so only the moment the page last set the controls
+    /// bounds it: it is followed only if the user has not edited since. A
+    /// taking with no numbering — its exports committed nothing — changes no
+    /// number, so there is nothing to follow.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="taking"/> is null.</exception>
     public bool Follows(LedgerTaking taking)
     {
         ArgumentNullException.ThrowIfNull(taking);
-        return taking.Export is { } export && _lastEdit <= StartOf(export, taking.Ledger);
+        return taking.Numbering is not null && _lastEdit <= StartOf(taking);
     }
+
+    // When the taking's export started, on this page's clock, or the bound on
+    // it: for an ordered one, the export's own; for an unordered one, the
+    // moment the page last set the controls, since nothing orders it.
+    private long StartOf(LedgerTaking taking) => taking switch
+    {
+        LedgerTaking.Ordered { Export: { } export } ordered => StartOf(export, ordered.Ledger),
+        LedgerTaking.Unordered => _controlsSet,
+        _ => throw new ArgumentException("A taking with nothing to follow has no start.", nameof(taking)),
+    };
 
     // When export started, on this page's clock: its own moment when this page
     // started it; otherwise the lower bound the remarks describe.

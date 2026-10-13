@@ -1031,6 +1031,86 @@ public class LocalRecoveryTests : IAsyncLifetime
         Assert.Equal(1, MarkNumber(Record!.Value));
     }
 
+    // ── A taking and its numbering, offered as far as a ledger shows it ─────
+
+    /// <summary>
+    /// An idle page, another page's export, a restart (§7.5): the idle page's
+    /// next pass takes the other page's record, whose mark is of an instance
+    /// the live ledger does not show. Its first click names the ended
+    /// instance and is refused, and the page reconciles. The order of that
+    /// export against this page's edits is unknown, so the controls follow its
+    /// numbering only if the user has not edited since they were last set:
+    /// unedited, the next number continues the other page's export, and the
+    /// next run, admitted by the empty instance, writes past its files rather
+    /// than stopping at the first of them; edited, the edit stands. Before the
+    /// correction the taking was never offered, and the unedited page stopped
+    /// at an existing file.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnIdlePage_AfterAnotherPagesExportAndARestart_FollowsItsNumberingOnlyIfUnedited(bool edited)
+    {
+        var idle = Open();
+        var other = Open();
+        await other.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        if (edited)
+            await idle.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "500" });
+
+        await RestartAsync();
+        await idle.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Contains("The server has restarted since this page last checked it", RunErrorShown(idle));
+        idle.WaitFor(() => idle.StartState.Instance == _instance && idle.StartState.XgpBlock is null);
+
+        Assert.Equal(edited ? 500 : _decisions + 1, idle.Options.StartNumber);
+        await idle.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Contains("Done", idle.Home.Markup);
+        Assert.Equal(2 * _decisions, _server.XgpFiles().Count);
+    }
+
+    /// <summary>
+    /// A held ledger response, then a newer stored checkpoint (§7.5): this
+    /// page's pass has a ledger showing another page's export E1, under this
+    /// page's pattern; while the response is held, a second page applies E1
+    /// and then E2, under another pattern, and stores the record holding E2.
+    /// Released, the pass merges that record as it applies E1. The controls
+    /// follow each taking once, with its own numbering, as a ledger shows it
+    /// ended: E1's, which continues this page's pattern, and then E2's, which
+    /// does not, so it moves nothing. Before the correction E1's taking carried
+    /// the record's newer numbering, under the other pattern, and consumed
+    /// E2's: the controls stayed where they were, to stop at E1's first file.
+    /// An edit made while the response was held is after both exports' starts
+    /// as far as this page knows, so it stands; and once followed, nothing is
+    /// offered again.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHeldLedgerResponse_ThenANewerStoredCheckpoint_FollowsEachTakingOnceWithItsOwnNumbering(bool edited)
+    {
+        var page = Open();
+        await ExportElsewhereAsync("elsewhere-1", mark: null);
+        var held = _server.Wire.HoldResponse(ProtocolWire.Ledger);
+        var reconciling = page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        await held.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        if (edited)
+            await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "500" });
+
+        var other = Open();
+        await ExportElsewhereAsync("elsewhere-2", new LedgerMark(_instance, 1), new XgpExportOptions { NamePattern = "other{n}" });
+        await other.Home.InvokeAsync(() => other.Panel.OnReconcileNeeded.InvokeAsync());
+        Assert.Equal(2, MarkNumber(Record!.Value));
+
+        held.Release();
+        await reconciling.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitFor(() => page.StartState.Mark == new LedgerMark(_instance, 2) && page.StartState.XgpBlock is null);
+
+        Assert.Equal(edited ? 500 : _decisions + 1, page.Options.StartNumber);
+        await page.Home.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "7" });
+        await page.Home.InvokeAsync(() => page.Panel.OnReconcileNeeded.InvokeAsync());
+        Assert.Equal(7, page.Options.StartNumber);
+    }
+
     // ── Ordering across instances ───────────────────────────────────────────
 
     /// <summary>

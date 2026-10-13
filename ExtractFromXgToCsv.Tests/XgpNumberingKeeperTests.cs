@@ -83,7 +83,7 @@ public class XgpNumberingKeeperTests : BunitContext
     {
         _storage.ExpectNumberingCheckpoint(BrowserStorageReadAnswer.Absent,
             HomeStoragePlan.NumberingDocument("pos{n}", 4, 3), BrowserStorageWriteAnswer.Refused);
-        Assert.True(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
+        Assert.Equal(new XgpNumbering("pos{n}", 4, 3), await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
         Assert.Equal(new XgpNumbering("pos{n}", 4, 3), _keeper.Record.Numbering);
 
         // The stored record is an older one; this page's numbering, which
@@ -97,7 +97,7 @@ public class XgpNumberingKeeperTests : BunitContext
     [Fact]
     public async Task AnExportThatCommittedNothing_WritesNothing_AndIsNoTaking()
     {
-        Assert.False(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 0)));
+        Assert.Null(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 0)));
 
         Assert.Null(_keeper.Record.Numbering);
         _storage.Verify();
@@ -115,7 +115,7 @@ public class XgpNumberingKeeperTests : BunitContext
         await RestoreFromAsync(record);
 
         _storage.ExpectNumberingCheckpoint(Stored(record), record);
-        Assert.True(await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
+        Assert.Equal(new XgpNumbering("pos{n}", 4, 3), await _keeper.RecordExportAsync(new XgpExportCommit(Pos, 4)));
 
         Assert.Equal(new XgpNumbering("pos{n}", 4, 3), _keeper.Record.Numbering);
         _storage.Verify();

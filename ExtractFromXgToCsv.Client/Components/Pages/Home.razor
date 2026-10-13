@@ -650,15 +650,15 @@
     /// checkpoint of the numbering record — the whole document, from a fresh
     /// read, in one write; a refused write leaves it recorded in this page.
     /// When the record took the download — it committed something — the
-    /// controls follow that taking (<see cref="FollowRecord"/>), unless the
-    /// user has edited since the download began (<see cref="OnXgpExportStarting"/>):
+    /// controls follow that taking's numbering (<see cref="Follow"/>), unless
+    /// the user has edited since the download began (<see cref="OnXgpExportStarting"/>):
     /// each download taken is followed, though its numbering may equal the one
-    /// the record held.
+    /// the record held. A download the record did not take moves nothing.
     /// </remarks>
     private async Task OnXgpExported(XgpExportCommit commit)
     {
-        if (await _numbering.RecordExportAsync(commit) && _edits.FollowsWebDownload())
-            FollowRecord();
+        if (await _numbering.RecordExportAsync(commit) is { } taken && _edits.FollowsWebDownload())
+            Follow(taken);
         StateHasChanged();
     }
 
@@ -694,14 +694,15 @@
     }
 
     // The controls' half of a Local reconciliation's taking: they follow the
-    // record unless the user has edited since the export whose numbering it
-    // now holds started — or, of one another page started, since the latest
-    // moment the page knows it started after (XgpEditClock). Then the clock
-    // forgets the starts no later taking can need.
+    // taking's own numbering unless the user has edited since its export
+    // started — or, of one another page started, since the latest moment the
+    // page knows it started after; or, of one no ledger orders, since the
+    // page last set the controls (XgpEditClock). Then the clock forgets the
+    // starts no later taking can need.
     private Task FollowRecordAfterPassAsync(LedgerTaking taking)
     {
-        if (_edits.Follows(taking))
-            FollowRecord();
+        if (taking.Numbering is { } numbering && _edits.Follows(taking))
+            Follow(numbering);
         _edits.Prune(taking.Ledger, _numbering.Record.Owed.Select(job => job.JobId));
         return Task.CompletedTask;
     }
@@ -709,19 +710,21 @@
     /// <summary>
     /// The controls follow the record's taking of an export
     /// (SPEC-notices.md §7.5): the event, not a change in the numbering's
-    /// value, which a new export may leave as it was. Its callers have
-    /// established that the user has not edited the next number or the
-    /// pattern since that export started (<see cref="XgpEditClock"/>), and
-    /// offer only what the record took, and only once: a replay is no taking,
-    /// and an export that committed nothing moved no number, which is the
-    /// record's own rule (<see cref="XgpNumberingRecord.WithCommit"/>). The
-    /// next number follows while the pattern is the one the numbering
-    /// continues. The number length decides nothing here: it says nothing
-    /// about which number comes next.
+    /// value, which a new export may leave as it was — and that taking's own
+    /// <paramref name="numbering"/>, never the record's as it stands now, so a
+    /// newer record merged since is never followed under an older export's
+    /// edit boundary. Its callers have established that the user has not
+    /// edited the next number or the pattern since that export started
+    /// (<see cref="XgpEditClock"/>), and offer only what the record took, and
+    /// only once: a replay is no taking, and an export that committed nothing
+    /// moved no number, which is the record's own rule
+    /// (<see cref="XgpNumberingRecord.WithCommit"/>). The next number follows
+    /// while the pattern is the one the numbering continues. The number length
+    /// decides nothing here: it says nothing about which number comes next.
     /// </summary>
-    private void FollowRecord()
+    private void Follow(XgpNumbering numbering)
     {
-        if (_numbering.Record.Numbering is not { } numbering || numbering.Pattern != _xgpPattern)
+        if (numbering.Pattern != _xgpPattern)
             return;
         _xgpNextNumber = numbering.NextNumber;
         RebuildXgpOptions();

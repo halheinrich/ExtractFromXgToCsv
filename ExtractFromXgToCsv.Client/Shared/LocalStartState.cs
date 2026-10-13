@@ -24,7 +24,9 @@ public enum XgpStartBlock
 {
     /// <summary>
     /// The page is checking: it has not reconciled with the server yet, cannot
-    /// reach it, or owes a job of this instance it has not resolved.
+    /// reach it, owes a job of this instance it has not resolved, or holds
+    /// accounting taken from storage that its last ledger read did not yet
+    /// show.
     /// </summary>
     Checking,
 

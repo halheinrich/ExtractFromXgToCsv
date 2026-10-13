@@ -42,6 +42,10 @@ public class LocalReconcilerTests : IAsyncLifetime
         return keeper;
     }
 
+    /// <summary>The numbers of the entries an ordered taking took.</summary>
+    private static int[] Taken(LedgerTaking taking) =>
+        [.. Assert.IsType<LedgerTaking.Ordered>(taking).Taken.Select(entry => entry.Number)];
+
     private LocalReconciler ReconcilerOver(XgpNumberingKeeper keeper, Func<LedgerTaking, Task>? followRecord = null, ILogger? logger = null) =>
         new(new LocalJobsClient(_server.Client()), keeper, LocalPage.FastTiming,
             followRecord ?? (taking =>
@@ -63,7 +67,7 @@ public class LocalReconcilerTests : IAsyncLifetime
         var reconciler = ReconcilerOver(await RestoredKeeperAsync());
 
         await reconciler.StartAsync();
-        Assert.Equal([1], Assert.Single(_takings).Taken.Select(entry => entry.Number));
+        Assert.Equal([1], Taken(Assert.Single(_takings)));
 
         await reconciler.ReconcileAsync();
         await reconciler.ReconcileAsync();
@@ -72,7 +76,70 @@ public class LocalReconcilerTests : IAsyncLifetime
         await _server.ExportAsync("elsewhere-2", _instance, new LedgerMark(_instance, 1));
         await reconciler.ReconcileAsync();
         Assert.Equal(2, _takings.Count);
-        Assert.Equal([2], _takings[1].Taken.Select(entry => entry.Number));
+        Assert.Equal([2], Taken(_takings[1]));
+    }
+
+    /// <summary>
+    /// A held ledger response, then a newer stored checkpoint: the pass's
+    /// ledger shows E1 ended; while its response is held, another page applies
+    /// E1 and E2 and stores the record holding E2, which the pass merges as it
+    /// applies E1. The offer moves only over what a ledger shows ended, so E1
+    /// is offered with its own numbering, and E2 — not consumed with it — once
+    /// a later pass's ledger shows it, with its own; and each only once.
+    /// </summary>
+    [Fact]
+    public async Task ARecordMergedPastTheLedgersEnd_IsOfferedOnceALedgerShowsIt_EachTakingWithItsOwnNumbering()
+    {
+        var reconciler = ReconcilerOver(await RestoredKeeperAsync());
+        await reconciler.StartAsync();
+        await _server.ExportAsync("elsewhere-1", _instance, mark: null);
+        var held = _server.Wire.HoldResponse(ProtocolWire.Ledger);
+        var reconciling = reconciler.ReconcileAsync();
+        await held.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        var anotherPage = ReconcilerOver(await RestoredKeeperAsync(), _ => Task.CompletedTask);
+        await anotherPage.StartAsync();
+        var second = new XgpExportOptions { StartNumber = 100 };
+        await _server.ExportAsync("elsewhere-2", _instance, new LedgerMark(_instance, 1), second);
+        await anotherPage.ReconcileAsync();
+
+        held.Release();
+        await reconciling.WaitAsync(NoticeTesting.OperationBound);
+        Assert.True(SpinWait.SpinUntil(() => reconciler.State.XgpBlock is null && _takings.Count == 2, NoticeTesting.OperationBound));
+
+        var decisions = Assert.IsType<LedgerTaking.Ordered>(_takings[0]).Export!.Commit!.Count;
+        Assert.Equal([1], Taken(_takings[0]));
+        Assert.Equal(new XgpNumbering(XgpExportOptions.DefaultNamePattern, decisions, 3), _takings[0].Numbering);
+        Assert.Equal([2], Taken(_takings[1]));
+        Assert.Equal(new XgpNumbering(XgpExportOptions.DefaultNamePattern, 99 + decisions, 3), _takings[1].Numbering);
+
+        await reconciler.ReconcileAsync();
+        Assert.Equal(2, _takings.Count);
+    }
+
+    /// <summary>
+    /// The offer is consumed only once the controls have followed it: a
+    /// taking whose follow throws fails the pass, which is tried again and
+    /// offers the same taking, and once followed it is not offered again.
+    /// </summary>
+    [Fact]
+    public async Task ATakingWhoseFollowThrows_IsOfferedAgain_UntilItIsFollowed()
+    {
+        await _server.ExportAsync("elsewhere-1", _instance, mark: null);
+        var reconciler = ReconcilerOver(await RestoredKeeperAsync(), taking =>
+        {
+            _takings.Add(taking);
+            return _takings.Count == 1 ? throw new InvalidOperationException("The controls failed to follow.") : Task.CompletedTask;
+        });
+
+        await reconciler.StartAsync();
+        Assert.True(SpinWait.SpinUntil(() => reconciler.State.XgpBlock is null, NoticeTesting.OperationBound));
+
+        Assert.Equal(2, _takings.Count);
+        Assert.Equal([1], Taken(_takings[0]));
+        Assert.Equal([1], Taken(_takings[1]));
+        await reconciler.ReconcileAsync();
+        Assert.Equal(2, _takings.Count);
     }
 
     /// <summary>

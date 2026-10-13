@@ -30,7 +30,11 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// the event they follow is the record's mark moving, whether by an entry
 /// applied here or by another page's accounting taken from storage — never a
 /// change in the numbering's value, which a new export may leave unchanged,
-/// and never a replay, which moves no mark. A result the
+/// and never a replay, which moves no mark. A taking carries the numbering the
+/// record held at it, which is what the controls follow. The offer moves only
+/// over entries the pass's ledger shows ended, and only once the controls have
+/// followed them; a mark of an instance that ledger does not show is offered
+/// unordered (<see cref="LedgerTaking.Unordered"/>). A result the
 /// panel's follower received carries no authority of its own: it is applied
 /// through a pass (<see cref="ApplyEndedAsync"/>). An owed job of this
 /// instance with no entry is settled: retired resolves it; admitted means its
@@ -58,9 +62,11 @@ internal sealed class LocalReconciler
     private bool _again;
     private CancellationTokenSource? _scheduled;
 
-    // The record's mark when the controls were last offered a taking — the
-    // restored record's until the first — so a mark that has not moved since
-    // is no new taking: a replay offers nothing.
+    // How far the controls have been offered the record's takings: the mark
+    // the last taking they followed reached — the restored record's until the
+    // first — so a mark that has not moved since is no new taking, and a
+    // replay offers nothing. It moves only once the controls have followed a
+    // taking, so one whose follow failed is offered again.
     private LedgerMark? _offered;
 
     /// <summary>
@@ -72,9 +78,9 @@ internal sealed class LocalReconciler
     /// <param name="numbering">Home's numbering record.</param>
     /// <param name="timing">How often to follow and retry.</param>
     /// <param name="followRecord">
-    /// Home's controls following the record: offered each taking — the
-    /// entries of the pass's ledger the record took since the last offer, once
-    /// its mark has moved to one of them.
+    /// Home's controls following the record: offered each taking — what the
+    /// record took since the last offer, with the numbering it held then — once
+    /// its mark has moved. The offer is consumed only once this has returned.
     /// </param>
     /// <param name="logger">Logs a reconciliation that failed for any reason but the server's absence.</param>
     /// <param name="lifetime">The page's lifetime: nothing runs after it ends.</param>
@@ -278,6 +284,11 @@ internal sealed class LocalReconciler
             return;
         }
 
+        // What the record took from storage before the ledger was read —
+        // another page's accounting, perhaps of an instance this ledger does
+        // not show — is offered before any entry is applied over it.
+        await OfferTakingAsync(ledger);
+
         foreach (var entry in ledger.Entries.Where(entry => !entry.Running))
         {
             if (_numbering.Record.Holds(instance, entry))
@@ -324,8 +335,10 @@ internal sealed class LocalReconciler
         }
 
         // The record can take another page's accounting from storage too, at
-        // any read: the controls are offered that taking as well.
-        await OfferTakingAsync(ledger);
+        // any read: the controls are offered that taking as well. Where this
+        // ledger does not yet show it ended — it was taken after the ledger
+        // was read — the state stays unknown, and the page reconciles again.
+        var offeredAll = await OfferTakingAsync(ledger);
 
         var lost = _numbering.Record.Owed.Any(job => job.Instance != instance);
         Publish(new LocalStartState(
@@ -334,30 +347,63 @@ internal sealed class LocalReconciler
             _numbering.IsUnreadable ? XgpStartBlock.UnreadableRecord
             : lost ? XgpStartBlock.LostExport
             : running ? XgpStartBlock.Running
-            : unresolved ? XgpStartBlock.Checking
+            : unresolved || !offeredAll ? XgpStartBlock.Checking
             : null));
 
-        if (running || unresolved)
+        if (running || unresolved || !offeredAll)
             ScheduleAfter(_timing.PollInterval);
     }
 
     /// <summary>
-    /// Offers the controls the record's taking since the last offer: the
-    /// entries of <paramref name="ledger"/> its mark has moved past. The event
-    /// is the mark moving, so a replay — an entry the record already holds —
-    /// offers nothing, and a new export offers itself though its numbering
-    /// equals the record's. A mark this ledger does not hold is not offered
-    /// yet: its entries cannot be named, nor ordered against this page's
-    /// starts, until a pass reads that instance's ledger.
+    /// Offers the controls the record's taking since the last offer, and moves
+    /// the offer once they have followed it — so a follow that fails leaves
+    /// the taking to be offered again. The event is the mark moving, so a
+    /// replay — an entry the record already holds — offers nothing, and a new
+    /// export offers itself though its numbering equals the record's.
     /// </summary>
-    private async Task OfferTakingAsync(LedgerSnapshot ledger)
+    /// <remarks>
+    /// A mark of <paramref name="ledger"/>'s instance is offered as the
+    /// entries it has moved past (<see cref="LedgerTaking.Ordered"/>), but only
+    /// those the ledger shows ended: a newer record merged after the ledger
+    /// was read can hold a mark this snapshot does not reach, and its entries
+    /// are offered once a ledger shows them. A mark of an instance this ledger
+    /// does not show — another page's accounting from an ended instance, say —
+    /// cannot be named, nor ordered against this page's starts, so it is
+    /// offered unordered, with the numbering the record took with it
+    /// (<see cref="LedgerTaking.Unordered"/>).
+    /// </remarks>
+    /// <returns>
+    /// Whether the offer has reached the record's mark: false while the record
+    /// holds entries of the ledger's instance this snapshot does not show
+    /// ended.
+    /// </returns>
+    private async Task<bool> OfferTakingAsync(LedgerSnapshot ledger)
     {
-        if (_numbering.Record.Mark is not { } mark || mark == _offered || mark.Instance != ledger.Instance)
-            return;
-        var after = _offered?.Instance == mark.Instance ? _offered.Number : 0;
-        _offered = mark;
-        await _followRecord(new LedgerTaking(
-            ledger, [.. ledger.Entries.Where(entry => entry.Number > after && entry.Number <= mark.Number)]));
+        var record = _numbering.Record;
+        if (record.Mark is not { } mark || mark == _offered)
+            return true;
+
+        LedgerTaking taking;
+        if (mark.Instance != ledger.Instance)
+        {
+            taking = new LedgerTaking.Unordered(ledger, mark, record.Numbering);
+        }
+        else
+        {
+            var after = _offered?.Instance == mark.Instance ? _offered.Number : 0;
+            if (after >= mark.Number)
+                return true;
+            LedgerEntry[] shown = [.. ledger.Entries
+                .Where(entry => entry.Number > after && entry.Number <= mark.Number)
+                .TakeWhile(entry => !entry.Running)];
+            if (shown.Length == 0)
+                return false;
+            taking = new LedgerTaking.Ordered(ledger, shown);
+        }
+
+        await _followRecord(taking);
+        _offered = taking.Mark;
+        return taking.Mark == mark;
     }
 
     /// <summary>What settling found, with the server's refusal — it is another instance now — as its own answer.</summary>
@@ -431,22 +477,110 @@ internal sealed class LocalReconciler
 /// <summary>
 /// The numbering record's taking of Local XGP exports, as a reconciliation
 /// pass offers it to the controls (the umbrella's <c>SPEC-notices.md</c>
-/// §7.5): the event they follow. A taking is the record's mark moving to an
-/// entry it did not hold — never a change in the numbering's value, which a
-/// new export may leave as it was, and never a replay, which moves no mark.
+/// §7.5): the event they follow, and the numbering the record held at it. A
+/// taking is the record's mark moving to an entry it did not hold — never a
+/// change in the numbering's value, which a new export may leave as it was,
+/// and never a replay, which moves no mark.
 /// </summary>
-/// <param name="Ledger">
-/// The ledger the pass read: its instance's entries are the ones taken, and
-/// it orders them against the exports this page started.
-/// </param>
-/// <param name="Taken">The entries of <paramref name="Ledger"/> the record took, in admission order.</param>
-internal sealed record LedgerTaking(LedgerSnapshot Ledger, IReadOnlyList<LedgerEntry> Taken)
+/// <remarks>
+/// The event and its numbering travel together: the controls follow the
+/// numbering of the taking they were offered, judged against that taking's
+/// start, never the record's numbering as it stands when they follow — a newer
+/// record merged since is a later taking, judged against its own. The two
+/// kinds differ in what orders the taking against this page's edits:
+/// <see cref="Ordered"/> entries the pass's ledger names, and
+/// <see cref="Unordered"/> a mark of an instance that ledger does not show.
+/// </remarks>
+internal abstract record LedgerTaking
 {
+    private LedgerTaking(LedgerSnapshot ledger, LedgerMark mark)
+    {
+        Ledger = ledger;
+        Mark = mark;
+    }
+
+    /// <summary>The ledger the pass read: its instance is the one the page reconciled with.</summary>
+    public LedgerSnapshot Ledger { get; }
+
+    /// <summary>The record's mark this taking reaches: where the offer moves once the controls have followed it.</summary>
+    public LedgerMark Mark { get; }
+
     /// <summary>
-    /// The export whose numbering the record now holds: the last entry taken
-    /// that committed something. <see langword="null"/> when none did — an
-    /// export that committed nothing changes no number, so there is nothing
-    /// for the controls to follow.
+    /// The numbering the record held at this taking — what the controls
+    /// follow; <see langword="null"/> when there is nothing to follow.
     /// </summary>
-    public LedgerEntry? Export => Taken.LastOrDefault(entry => entry.Commit is { CommittedNothing: false });
+    public abstract XgpNumbering? Numbering { get; }
+
+    /// <summary>
+    /// Entries of the pass's ledger the record took, each shown ended, in
+    /// admission order: the ledger names them, and orders them against the
+    /// exports this page started.
+    /// </summary>
+    public sealed record Ordered : LedgerTaking
+    {
+        /// <summary>The entries <paramref name="taken"/> of <paramref name="ledger"/>, which the record took.</summary>
+        /// <exception cref="ArgumentNullException"><paramref name="ledger"/> or <paramref name="taken"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="taken"/> is empty, or holds an entry still running.</exception>
+        public Ordered(LedgerSnapshot ledger, IReadOnlyList<LedgerEntry> taken)
+            : base(ledger, MarkOf(ledger, taken))
+        {
+            Taken = taken;
+            Export = taken.LastOrDefault(entry => entry.Commit is { CommittedNothing: false });
+        }
+
+        /// <summary>The entries the record took, in admission order.</summary>
+        public IReadOnlyList<LedgerEntry> Taken { get; }
+
+        /// <summary>
+        /// The export whose numbering the taking holds: the last entry taken
+        /// that committed something. <see langword="null"/> when none did — an
+        /// export that committed nothing changes no number, so there is
+        /// nothing for the controls to follow.
+        /// </summary>
+        public LedgerEntry? Export { get; }
+
+        /// <summary>The numbering after <see cref="Export"/>, as the record set it from that entry.</summary>
+        public override XgpNumbering? Numbering => Export?.Commit is { } commit ? XgpNumbering.After(commit) : null;
+
+        private static LedgerMark MarkOf(LedgerSnapshot ledger, IReadOnlyList<LedgerEntry> taken)
+        {
+            ArgumentNullException.ThrowIfNull(ledger);
+            ArgumentNullException.ThrowIfNull(taken);
+            if (taken.Count == 0)
+                throw new ArgumentException("A taking takes at least one entry.", nameof(taken));
+            if (taken.Any(entry => entry.Running))
+                throw new ArgumentException("A running entry has no accounting to take.", nameof(taken));
+            return new LedgerMark(ledger.Instance, taken[^1].Number);
+        }
+    }
+
+    /// <summary>
+    /// A mark of an instance the pass's ledger does not show, taken from
+    /// another page's record — across a restart, say — with the numbering it
+    /// held: its entries cannot be named, nor ordered against this page's
+    /// starts or edits.
+    /// </summary>
+    public sealed record Unordered : LedgerTaking
+    {
+        /// <summary>The record's move to <paramref name="mark"/>, holding <paramref name="numbering"/>, which <paramref name="ledger"/> does not order.</summary>
+        /// <exception cref="ArgumentNullException"><paramref name="ledger"/> or <paramref name="mark"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="mark"/> is of <paramref name="ledger"/>'s instance, which orders it.</exception>
+        public Unordered(LedgerSnapshot ledger, LedgerMark mark, XgpNumbering? numbering)
+            : base(ledger, Unordering(ledger, mark))
+        {
+            Numbering = numbering;
+        }
+
+        /// <summary>The numbering the record took with <see cref="LedgerTaking.Mark"/>.</summary>
+        public override XgpNumbering? Numbering { get; }
+
+        private static LedgerMark Unordering(LedgerSnapshot ledger, LedgerMark mark)
+        {
+            ArgumentNullException.ThrowIfNull(ledger);
+            ArgumentNullException.ThrowIfNull(mark);
+            if (mark.Instance == ledger.Instance)
+                throw new ArgumentException("A mark of the ledger's own instance is ordered by it.", nameof(mark));
+            return mark;
+        }
+    }
 }

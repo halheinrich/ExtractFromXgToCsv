@@ -23,7 +23,7 @@ public class XgpEditClockTests
         new(number, jobId, Running: false, new XgpExportCommit(new XgpExportOptions(), committed));
 
     private static LedgerTaking Taking(LedgerEntry[] ledger, params int[] taken) =>
-        new(new LedgerSnapshot(Instance, ledger), [.. ledger.Where(entry => taken.Contains(entry.Number))]);
+        new LedgerTaking.Ordered(new LedgerSnapshot(Instance, ledger), [.. ledger.Where(entry => taken.Contains(entry.Number))]);
 
     // ── An export this page started ─────────────────────────────────────────
 

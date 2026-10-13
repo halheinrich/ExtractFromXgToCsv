@@ -247,18 +247,20 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     /// and the record takes nothing.
     /// </summary>
     /// <returns>
-    /// Whether the record took the export — it committed something, so the
-    /// record's numbering is now its — whether or not storage stored it. Each
-    /// download the record takes is its own taking, though its numbering may
-    /// equal what the record held.
+    /// The numbering the record took from the export — it committed something,
+    /// so the record's numbering is now its — whether or not storage stored
+    /// it; <see langword="null"/> when the record took nothing. Each download
+    /// the record takes is its own taking, though its numbering may equal what
+    /// the record held, and the numbering returned is that taking's, whatever
+    /// the record holds by the time its caller reads it.
     /// </returns>
-    public async Task<bool> RecordExportAsync(XgpExportCommit commit)
+    public async Task<XgpNumbering?> RecordExportAsync(XgpExportCommit commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
         if (commit.CommittedNothing)
-            return false;
+            return null;
         await CheckpointAsync(record => record.WithCommit(commit));
-        return true;
+        return XgpNumbering.After(commit);
     }
 
     /// <summary>
