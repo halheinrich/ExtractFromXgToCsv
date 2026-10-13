@@ -1,4 +1,5 @@
 using Bunit;
+using ConvertXgToJson_Lib;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Services;
@@ -60,6 +61,10 @@ public class WebModePanelConversionTests : BunitContext
 
     private static void WaitForIdle(IRenderedComponent<WebModePanel> cut) =>
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".busy-notice")), TimeSpan.FromSeconds(10));
+
+    private static void LoadBook(IRenderedComponent<WebModePanel> cut) =>
+        cut.FindComponents<InputFile>()[1].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture("OpeningBookV2.ob"), "OpeningBookV2.ob"));
 
     // ── Records are deferred ────────────────────────────────────────────────
 
@@ -332,6 +337,56 @@ public class WebModePanelConversionTests : BunitContext
 
         Assert.DoesNotContain("Interrupted.", cut.Markup);
         Assert.NotEmpty(cut.Instance.RowCache.Rows);
+    }
+
+    /// <summary>
+    /// A rows conversion fails under Diagram JSON — a book load's reconversion
+    /// throws past the file's boundary. Diagram JSON is built from records,
+    /// but every output needs rows, which convert first, so the records are
+    /// never converted and the output cannot be built: the failure is its to
+    /// say, and it shows. Before the correction it was taken for a key the
+    /// output did not need and logged, leaving Download dark with no word.
+    /// </summary>
+    [Fact]
+    public void ARowsConversionFailure_UnderDiagramJson_IsShown()
+    {
+        var cut = RenderPanel(OutputFormat.DiagramJson);
+        Pick(cut, A);
+        WaitForIdle(cut);
+        _converter.FailRows = (_, book) => book is not null ? new OperationCanceledException("Interrupted.") : null;
+
+        LoadBook(cut);
+        WaitForIdle(cut);
+
+        Assert.Contains("Error: Interrupted.", cut.Markup);
+        Assert.Equal(ConversionState.NotRequested, cut.Instance.Session.StateOf(Representation.Records));
+        Assert.True(DownloadButton(cut).HasAttribute("disabled"));
+    }
+
+    /// <summary>
+    /// A failure of the selected output's own representation still shows: a
+    /// book load's reconversion of the rows under CSV, or of the records under
+    /// Diagram JSON, throws past the file's boundary.
+    /// </summary>
+    [Theory]
+    [InlineData(OutputFormat.Csv)]
+    [InlineData(OutputFormat.DiagramJson)]
+    public void AFailureOfTheSelectedRepresentation_IsShown(OutputFormat format)
+    {
+        var cut = RenderPanel(format);
+        Pick(cut, A);
+        WaitForIdle(cut);
+        Func<DecodedSource, OpeningBook?, Exception?> fail =
+            (_, book) => book is not null ? new OperationCanceledException("Interrupted.") : null;
+        if (format == OutputFormat.Csv)
+            _converter.FailRows = fail;
+        else
+            _converter.FailRecords = fail;
+
+        LoadBook(cut);
+        WaitForIdle(cut);
+
+        Assert.Contains("Error: Interrupted.", cut.Markup);
     }
 
     /// <summary>

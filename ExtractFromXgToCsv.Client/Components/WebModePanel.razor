@@ -561,7 +561,8 @@
     /// error, while its owner still owns it. A failure is published by the
     /// same owner rules as a result and a skip record (SPEC-notices.md §7.3):
     /// a conversion's by the selection and book it converted for, while its
-    /// key is the selected output's, whichever gesture asked for it
+    /// key is one the selected output still needs — rows always, records for
+    /// Diagram JSON — whichever gesture asked for it
     /// (<see cref="WebSession.Owns"/>); anything else by its gesture
     /// (<paramref name="gestureOwns"/>, asked when it fails). A superseded
     /// failure publishes nothing, and is logged instead.
@@ -588,7 +589,8 @@
     }
 
     // Converting what the selected output needs, for the format switch that
-    // asked: a conversion's failure is owned by its selection and book, and
+    // asked: a conversion's failure is owned by its selection and book while
+    // its key is one the selected output still needs (WebSession.Owns), and
     // anything else by the selection it was asked for.
     private Task EnsureConversionsAsync()
     {

@@ -38,11 +38,17 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// what it started with — a ticket — and its completion publishes only while
 /// its owner says so: a pick or a book load while no newer one has begun; a
 /// conversion while its selection, and its key's book, are still current —
-/// and a conversion's failure by that same owner, while its key is the
-/// selected output's, whichever gesture asked for the conversion
+/// and a conversion's failure by that same owner, while its key is one the
+/// selected output still needs, whichever gesture asked for the conversion
 /// (<see cref="Owns"/>). A result for a key that is no longer the selected
 /// output's is cached, not shown, because what is shown is read from the
 /// selected key's state. A superseded completion publishes nothing.
+/// </para>
+/// <para>
+/// <b>What the selected output needs</b> is stated once
+/// (<see cref="NeededBy"/>): rows, always, and records for Diagram JSON. What
+/// is converted and whose failure is shown both read it, so the two cannot
+/// disagree about which keys an output depends on.
 /// </para>
 /// <para>
 /// Not thread-safe: Blazor WebAssembly runs it on one thread, and its awaits
@@ -246,8 +252,8 @@ internal sealed class WebSession
 
     /// <summary>
     /// Whether the selected output needs a conversion nobody has requested:
-    /// rows, always — they convert on a pick and on a book change — and
-    /// records while <paramref name="selected"/> is records.
+    /// one of the keys <see cref="NeededBy"/> names for
+    /// <paramref name="selected"/>.
     /// </summary>
     public bool Needs(Representation selected) => NextNeeded(selected) is not null;
 
@@ -357,11 +363,32 @@ internal sealed class WebSession
     private ConversionState SlotStateOf(Representation representation) =>
         representation == Representation.Rows ? _rows.State : _records.State;
 
-    private Representation? NextNeeded(Representation selected) =>
-        Selection is null ? null
-        : _rows.State == ConversionState.NotRequested ? Representation.Rows
-        : selected == Representation.Records && _records.State == ConversionState.NotRequested ? Representation.Records
-        : null;
+    /// <summary>
+    /// The keys the output built from <paramref name="selected"/> needs, in
+    /// the order they convert: rows, always — they convert on a pick and on a
+    /// book change — and then records, while <paramref name="selected"/> is
+    /// records (Diagram JSON). The one statement of an output's dependencies:
+    /// <see cref="NextNeeded"/> schedules from it and <see cref="Owns"/> owns
+    /// failures by it.
+    /// </summary>
+    private static ImmutableArray<Representation> NeededBy(Representation selected) =>
+        selected == Representation.Records
+            ? [Representation.Rows, Representation.Records]
+            : [Representation.Rows];
+
+    // The first key the selected output needs that nobody has requested;
+    // null when there is none, or no selection.
+    private Representation? NextNeeded(Representation selected)
+    {
+        if (Selection is null)
+            return null;
+        foreach (var representation in NeededBy(selected))
+        {
+            if (SlotStateOf(representation) == ConversionState.NotRequested)
+                return representation;
+        }
+        return null;
+    }
 
     private void ResetConversions()
     {
@@ -423,17 +450,19 @@ internal sealed class WebSession
     /// <summary>
     /// Whether <paramref name="failure"/> is still its gesture's to show: while
     /// the selection and the book it converted for are current — the owner its
-    /// result would have published under — and its representation is the
-    /// <paramref name="selected"/> output's, since a late completion for a key
-    /// that is no longer selected never replaces what is shown
-    /// (SPEC-notices.md §7.3).
+    /// result would have published under — and its representation is one the
+    /// <paramref name="selected"/> output still needs (<see cref="NeededBy"/>):
+    /// a failed key the output depends on leaves it unbuildable, so the
+    /// failure is the output's to say, while a late completion for a key the
+    /// output no longer needs never replaces what is shown (SPEC-notices.md
+    /// §7.3).
     /// </summary>
     public bool Owns(ConversionFailedException failure, Representation selected)
     {
         ArgumentNullException.ThrowIfNull(failure);
         return ReferenceEquals(failure.Selection, Selection)
             && ReferenceEquals(failure.Book, Book)
-            && failure.Representation == selected;
+            && NeededBy(selected).Contains(failure.Representation);
     }
 
     /// <summary>
@@ -535,7 +564,8 @@ internal sealed class WebSession
 /// caller — with the owner its result would have published under: the
 /// selection and the book it converted for, and its key's representation.
 /// <see cref="WebSession.Owns"/> says whether that owner is still current and
-/// the key still the selected output's. Its message is the failure's own.
+/// the key still one the selected output needs. Its message is the failure's
+/// own.
 /// </summary>
 internal sealed class ConversionFailedException : Exception
 {

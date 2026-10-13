@@ -203,6 +203,39 @@ public class WebSessionTests
         Assert.Single(_converter.RecordsCalls);
     }
 
+    /// <summary>
+    /// A conversion's failure is owned by every output that needs its key
+    /// (SPEC-notices.md §7.3), the dependency what is converted reads too:
+    /// rows, which every output needs and which convert first — so a rows
+    /// failure under Diagram JSON leaves the records unconverted — by both
+    /// representations; records, which Diagram JSON alone needs, by records
+    /// alone. Each failure here escapes its file's boundary, and its selection
+    /// and book stay current.
+    /// </summary>
+    [Fact]
+    public async Task AConversionsFailure_IsOwnedByEveryOutputThatNeedsItsKey()
+    {
+        var session = await PickedAsync(NewSession(), Fixture(Xg));
+        Assert.True(session.CompleteBookLoad(session.BeginBookLoad(), LoadBook(), loadFailed: false));
+
+        _converter.FailRows = (_, _) => new OperationCanceledException("Rows interrupted.");
+        var rows = await Assert.ThrowsAsync<ConversionFailedException>(
+            () => session.EnsureConversionsAsync(() => Representation.Records, CancellationToken.None));
+        Assert.Equal(Representation.Rows, rows.Representation);
+        Assert.Empty(_converter.RecordsCalls);
+
+        _converter.FailRows = (_, _) => null;
+        _converter.FailRecords = (_, _) => new OperationCanceledException("Records interrupted.");
+        var records = await Assert.ThrowsAsync<ConversionFailedException>(
+            () => session.EnsureConversionsAsync(() => Representation.Records, CancellationToken.None));
+        Assert.Equal(Representation.Records, records.Representation);
+
+        Assert.True(session.Owns(rows, Representation.Rows));
+        Assert.True(session.Owns(rows, Representation.Records));
+        Assert.False(session.Owns(records, Representation.Rows));
+        Assert.True(session.Owns(records, Representation.Records));
+    }
+
     [Fact]
     public async Task ACancelledConversion_PublishesNothing_AndIsNotRequestedAgainUntilAsked()
     {
