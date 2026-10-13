@@ -29,6 +29,37 @@ public class WebModePanelXgpExportTests : BunitContext
         Services.AddClientServices();
     }
 
+    /// <summary>
+    /// The panel raises the export's start to its host as an XGP download's
+    /// attempt begins — once, before anything is built or handed over — and
+    /// for no other format: from it the host's controls know which of the
+    /// user's edits came after the export started. A click that begins no
+    /// attempt raises nothing (<see cref="WebModePanelDownloadTests"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(OutputFormat.Xgp)]
+    [InlineData(OutputFormat.Csv)]
+    [InlineData(OutputFormat.DiagramJson)]
+    public async Task AnAttemptBeginning_RaisesTheExportsStart_ForXgpAlone_BeforeAnythingIsHandedOver(OutputFormat format)
+    {
+        var handedOverWhenRaised = new List<int>();
+        var cut = Render<WebModePanel>(p => p
+            .Add(c => c.OutputFormat, format)
+            .Add(c => c.FilterInEffect, new FilterConfig())
+            .Add(c => c.XgpOptions, new XgpExportOptions())
+            .Add(c => c.OnXgpExportStarting, () => handedOverWhenRaised.Add(JSInterop.Invocations["downloadFile"].Count))
+            .Add(c => c.OnXgpExported, (XgpExportCommit _) => { }));
+        cut.FindComponents<InputFile>()[0].UploadFiles(
+            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(XgFixture), XgFixture));
+        cut.WaitForAssertion(() => Assert.False(cut.Find("button.btn-primary").HasAttribute("disabled")));
+
+        await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
+
+        int[] expected = format == OutputFormat.Xgp ? [0] : [];
+        Assert.Equal(expected, handedOverWhenRaised);
+    }
+
     [Fact]
     public async Task SelectExportDownload_InvokesDownloadFileWithZip_AndRaisesOnXgpExported()
     {

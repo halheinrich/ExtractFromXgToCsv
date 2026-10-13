@@ -587,6 +587,47 @@ public class LocalRecoveryTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// A stopped run's failure to close the file it left unfinished reaches
+    /// the page, end to end: the processor reports it beside the
+    /// cancellation, the controller hands it to the job's terminal result, and
+    /// the panel shows it beside "Stopped". The CSV job is held opening its
+    /// file until the server has cancelled it, over a destination whose close
+    /// of that file fails.
+    /// </summary>
+    [Fact]
+    public async Task AStoppedRunsCloseFailure_ReachesThePage_BesideTheStop()
+    {
+        using var server = new LocalServer(destination: new ScriptedDestination { FailCloseOf = "out.csv" });
+        var storage = new MemoryBrowserStorage
+        {
+            [HomeStoragePlan.FolderPathKey] = server.InputFolder,
+            [HomeStoragePlan.OutputPathKey] = server.CsvOutputPath,
+            [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.Csv),
+        };
+        await using var page = LocalPage.Open(server, storage, new SequentialJobIdentities());
+        server.Gate.Close();
+        var cancel = server.Wire.HoldResponse(ProtocolWire.Cancel);
+        var run = page.RunAsync();
+        await server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => server.Wire.CountRequests(r => r.EndsWith("/status", StringComparison.Ordinal)) > 0);
+
+        var stopping = StopButton(page).ClickAsync(new MouseEventArgs());
+        await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        cancel.Release();
+        await stopping.WaitAsync(NoticeTesting.OperationBound);
+        server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() =>
+        {
+            Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent);
+            Assert.Equal(
+                $"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}",
+                page.Home.Find("#closeFailure").TextContent.Trim());
+        });
+    }
+
+    /// <summary>
     /// Stop pressed after the start's admitted answer has arrived, but before
     /// the page has taken it and begun following the job — the job not yet
     /// known to Stop — is delivered before the job is followed, and the run
