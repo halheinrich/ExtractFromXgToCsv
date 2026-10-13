@@ -104,19 +104,26 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
 
     /// <summary>
     /// A failure to create the file that is not a collision — a folder holds
-    /// its name — removes nothing either: nothing there is the run's.
+    /// its name — removes nothing either: nothing there is the run's. No
+    /// removal is even asked, so a removal the file system would refuse for a
+    /// folder cannot stand in for one never made, and the folder and what it
+    /// holds are left as they were.
     /// </summary>
     [Fact]
-    public async Task AFailureToCreateTheFile_RemovesNothing()
+    public async Task AFolderOfTheFilesName_FailsTheCreate_AndRemovesNothing()
     {
         Directory.CreateDirectory(OutputFile("pos002.xgp"));
+        byte[] theirs = [5, 4];
+        File.WriteAllBytes(Path.Combine(OutputFile("pos002.xgp"), "theirs.bin"), theirs);
         var destination = new ScriptedDestination();
         var record = new RunRecord();
 
-        await Assert.ThrowsAnyAsync<Exception>(() => RunAsync(record, destination));
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() => RunAsync(record, destination));
 
-        Assert.Empty(destination.Removed);
-        Assert.True(Directory.Exists(OutputFile("pos002.xgp")));
+        Assert.IsNotType<XgpFileExistsException>(failure);
+        Assert.IsNotType<UnfinishedFileException>(failure);
+        Assert.Empty(destination.RemovalsAsked);
+        Assert.Equal(theirs, File.ReadAllBytes(Path.Combine(OutputFile("pos002.xgp"), "theirs.bin")));
         Assert.Equal(new XgpExportCommit(Options, 1), record.XgpCommit);
         Assert.Empty(record.Skips);
     }

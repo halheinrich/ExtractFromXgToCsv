@@ -1042,6 +1042,38 @@ public class LocalRecoveryTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// The same pass, observed: once the state it started from has changed
+    /// under it, the page knows nothing a start could be admitted on until it
+    /// has reconciled again, so XGP shows as checking from that moment — while
+    /// the next pass's ledger read is still held — not only once it has an
+    /// answer.
+    /// </summary>
+    [Fact]
+    public async Task APassWhoseStartingStateChanged_ShowsCheckingUntilItHasReconciledAgain()
+    {
+        var a = Open();
+        await a.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        await ExportElsewhereAsync("elsewhere-2", new LedgerMark(_instance, 1),
+            new XgpExportOptions { StartNumber = _decisions + 1 });
+        var paused = _server.Wire.HoldResponse(ProtocolWire.Ledger);
+        var reconciling = a.Home.InvokeAsync(() => a.Panel.OnReconcileNeeded.InvokeAsync());
+        await paused.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        await RestartAsync();
+        var b = Open();
+        await b.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+        Assert.Null(a.StartState.XgpBlock);
+
+        var again = _server.Wire.HoldResponse(ProtocolWire.Ledger);
+        paused.Release();
+        await again.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+
+        a.WaitFor(() => a.StartState.XgpBlock == XgpStartBlock.Checking);
+        again.Release();
+        await reconciling.WaitAsync(NoticeTesting.OperationBound);
+        a.WaitFor(() => a.StartState.Instance == _instance && a.StartState.XgpBlock is null);
+    }
+
+    /// <summary>
     /// A pass held after reading the stored record, then a change to this
     /// page's own record in memory alone — the lost export resolved while
     /// storage refused the write — then the pass released: the pass does not

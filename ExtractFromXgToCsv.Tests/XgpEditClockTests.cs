@@ -159,6 +159,49 @@ public class XgpEditClockTests
         Assert.False(_clock.Follows(Taking([Ended(1, "mine"), Ended(2, "empty", committed: 0)], 1, 2)));
     }
 
+    // ── What it keeps ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Pruning keeps only the starts a later taking can need: the jobs still
+    /// owed, and of the rest the latest the ledger admitted — which still
+    /// bounds a later entry — while an earlier admitted one, and one no ledger
+    /// holds, are forgotten.
+    /// </summary>
+    [Fact]
+    public void Pruning_KeepsTheOwedStarts_AndTheLatestAdmittedOne_AndNothingElse()
+    {
+        _clock.NoteEdit();
+        _clock.NoteLocalStart("J1");
+        _clock.NoteLocalStart("J2");
+        _clock.NoteLocalStart("never-admitted");
+        _clock.NoteLocalStart("pending");
+        LedgerEntry[] ledger = [Ended(1, "J1"), Ended(2, "J2")];
+
+        _clock.Prune(new LedgerSnapshot(Instance, ledger), owed: ["pending"]);
+
+        Assert.Equal(2, _clock.HeldStarts);
+        Assert.True(_clock.Follows(Taking([.. ledger, Ended(3, "K")], 3)));
+    }
+
+    /// <summary>
+    /// The latest admitted start kept is the latest no longer owed: an owed
+    /// one admitted after it is kept as owed, and the one before it still
+    /// bounds the entries between them.
+    /// </summary>
+    [Fact]
+    public void Pruning_KeepsTheLatestAdmittedStartNoLongerOwed_BesideAnOwedLaterOne()
+    {
+        _clock.NoteEdit();
+        _clock.NoteLocalStart("J1");
+        _clock.NoteLocalStart("J3");
+        LedgerEntry[] ledger = [Ended(1, "J1"), Ended(2, "K"), new(3, "J3", Running: true, Commit: null)];
+
+        _clock.Prune(new LedgerSnapshot(Instance, ledger), owed: ["J3"]);
+
+        Assert.Equal(2, _clock.HeldStarts);
+        Assert.True(_clock.Follows(Taking(ledger, 2)));
+    }
+
     // ── A Web download ──────────────────────────────────────────────────────
 
     [Fact]

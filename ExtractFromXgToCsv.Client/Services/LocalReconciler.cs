@@ -276,7 +276,9 @@ internal sealed class LocalReconciler
                     break;
                 case EntryApplied.StateChanged:
                     // Nothing was written, and the changed state was taken:
-                    // reconcile again from there.
+                    // reconcile again from there. Until then nothing is
+                    // known that a start could be admitted on.
+                    Publish(State with { XgpBlock = XgpStartBlock.Checking });
                     _again = true;
                     return;
                 case EntryApplied.Unreadable:

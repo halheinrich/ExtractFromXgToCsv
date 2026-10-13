@@ -241,7 +241,7 @@
                         StartState="_reconciler.State"
                         OnXgpJobStarting="OnXgpJobStartingAsync"
                         OnXgpJobEnded="_reconciler.ApplyEndedAsync"
-                        OnXgpJobNeverStarted="_reconciler.ResolveNeverStartedAsync"
+                        OnXgpJobNeverStarted="OnXgpJobNeverStartedAsync"
                         OnReconcileNeeded="_reconciler.ReconcileAsync" />
     }
     else
@@ -473,7 +473,7 @@
         if (_numbering.Record.Numbering is { } numbering)
         {
             _xgpPattern = numbering.Pattern;
-            _xgpNextNumber = numbering.LastNumber + 1;
+            _xgpNextNumber = numbering.NextNumber;
             _xgpSuffixLength = numbering.SuffixLength;
         }
         var savedAnonymize = await ReadSettingAsync("xg_xgpAnonymize");
@@ -583,7 +583,7 @@
         // one it was recorded under; a different pattern starts a fresh
         // series at 1. The user can still override the number afterwards.
         _xgpNextNumber = _numbering.Record.Numbering is { } numbering && _xgpPattern == numbering.Pattern
-            ? numbering.LastNumber + 1
+            ? numbering.NextNumber
             : 1;
         RebuildXgpOptions();
     }
@@ -680,14 +680,24 @@
     // A Web XGP download beginning: its moment is noted.
     private void OnXgpExportStarting() => _edits.NoteWebDownloadStart();
 
+    // A Local XGP job that never ran — every attempt refused, or Stop settled
+    // it as retired: its moment orders nothing, and the host resolves it.
+    private Task OnXgpJobNeverStartedAsync(string jobId)
+    {
+        _edits.ForgetLocalStart(jobId);
+        return _reconciler.ResolveNeverStartedAsync(jobId);
+    }
+
     // The controls' half of a Local reconciliation's taking: they follow the
     // record unless the user has edited since the export whose numbering it
     // now holds started — or, of one another page started, since the latest
-    // moment the page knows it started after (XgpEditClock).
+    // moment the page knows it started after (XgpEditClock). Then the clock
+    // forgets the starts no later taking can need.
     private Task FollowRecordAfterPassAsync(LedgerTaking taking)
     {
         if (_edits.Follows(taking))
             FollowRecord();
+        _edits.Prune(taking.Ledger, _numbering.Record.Owed.Select(job => job.JobId));
         return Task.CompletedTask;
     }
 
@@ -708,7 +718,7 @@
     {
         if (_numbering.Record.Numbering is not { } numbering || numbering.Pattern != _xgpPattern)
             return;
-        _xgpNextNumber = numbering.LastNumber + 1;
+        _xgpNextNumber = numbering.NextNumber;
         RebuildXgpOptions();
         _edits.NoteControlsSet();
     }

@@ -30,6 +30,14 @@ internal sealed record XgpNumbering
     /// <summary>The last number used; zero when none was.</summary>
     public int LastNumber { get; }
 
+    /// <summary>
+    /// The number the next export under <see cref="Pattern"/> continues at:
+    /// the one after the last used. Derived, so not part of the stored
+    /// document.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int NextNumber => LastNumber + 1;
+
     /// <summary>The number length the files were named with.</summary>
     public int SuffixLength { get; }
 

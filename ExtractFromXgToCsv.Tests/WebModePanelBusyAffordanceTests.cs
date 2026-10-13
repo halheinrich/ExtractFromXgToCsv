@@ -180,10 +180,6 @@ public class WebModePanelBusyAffordanceTests : BunitContext
         Assert.Contains(renders, m => m.Contains("Building…"));
     }
 
-    /// <summary>
-    /// Captures the markup after every render, so a state raised and released
-    /// inside one gesture is still observable once the gesture has returned.
-    /// </summary>
     // ── Hal's three ruled busy messages (halheinrich/backgammon#374) ────────
 
     [Fact]
@@ -236,6 +232,10 @@ public class WebModePanelBusyAffordanceTests : BunitContext
         Assert.Contains(renders, m => m.Contains("<span>Extracting decisions…</span>"));
     }
 
+    /// <summary>
+    /// Captures the markup after every render, so a state raised and released
+    /// inside one gesture is still observable once the gesture has returned.
+    /// </summary>
     private static List<string> RecordRenders(IRenderedComponent<WebModePanel> cut)
     {
         var renders = new List<string>();

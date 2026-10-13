@@ -55,6 +55,13 @@ internal sealed class ScriptedDestination : IOutputDestination
     /// <summary>The files removed, by name, in order.</summary>
     public List<string> Removed { get; } = [];
 
+    /// <summary>
+    /// Every removal asked of the destination, by name, in order — whether or
+    /// not it removed anything: a removal the file system refuses is still
+    /// one the run asked for.
+    /// </summary>
+    public List<string> RemovalsAsked { get; } = [];
+
     public Stream Replace(string path) =>
         new ScriptedStream(FileSystemDestination.Instance.Replace(path), this, Path.GetFileName(path));
 
@@ -70,6 +77,7 @@ internal sealed class ScriptedDestination : IOutputDestination
 
     public void Delete(string path)
     {
+        RemovalsAsked.Add(Path.GetFileName(path));
         if (FailRemoval)
             throw new IOException(RemovalFailure);
         FileSystemDestination.Instance.Delete(path);

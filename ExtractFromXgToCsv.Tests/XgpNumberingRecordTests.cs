@@ -29,6 +29,22 @@ public class XgpNumberingRecordTests
         Owed = [Owed("job-1"), Owed("job-9")],
     };
 
+    /// <summary>
+    /// The next number is stated once, by the numbering: the one after the
+    /// last used — 1 for a numbering that has used none — and it is derived,
+    /// never stored.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(20, 21)]
+    public void TheNextNumber_IsTheOneAfterTheLastUsed_AndIsNotStored(int lastNumber, int next)
+    {
+        var numbering = new XgpNumbering("pos{n}", lastNumber, 3);
+
+        Assert.Equal(next, numbering.NextNumber);
+        Assert.DoesNotContain("next", System.Text.Json.JsonSerializer.Serialize(numbering), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static OwedXgpJob Owed(string jobId) => new(jobId, Current, From1, @"D:\xg\out");
 
     private static LedgerEntry Ended(int number, string jobId, int committed, XgpExportOptions? options = null) =>

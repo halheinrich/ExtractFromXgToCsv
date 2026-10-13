@@ -29,6 +29,13 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// orders nothing; where nothing orders the export, the user's edit stands.
 /// </para>
 /// <para>
+/// <b>What it keeps.</b> The starts of this page's Local jobs a later taking
+/// can still need (<see cref="Prune"/>): those still owed, which may yet be
+/// taken or bound one, and of the rest only the latest the current ledger
+/// admitted, which bounds every entry after it. A job never sent, or never
+/// run, is forgotten at once (<see cref="ForgetLocalStart"/>).
+/// </para>
+/// <para>
 /// Not thread-safe: Home calls it on the renderer's one thread.
 /// </para>
 /// </remarks>
@@ -73,6 +80,32 @@ internal sealed class XgpEditClock
     /// every attempt, or retired: it is in no ledger, so it orders nothing.
     /// </summary>
     public void ForgetLocalStart(string jobId) => _localStarts.Remove(jobId);
+
+    /// <summary>How many of this page's Local starts the clock holds: what <see cref="Prune"/> bounds.</summary>
+    public int HeldStarts => _localStarts.Count;
+
+    /// <summary>
+    /// Forgets the starts no later taking can need, given the ledger a pass
+    /// read and the jobs the record still owes. A job still owed is kept: it
+    /// may yet be taken, or bound one. Of the rest, only the latest that
+    /// <paramref name="ledger"/> admitted is kept: every later entry is
+    /// bounded by it, and no earlier one can be taken again. A job no ledger
+    /// of this instance holds, and no longer owed, never ran here, or ran in
+    /// an ended instance, and orders nothing.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="ledger"/> or <paramref name="owed"/> is null.</exception>
+    public void Prune(LedgerSnapshot ledger, IEnumerable<string> owed)
+    {
+        ArgumentNullException.ThrowIfNull(ledger);
+        ArgumentNullException.ThrowIfNull(owed);
+        var keep = new HashSet<string>(owed, StringComparer.Ordinal);
+        if (ledger.Entries
+                .Where(entry => _localStarts.ContainsKey(entry.JobId) && !keep.Contains(entry.JobId))
+                .MaxBy(entry => entry.Number) is { } latest)
+            keep.Add(latest.JobId);
+        foreach (var jobId in _localStarts.Keys.Where(jobId => !keep.Contains(jobId)).ToList())
+            _localStarts.Remove(jobId);
+    }
 
     /// <summary>
     /// Whether the controls follow the Web download in hand, which the record
