@@ -12,6 +12,7 @@ using QuestPDF.Infrastructure;
 using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ExtractFromXgToCsv.Tests;
 
@@ -22,25 +23,31 @@ namespace ExtractFromXgToCsv.Tests;
 /// <c>manifest.json</c> of every output's size and SHA-256, so a later change
 /// can show its output byte-for-byte against an earlier label's.
 /// <para>
-/// Not a gate: it asserts only that each run completes. It is excluded from
-/// the ordinary suite by its <c>Golden</c> category and run on purpose, with
-/// the label in <see cref="LabelVariable"/>; an unset label fails rather than
-/// skips, so a filter mistake cannot pass silently. The processor is driven
-/// directly because it is the one layer the Extract arc leaves alone; the UI
-/// and HTTP path are checked in the running app.
+/// Not a gate: it asserts only that each run completes. It runs only when
+/// <see cref="LabelVariable"/> is set, per command; unset, it writes one line
+/// and passes, so the plain suite stays green. A run that wrote nothing shows
+/// as a missing manifest. The run folder is resolved by
+/// <see cref="GoldenRunFolder"/>, which refuses an existing one: the harness
+/// creates folders and never deletes. The processor is driven directly
+/// because it is the one layer the Extract arc leaves alone; the UI and HTTP
+/// path are checked in the running app.
 /// </para>
 /// <para>
 /// The deck formats embed render timestamps, so beside their hashes the
-/// manifest carries a structural view: for PPTX each zip entry's name and
-/// SHA-256 and the slide count, for PDF the page count.
+/// manifest carries what repeats: for PPTX each zip entry's name and SHA-256
+/// and the slide count; for PDF the page count and the SHA-256 with the
+/// <c>/CreationDate</c> and <c>/ModDate</c> values masked.
 /// </para>
 /// </summary>
 [Trait("Category", "Golden")]
 [Trait("Category", "RequiresFixtureFiles")]
-public partial class LocalGoldenBaseline
+public partial class LocalGoldenBaseline(ITestOutputHelper output)
 {
     /// <summary>Environment variable naming the output label, e.g. <c>4d3c8c8-a</c>.</summary>
     private const string LabelVariable = "EXTRACT_GOLDEN_LABEL";
+
+    // What a masked PDF date value is replaced by.
+    private static readonly byte[] MaskedDate = Encoding.Latin1.GetBytes("(D:MASKED)");
 
     // The deck renderer requires a QuestPDF license, which the app sets at
     // startup (Program.cs); this class runs alone, so it sets its own.
@@ -60,11 +67,11 @@ public partial class LocalGoldenBaseline
     public async Task WritesEveryLocalFormat_AndItsManifest()
     {
         var label = Environment.GetEnvironmentVariable(LabelVariable);
-        if (string.IsNullOrWhiteSpace(label))
-            Assert.Fail($"Set {LabelVariable} to the run's label (the tip's short SHA plus a run letter).");
-        Assert.True(
-            label.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && label != "input",
-            $"{LabelVariable} must be a plain folder name other than 'input': '{label}'.");
+        if (string.IsNullOrEmpty(label))
+        {
+            output.WriteLine($"{LabelVariable} is unset: the golden baseline did not run and nothing was written");
+            return;
+        }
 
         var testData = FindTestData();
         var golden = Path.Combine(testData, "Golden");
@@ -74,9 +81,8 @@ public partial class LocalGoldenBaseline
             $"The golden input folder is missing or empty: {input}. Copy the top-level .xg " +
             "and .xgp files of TestData/FixtureFiles/ into it once; it stays frozen after that.");
 
-        var outputRoot = Path.Combine(golden, label);
-        if (Directory.Exists(outputRoot))
-            Directory.Delete(outputRoot, recursive: true);
+        if (!GoldenRunFolder.TryResolve(golden, input, label, out var outputRoot, out var refusal))
+            Assert.Fail($"{LabelVariable}: {refusal}");
         Directory.CreateDirectory(outputRoot);
 
         var processor = WithBook(Path.Combine(testData, "FixtureFiles", "OpeningBookV2.ob"));
@@ -145,9 +151,36 @@ public partial class LocalGoldenBaseline
         return format switch
         {
             "pptx" => entry with { Pptx = DescribePptx(bytes) },
-            "pdf" => entry with { PdfPageCount = CountPdfPages(bytes) },
+            "pdf" => DescribePdf(entry, bytes),
             _ => entry,
         };
+    }
+
+    private static FileEntry DescribePdf(FileEntry entry, byte[] bytes)
+    {
+        var text = Encoding.Latin1.GetString(bytes);
+        return entry with { PdfPageCount = PdfPage().Count(text), PdfDateMaskedSha256 = DateMaskedSha256(bytes, text) };
+    }
+
+    /// <summary>
+    /// The SHA-256 of a PDF with each <c>/CreationDate</c> and <c>/ModDate</c>
+    /// value replaced by a fixed token, all else as written.
+    /// <paramref name="text"/> is <paramref name="bytes"/> read as Latin-1,
+    /// one character per byte, so a match's index is its byte offset.
+    /// </summary>
+    private static string DateMaskedSha256(byte[] bytes, string text)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var at = 0;
+        foreach (Match date in PdfDate().Matches(text))
+        {
+            var value = date.Groups["value"];
+            hash.AppendData(bytes, at, value.Index - at);
+            hash.AppendData(MaskedDate);
+            at = value.Index + value.Length;
+        }
+        hash.AppendData(bytes, at, bytes.Length - at);
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     private static PptxStructure DescribePptx(byte[] bytes)
@@ -166,11 +199,6 @@ public partial class LocalGoldenBaseline
         var slides = entries.Count(e => SlidePart().IsMatch(e.Name));
         return new PptxStructure(slides, entries);
     }
-
-    // A page object's type, not the page tree's (/Pages): the count of pages
-    // in an uncompressed page tree, which is what the deck renderer writes.
-    private static int CountPdfPages(byte[] bytes) =>
-        PdfPage().Count(Encoding.Latin1.GetString(bytes));
 
     private static string Sha256(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
@@ -211,6 +239,8 @@ public partial class LocalGoldenBaseline
         public PptxStructure? Pptx { get; init; }
 
         public int? PdfPageCount { get; init; }
+
+        public string? PdfDateMaskedSha256 { get; init; }
     }
 
     private sealed record PptxStructure(int SlideCount, IReadOnlyList<ZipEntry> Entries);
@@ -228,6 +258,12 @@ public partial class LocalGoldenBaseline
     [GeneratedRegex(@"^ppt/slides/slide\d+\.xml$")]
     private static partial Regex SlidePart();
 
+    // A page object's type, not the page tree's (/Pages): the count of pages
+    // in an uncompressed page tree, which is what the deck renderer writes.
     [GeneratedRegex(@"/Type\s*/Page(?![A-Za-z])")]
     private static partial Regex PdfPage();
+
+    // The render timestamps, the only bytes two runs of the PDF differ in.
+    [GeneratedRegex(@"/(?:CreationDate|ModDate)\s*(?<value>\(D:[^)]*\))")]
+    private static partial Regex PdfDate();
 }

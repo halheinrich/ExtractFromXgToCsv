@@ -1371,18 +1371,19 @@ xUnit, targets .NET 10. Fixture files live in the umbrella
 `TestData/FixtureFiles/*.xg` directory and are referenced from the test
 project via relative path — not duplicated here.
 
-**The Local golden baseline is not part of the suite.** `LocalGoldenBaseline`
+**The Local golden baseline runs only on purpose.** `LocalGoldenBaseline`
 (category `Golden`) runs every `LocalFolderProcessor` pathway over the frozen
 `TestData/Golden/input/` (a one-time copy of FixtureFiles' top-level `.xg` and
-`.xgp`) into `TestData/Golden/<label>/`, with a `manifest.json` of each
+`.xgp`) into a new `TestData/Golden/<label>/`, with a `manifest.json` of each
 output's size and SHA-256, so a change can be compared byte for byte against
-an earlier label (halheinrich/backgammon#424). The suite is
-`dotnet test --filter "Category!=Golden"`; a baseline is
-`EXTRACT_GOLDEN_LABEL=<sha>-a dotnet test --filter "Category=Golden"`, and an
-unset label fails the run. CSV, Diagram JSON and XGP repeat byte for byte;
-PPTX and PDF do not, by their timestamps alone (the zip's entry times, the
-PDF's `CreationDate`/`ModDate`), so compare PPTX by its entries' hashes and
-slide count and PDF by its page count.
+an earlier label (halheinrich/backgammon#424). The suite is plain
+`dotnet test`, where the baseline, its label unset, writes nothing and passes;
+a baseline is `EXTRACT_GOLDEN_LABEL=<sha>-a dotnet test --filter
+"Category=Golden"`, the label set per command. A label must name a folder
+that does not exist yet; the harness never deletes. CSV, Diagram JSON and XGP
+repeat byte for byte; PPTX and PDF differ by their timestamps alone, so
+compare PPTX by its entries' hashes and slide count, and PDF by its
+date-masked hash and page count.
 
 **bUnit tests register what the app registers** — `AddClientServices`, the
 Client's one registration, beside a stub `HttpClient` — so a component renders
