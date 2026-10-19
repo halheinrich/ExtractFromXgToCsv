@@ -1371,6 +1371,19 @@ xUnit, targets .NET 10. Fixture files live in the umbrella
 `TestData/FixtureFiles/*.xg` directory and are referenced from the test
 project via relative path — not duplicated here.
 
+**The Local golden baseline is not part of the suite.** `LocalGoldenBaseline`
+(category `Golden`) runs every `LocalFolderProcessor` pathway over the frozen
+`TestData/Golden/input/` (a one-time copy of FixtureFiles' top-level `.xg` and
+`.xgp`) into `TestData/Golden/<label>/`, with a `manifest.json` of each
+output's size and SHA-256, so a change can be compared byte for byte against
+an earlier label (halheinrich/backgammon#424). The suite is
+`dotnet test --filter "Category!=Golden"`; a baseline is
+`EXTRACT_GOLDEN_LABEL=<sha>-a dotnet test --filter "Category=Golden"`, and an
+unset label fails the run. CSV, Diagram JSON and XGP repeat byte for byte;
+PPTX and PDF do not, by their timestamps alone (the zip's entry times, the
+PDF's `CreationDate`/`ModDate`), so compare PPTX by its entries' hashes and
+slide count and PDF by its page count.
+
 **bUnit tests register what the app registers** — `AddClientServices`, the
 Client's one registration, beside a stub `HttpClient` — so a component renders
 over the app's own lifetimes. **Browser storage is planned where it is the
