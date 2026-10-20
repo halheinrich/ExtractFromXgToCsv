@@ -10,14 +10,13 @@ Part of the [backgammon tools umbrella repo](https://github.com/halheinrich/back
 
 | Project | Purpose |
 |---|---|
-| `ExtractFromXgToCsv` | Server-side Blazor (SSR + Interactive Server) |
-| `ExtractFromXgToCsv.Client` | WebAssembly client project (Auto render mode) |
+| `ExtractFromXgToCsv` | Server-side Blazor (SSR host and HTTP surface) |
+| `ExtractFromXgToCsv.Client` | WebAssembly client project |
 
 ### Key services
 
 | Class | Responsibility |
 |---|---|
-| `XgProcessingService` | Detect local vs Azure; scan folders; call `XgDecisionIterator`; build CSV; write to disk |
 | `CsvDownloadService` | JS-interop helper — triggers browser "Save As" download |
 
 ### Data model
@@ -53,26 +52,6 @@ The server loads the book once. Path resolution:
 A missing or unreadable book is logged and skipped — it never fails a run. The
 folder-input status line reports whether the server loaded a book (and its
 entry count).
-
-### Web mode (browser)
-
-The browser parses `.xg` files client-side, so the book is offered the same
-way: an optional **Opening book (.ob)** file input beside the `.xg` picker.
-Pick `OpeningBookV2.ob` to enrich; skip it to extract unenriched. A status line
-shows the loaded entry count. A book chosen *after* the `.xg` files re-processes
-the retained bytes, so pick order doesn't matter.
-
----
-
-## Local vs Azure detection
-
-`XgProcessingService.IsLocalEnvironment` returns `true` when:
-- Not in Production **or**
-- The `WEBSITE_INSTANCE_ID` environment variable is absent (set by Azure App Service)
-
-In **local mode** the UI shows a folder-path text box.  
-In **Azure mode** the UI shows a multi-file `<InputFile>` upload control.  
-Both modes produce the same CSV output and offer a browser download.
 
 ---
 
