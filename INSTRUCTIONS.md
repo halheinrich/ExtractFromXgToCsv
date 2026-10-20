@@ -115,7 +115,8 @@ Architecture). Four areas:
   saved-filters file relay, shutdown. Thin pass-throughs to the services (see
   Public API).
 - **Local-mode services** — `Services/`: `LocalFolderProcessor` (the four
-  output pathways over a folder), its destination seam `IOutputDestination`
+  output pathways over a folder), `CsvLayout` (the CSV's columns and cells,
+  stated once), its destination seam `IOutputDestination`
   (`FileSystemDestination`, which classifies its own create refusal as
   `OutputFileExistsException`; `DestinationFailures.cs` holds the run-level
   destination failures — an existing XGP file, an unfinished one, an
@@ -203,7 +204,9 @@ The server project is a launcher plus an HTTP surface. It runs
 `LocalFolderProcessor` on a background task and exposes job status, and it
 serves the WASM payload. It registers `ServerInstance` and `JobStore`
 (singletons; the instance is constructed as the process starts) and
-`LocalFolderProcessor` (scoped). All rendering is `InteractiveWebAssembly`
+`LocalFolderProcessor` (scoped). Beside the processor, `CsvLayout` is the
+one statement of the CSV's columns and cells; the processor writes what it
+formats (see "CSV output"). All rendering is `InteractiveWebAssembly`
 with `prerender:false`; nothing renders interactively on the server.
 
 ### Reading, converting, skipping and committing
@@ -226,7 +229,8 @@ boundaries and the XGP numbering. This section says how the code meets it, not w
   opening book. All four pathways share one walk, `ForEachFileAsync`: a
   failed read is a read skip, the file's contribution is staged whole inside
   the file's boundary (a failure is a conversion skip, so a file that fails
-  midway contributes nothing), and the commit — the CSV writer, the JSON
+  midway contributes nothing), and the commit — the CSV writer (each line
+  formatted by `CsvLayout`), the JSON
   write, the deck build, an XGP file write — is outside it and fails the
   run. Every output file is opened through the destination seam
   (`IOutputDestination`), **created new, never overwriting** (§7.5): each
@@ -1060,6 +1064,19 @@ it neither activates the facet nor constrains anything. Consumers here supply
 the six members verbatim and never re-derive the clauses; `Build()` is the
 derivation SSOT. The wire carries all six, pinned by
 `LocalModePanelFilterWireTests`.
+
+### CSV output
+
+Eleven columns, in order:
+`Xgid,Error,MatchScore,MatchLength,Player,SourceFile,Game,MoveNumber,Roll,AnalysisDepth,Equity`,
+stated once in `CsvLayout` (one column table, from which the header and every line are
+derived) and pinned by `CsvLayoutTests`. A cube decision's `Roll` is `0`;
+every other absent fact is an empty cell. Hal ruled on 2026-10-19/20
+(halheinrich/backgammon#424) that the CSV carries no `Kind`, `Ranking` or
+`Result` column — an error here is the decision taken in the source game,
+under the app's one ranking — and that a cube decision is identified by a
+roll of 0. The layout is Extract's, not the shared `DecisionRow`'s, so
+another app's need never reaches this file; the row keeps its null roll.
 
 ### Diagram JSON output
 
@@ -2218,4 +2235,3 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   not been profiled. Candidate wins: parallelizing per-file work, reducing
   per-decision allocations in `XgDecisionIterator` consumers, and cutting
   reflection or LINQ in the filter hot path.
-- **`ColumnSelector` wired into UI.**

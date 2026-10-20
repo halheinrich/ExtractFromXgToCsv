@@ -21,10 +21,10 @@ Part of the [backgammon tools umbrella repo](https://github.com/halheinrich/back
 
 ### Data model
 
-A CSV row is **BgDataTypes_Lib**'s `DecisionRow`, built by the producer for
-the run's one ranking; its columns and their order are the producer's
-`DecisionRow.CsvHeader` (see BgDataTypes_Lib's `INSTRUCTIONS.md`,
-"DecisionRow"), not restated here.
+A CSV row is formatted from **BgDataTypes_Lib**'s `DecisionRow`, built by
+the producer for the run's one ranking. The CSV's columns are Extract's own,
+stated once in the server's `CsvLayout` (`Services/CsvLayout.cs`), not
+restated here.
 
 ---
 
