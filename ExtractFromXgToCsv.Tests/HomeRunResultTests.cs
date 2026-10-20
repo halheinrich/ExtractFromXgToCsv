@@ -45,7 +45,7 @@ public class HomeRunResultTests : BunitContext
 
     public HomeRunResultTests()
     {
-        this.AddHomeServices("Local", _processing);
+        this.AddHomeServices(_processing);
         _storage = BrowserStoragePlan.On(JSInterop);
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
         _storage.ExpectHomeRestore(new()

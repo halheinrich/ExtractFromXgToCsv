@@ -22,14 +22,6 @@ internal static class ClientServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddScoped<XgProcessingService>();
-
-        // How Web mode converts a decoded file to rows or records. A service
-        // so the conversion's completion is a seam: a test can count the
-        // conversions a gesture made, or hold one at the point its owner
-        // decides whether it may publish.
-        services.AddScoped<ISourceConverter, XgSourceConverter>();
-
         // Local mode's job protocol (SPEC-notices.md §7.5): its wire, how
         // patiently a page follows and reconciles, and the identities the
         // browser mints for its starts. All three are services: a test can

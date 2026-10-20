@@ -60,7 +60,7 @@ public class HomeStorageUnavailableTests : BunitContext
 
     public HomeStorageUnavailableTests()
     {
-        this.AddHomeServices("Local");
+        this.AddHomeServices();
         _storage = BrowserStoragePlan.On(JSInterop);
     }
 
@@ -72,13 +72,13 @@ public class HomeStorageUnavailableTests : BunitContext
     private void ExpectAllRefusedBoot()
     {
         _storage.ExpectFilterRestore(FilterRestoration.Refused);
-        _storage.ExpectHomeVisitRefused("Local");
+        _storage.ExpectHomeVisitRefused();
     }
 
     private void ExpectWorkingBoot()
     {
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        _storage.ExpectHomeVisit("Local");
+        _storage.ExpectHomeVisit();
     }
 
     private static NoticeBox TheNotice(IRenderedComponent<Home> cut) =>
@@ -217,7 +217,7 @@ public class HomeStorageUnavailableTests : BunitContext
         await apply.WaitAsync(DefaultWaitTimeout);
         Assert.True(Condition.HasOccurred);
 
-        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.FolderPathKey] = Folder });
+        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.FolderPathKey] = Folder });
         var back = this.RenderHome();
 
         TheNotice(back);
@@ -257,7 +257,7 @@ public class HomeStorageUnavailableTests : BunitContext
     public async Task RefusedWrites_ThenASuccess_IsStillOneOccurrence()
     {
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.DiagramJson) });
+        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.DiagramJson) });
         var refusedXgp = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey,
             nameof(OutputFormat.Xgp), BrowserStorageWriteAnswer.Refused);
         var landedCsv = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey,
@@ -320,7 +320,7 @@ public class HomeStorageUnavailableTests : BunitContext
         await TheNotice(firstVisit).DismissAndSettleAsync(firstVisit, NoticeDismissGesture.CloseButton);
 
         await DisposeComponentsAsync();
-        _storage.ExpectHomeVisitRefused("Local");
+        _storage.ExpectHomeVisitRefused();
         var secondVisit = this.RenderHome();
 
         Assert.Empty(secondVisit.FindAll("#" + StorageNotice));
@@ -338,7 +338,7 @@ public class HomeStorageUnavailableTests : BunitContext
         this.RenderHome();
 
         await DisposeComponentsAsync();
-        _storage.ExpectHomeVisitRefused("Local");
+        _storage.ExpectHomeVisitRefused();
         var secondVisit = this.RenderHome();
 
         TheNotice(secondVisit);

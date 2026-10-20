@@ -1,5 +1,5 @@
 using System.Net;
-using Microsoft.AspNetCore.Hosting;
+using ExtractFromXgToCsv.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -8,24 +8,20 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Hosted wire tests for <c>GET</c>/<c>PUT /api/filterdocument</c> through the
 /// real pipeline (<see cref="WebApplicationFactory{TEntryPoint}"/> over the
-/// server's <c>Program</c>): the parts only hosting can observe — the
-/// Local-mode action guard answering an observable 404 under Web config, the
-/// shape rejection at the real route, the 204-absent contract, and the write →
-/// read round-trip landing on disk. The store's own IO/validation unit
+/// server's <c>Program</c>): the parts only hosting can observe — the shape
+/// rejection at the real route, the 204-absent contract, and the write → read
+/// round-trip landing on disk. The store's own IO/validation unit
 /// contracts live in <see cref="FilterDocumentStoreTests"/>.
 /// </summary>
 public class FilterDocumentEndpointTests : IDisposable
 {
-    // AppModeService is the entry-assembly marker (WebApplicationFactory
-    // accepts any type from the entry assembly): naming `Program` here would
-    // be ambiguous — the Client's top-level entry point is equally visible to
-    // this project through its InternalsVisibleTo grant.
-    private sealed class ModeFactory(string mode)
-        : WebApplicationFactory<ExtractFromXgToCsv.Services.AppModeService>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder) =>
-            builder.UseSetting("AppMode", mode);
-    }
+    // JobStore is the entry-assembly marker (WebApplicationFactory accepts any
+    // type from the entry assembly): naming `Program` here would be ambiguous —
+    // the Client's top-level entry point is equally visible to this project
+    // through its InternalsVisibleTo grant. JobStore because it is the
+    // server's own state, public, and there for as long as the server runs
+    // jobs at all; every hosted test names it, for this reason.
+    private static WebApplicationFactory<JobStore> Host() => new();
 
     private readonly string _folder =
         Directory.CreateTempSubdirectory("xg-filterdoc-wire-").FullName;
@@ -42,7 +38,7 @@ public class FilterDocumentEndpointTests : IDisposable
     [Fact]
     public async Task LocalMode_WriteThenRead_RoundTripsThroughTheRealPipeline()
     {
-        using var factory = new ModeFactory("Local");
+        using var factory = Host();
         using var client = factory.CreateClient();
 
         var put = await client.PutAsync(
@@ -63,7 +59,7 @@ public class FilterDocumentEndpointTests : IDisposable
     [Fact]
     public async Task LocalMode_AbsentFile_Returns204()
     {
-        using var factory = new ModeFactory("Local");
+        using var factory = Host();
         using var client = factory.CreateClient();
 
         var get = await client.GetAsync(Url(_folder, "absent.json"));
@@ -76,7 +72,7 @@ public class FilterDocumentEndpointTests : IDisposable
     [InlineData(@"C:\rooted.json")]
     public async Task LocalMode_NonSimpleFileName_Returns400(string name)
     {
-        using var factory = new ModeFactory("Local");
+        using var factory = Host();
         using var client = factory.CreateClient();
 
         var get = await client.GetAsync(Url(_folder, name));
@@ -84,23 +80,5 @@ public class FilterDocumentEndpointTests : IDisposable
 
         var put = await client.PutAsync(Url(_folder, name), new StringContent("x"));
         Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
-    }
-
-    [Fact]
-    public async Task WebMode_Endpoints_Answer404()
-    {
-        // The Local guard is an explicit action guard precisely so this is
-        // observable: in Web mode the file relay does not exist — 404, not a
-        // container failure — and nothing touches the disk.
-        using var factory = new ModeFactory("Web");
-        using var client = factory.CreateClient();
-
-        var get = await client.GetAsync(Url(_folder, "xg-filters.json"));
-        Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
-
-        var put = await client.PutAsync(
-            Url(_folder, "xg-filters.json"), new StringContent("x"));
-        Assert.Equal(HttpStatusCode.NotFound, put.StatusCode);
-        Assert.False(File.Exists(Path.Combine(_folder, "xg-filters.json")));
     }
 }

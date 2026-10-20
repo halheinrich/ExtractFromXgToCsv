@@ -31,7 +31,7 @@ public class HomeRestoreNoticeTests : BunitContext
 
     public HomeRestoreNoticeTests()
     {
-        this.AddHomeServices("Local");
+        this.AddHomeServices();
         _storage = BrowserStoragePlan.On(JSInterop);
     }
 
@@ -41,7 +41,7 @@ public class HomeRestoreNoticeTests : BunitContext
         // One bUnit context is one app boot: the stored selection below is a
         // previous session's, restored once, at the panel's first render.
         _storage.ExpectFilterRestore(new FilterConfig { ErrorMin = 0.5 });
-        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.FolderPathKey] = Folder });
+        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.FolderPathKey] = Folder });
 
         var cut = this.RenderHome();
 
@@ -64,7 +64,7 @@ public class HomeRestoreNoticeTests : BunitContext
         // again — the boot's one restoration has settled — so the user's draft
         // is on screen, and nothing is announced.
         await DisposeComponentsAsync();
-        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.FolderPathKey] = Folder });
+        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.FolderPathKey] = Folder });
         var back = this.RenderHome();
 
         Assert.Equal("0.75", back.MinInputValue());

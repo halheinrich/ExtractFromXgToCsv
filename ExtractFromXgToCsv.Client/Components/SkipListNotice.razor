@@ -2,10 +2,9 @@
 
 @* The one rendering of a skip record (SPEC-notices.md §7.1): every place this
    app shows what was skipped shows it through here, so no surface words a
-   skip differently. Local mode's run record and Web mode's two lists — "this
-   selection" and "the last download" — are each one instance; a shared
-   rendering does not merge their owners, which is why each caller passes the
-   record it owns and, where its list needs one, the label naming that owner.
+   skip differently. A shared rendering does not merge the records' owners,
+   which is why each caller passes the record it owns and, where its list
+   needs one, the label naming that owner.
 
    A gate reason — the record of what was lost — so not dismissible
    (SPEC-notices.md §4, Fork C), and assertive. It renders nothing for an

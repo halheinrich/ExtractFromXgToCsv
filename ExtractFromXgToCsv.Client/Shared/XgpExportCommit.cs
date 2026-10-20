@@ -4,15 +4,14 @@ namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
 /// What one XGP export committed: how many position files, named under which
-/// options — the authoritative accounting both modes hand <c>Home</c>, which
+/// options — the authoritative accounting a run hands <c>Home</c>, which
 /// owns the persisted numbering (the umbrella's <c>SPEC-notices.md</c> §7.1,
 /// "XGP numbering follows what is committed").
 /// </summary>
 /// <remarks>
 /// <para>
-/// Only committed entries consume numbers: a Local-mode file once it is
-/// written to the output folder, a Web-mode archive entry once the finalized
-/// archive has been handed to the browser. A skipped preparation consumes
+/// Only committed files consume numbers: a file once it is written to the
+/// output folder. A skipped preparation consumes
 /// none. So the numbers this export used are exactly
 /// <see cref="XgpExportOptions.StartNumber"/> through
 /// <c>StartNumber + Count − 1</c> under <see cref="Options"/>' pattern, and
@@ -23,8 +22,7 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// never the controls' current values: a control changed while the export ran
 /// does not reinterpret what it committed. The Local-mode processor builds one
 /// as it writes, the job runner carries it on every terminal snapshot —
-/// completed, cancelled or failed — and the panel hands it on; Web mode builds
-/// one at a successful hand-off.
+/// completed, cancelled or failed — and the panel hands it on.
 /// </para>
 /// </remarks>
 public sealed record XgpExportCommit

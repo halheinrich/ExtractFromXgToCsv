@@ -241,15 +241,16 @@ internal sealed class XgpNumberingKeeper(XgpNumberingStore store)
     public Task<bool> ResolveAsync(string jobId) => CheckpointAsync(record => record.Resolving(jobId));
 
     /// <summary>
-    /// Records what a Web download committed, as Home sets it from an export
+    /// Records what an export committed
     /// (<see cref="XgpNumberingRecord.WithCommit"/>), in one checkpoint. An
     /// export that committed nothing changes no number: nothing is written,
-    /// and the record takes nothing.
+    /// and the record takes nothing. Its one page caller, Web mode's download,
+    /// is retired; the protocol's removal takes it (halheinrich/backgammon#424).
     /// </summary>
     /// <returns>
     /// The numbering the record took from the export — it committed something,
     /// so the record's numbering is now its — whether or not storage stored
-    /// it; <see langword="null"/> when the record took nothing. Each download
+    /// it; <see langword="null"/> when the record took nothing. Each export
     /// the record takes is its own taking, though its numbering may equal what
     /// the record held, and the numbering returned is that taking's, whatever
     /// the record holds by the time its caller reads it.

@@ -119,8 +119,7 @@ public class XgpNameAllocatorTests
         // case-insensitivity contract can't be observed behaviorally yet —
         // it becomes live the day a free-text token (e.g. a player name)
         // joins the registry. Pin the comparer choice directly, per the
-        // suite's private-invariant reflection idiom (see
-        // WebModePanelFilteringTests).
+        // suite's private-invariant reflection idiom (bUnitTestHelpers).
         var allocator = Create("quiz");
 
         var counts = bUnitTestHelpers

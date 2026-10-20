@@ -1,5 +1,4 @@
 using BgDataTypes_Lib;
-using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using XgFilter_Lib.Enums;
 using XgFilter_Lib.Filtering;
@@ -11,7 +10,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// The CSV pathway (rows) and the Diagram JSON pathway (records) see the same
 /// decisions through the same filter, under the application's one ranking:
 /// each row is the producer's, built for <see cref="AppRanking.Ranking"/>, and
-/// each record is judged through its view for that same ranking.
+/// each record is judged through its view for that same ranking. Both are
+/// reached as the processor reaches them (<see cref="ProcessorDecisions"/>).
 /// </summary>
 public class OutputConsistencyTests
 {
@@ -22,10 +22,10 @@ public class OutputConsistencyTests
     [InlineData("MoneyTest.xg")]
     public void BothPathways_SameDecisionCount(string fileName)
     {
-        var source = WebSources.Decode(fileName);
+        var file = ProcessorDecisions.Read(fileName);
 
-        var rows = WebSources.Rows(source, Ranking);
-        var diagrams = WebSources.Records(source, Ranking);
+        var rows = ProcessorDecisions.Rows(file, fileName, Ranking);
+        var diagrams = ProcessorDecisions.Records(file, fileName, Ranking);
 
         Assert.Equal(rows.Count, diagrams.Count);
     }
@@ -36,10 +36,10 @@ public class OutputConsistencyTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1859", Justification = "Testing IDecisionFilterData contract explicitly")]
     public void BothPathways_FilterDataPropertiesAgree(string fileName)
     {
-        var source = WebSources.Decode(fileName);
+        var file = ProcessorDecisions.Read(fileName);
 
-        var rows = WebSources.Rows(source, Ranking);
-        var diagrams = WebSources.Records(source, Ranking);
+        var rows = ProcessorDecisions.Rows(file, fileName, Ranking);
+        var diagrams = ProcessorDecisions.Records(file, fileName, Ranking);
 
         for (int i = 0; i < rows.Count; i++)
         {
@@ -68,10 +68,10 @@ public class OutputConsistencyTests
     [InlineData("MoneyTest.xg", DecisionTypeOption.CubeOnly)]
     public void BothPathways_SameFilteredCount(string fileName, DecisionTypeOption decisionType)
     {
-        var source = WebSources.Decode(fileName);
+        var file = ProcessorDecisions.Read(fileName);
 
-        var rows = WebSources.Rows(source, Ranking);
-        var diagrams = WebSources.Records(source, Ranking);
+        var rows = ProcessorDecisions.Rows(file, fileName, Ranking);
+        var diagrams = ProcessorDecisions.Records(file, fileName, Ranking);
 
         var fs = new FilterConfig { DecisionType = decisionType }.Build();
 

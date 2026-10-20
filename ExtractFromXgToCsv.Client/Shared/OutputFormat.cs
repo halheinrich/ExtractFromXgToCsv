@@ -5,8 +5,6 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <summary>
 /// The output a processing run produces. Crosses the client↔server wire as
 /// <see cref="ProcessRequest.OutputFormat"/>, and the server switches on it.
-/// <c>Pptx</c> and <c>Pdf</c> are Local-mode only (they need server-side
-/// rasterization); <c>Xgp</c> works in both modes (see the XGP export section).
 /// </summary>
 [JsonConverter(typeof(StrictJsonStringEnumConverter<OutputFormat>))]
 public enum OutputFormat
@@ -17,15 +15,12 @@ public enum OutputFormat
     /// <summary>Decisions as a single in-memory JSON array of diagram requests.</summary>
     DiagramJson,
 
-    /// <summary>Problem/Solution slide deck (PowerPoint). Local mode only.</summary>
+    /// <summary>Problem/Solution slide deck (PowerPoint).</summary>
     Pptx,
 
-    /// <summary>Problem/Solution page deck (PDF). Local mode only.</summary>
+    /// <summary>Problem/Solution page deck (PDF).</summary>
     Pdf,
 
-    /// <summary>
-    /// One <c>.xgp</c> position file per decision — a single <c>.zip</c> in Web
-    /// mode, files written into a folder in Local mode.
-    /// </summary>
+    /// <summary>One <c>.xgp</c> position file per decision, written into a folder.</summary>
     Xgp
 }

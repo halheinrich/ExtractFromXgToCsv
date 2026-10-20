@@ -15,9 +15,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// Pins the wiring between XgFilter_Razor's filter setup and
 /// <see cref="Home"/>: the source Home reports, the filter in effect it reads
 /// back from the owner (<see cref="FilterSetupSnapshot.ConfigInEffectFor"/>)
-/// and hands both mode panels, and the per-mode source-change rule — a folder
-/// commit or a new selection ends the setup, the baseline dropped and Apply
-/// re-armed — with readiness (halheinrich/backgammon#266): the empty selection
+/// and hands the panel, and the source-change rule — a folder commit ends the
+/// setup, the baseline dropped and Apply re-armed — with readiness (halheinrich/backgammon#266): the empty selection
 /// is in effect without Apply once there is a source, and stays so across a
 /// source change.
 /// <para>
@@ -39,8 +38,6 @@ namespace ExtractFromXgToCsv.Tests;
 /// </summary>
 public class HomeWiringTests : BunitContext
 {
-    private const string FixtureA = "MTCH4064.xg";
-    private const string FixtureB = "ajhhBG0407.xg";
     private const string Folder = @"D:\xg\matches";
     private const string OtherFolder = @"D:\xg\other";
 
@@ -58,13 +55,9 @@ public class HomeWiringTests : BunitContext
     private FilterConfig? InEffectForFolder(string folderPath) =>
         Setup.Current.ConfigInEffectFor(FilterSourceToken.FromPath(folderPath));
 
-    /// <summary>What is in effect for the current Web selection, which Home has reported.</summary>
-    private FilterConfig? InEffectForSelection() =>
-        Setup.Current.Source is { } source ? Setup.Current.ConfigInEffectFor(source) : null;
-
-    private IRenderedComponent<Home> RenderHome(string mode, CapturingProcessHandler? processing = null)
+    private IRenderedComponent<Home> RenderPage(CapturingProcessHandler? processing = null)
     {
-        this.AddHomeServices(mode, processing);
+        this.AddHomeServices(processing);
         return this.RenderHome();
     }
 
@@ -73,7 +66,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task EmptySelection_IsInEffectWithoutApply_OnceAFolderIsCommitted()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
 
         // No source yet: nothing can be in effect, and Apply has nothing to
@@ -93,26 +86,12 @@ public class HomeWiringTests : BunitContext
         Assert.DoesNotContain("Apply filters first", cut.Markup);
     }
 
-    [Fact]
-    public void EmptySelection_IsInEffectWithoutApply_OnceFilesAreSelected()
-    {
-        var cut = RenderHome("Web");
-
-        cut.UploadFixture(FixtureA);
-
-        Assert.Equal(new FilterConfig(), InEffectForSelection());
-        Assert.Equal(new FilterConfig(), cut.FindComponent<WebModePanel>().Instance.FilterInEffect);
-        Assert.Contains("rows match current filters", cut.Markup);
-        Assert.DoesNotContain("click Apply Filter", cut.Markup);
-        Assert.False(cut.DownloadButton().HasAttribute("disabled"));
-    }
-
     // ── A non-empty selection needs Apply ───────────────────────────────────
 
     [Fact]
     public async Task Apply_ANonEmptySelection_PutsItInEffectAndOpensRun()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
 
@@ -133,23 +112,9 @@ public class HomeWiringTests : BunitContext
     }
 
     [Fact]
-    public async Task Apply_ANonEmptySelection_PropagatesToTheWebPanel()
-    {
-        var cut = RenderHome("Web");
-        cut.UploadFixture(FixtureA);
-        await cut.EditMinAsync("0.01");
-        Assert.Null(cut.FindComponent<WebModePanel>().Instance.FilterInEffect);
-
-        await cut.ApplyFiltersAsync();
-
-        Assert.Equal(NonEmpty, InEffectForSelection());
-        Assert.Equal(NonEmpty, cut.FindComponent<WebModePanel>().Instance.FilterInEffect);
-    }
-
-    [Fact]
     public async Task EditAfterApply_ClosesTheGate_UndoReopensIt()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
         await cut.EditMinAsync("0.01");
@@ -175,7 +140,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task FolderChange_EndsTheSetup_TheAppliedFilterIsDroppedAndApplyRearmed()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
         await cut.EditMinAsync("0.01");
@@ -210,7 +175,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task FolderChange_WhileTheEmptyFilterStaysReady_DropsTheEarlierResult()
     {
-        var cut = RenderHome("Local", new CapturingProcessHandler());
+        var cut = RenderPage(new CapturingProcessHandler());
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
@@ -226,7 +191,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task FolderRecommitSameValue_IsNotASourceChange()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
         await cut.EditMinAsync("0.01");
@@ -270,7 +235,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task FolderRecommitWithTrailingSeparator_IsNotASourceChange()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
         await cut.EditMinAsync("0.01");
@@ -291,7 +256,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task OutputPathChange_IsNotASourceChange()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         await cut.CommitFolderAsync(Folder);
         await cut.SetOutputPathAsync(@"D:\xg\out.csv");
         await cut.EditMinAsync("0.01");
@@ -305,55 +270,12 @@ public class HomeWiringTests : BunitContext
         Assert.False(cut.RunButton().HasAttribute("disabled"));
     }
 
-    [Fact]
-    public async Task WebReselection_WithAnAppliedFilter_EndsTheSetup_PreviewWaitsForApply()
-    {
-        var cut = RenderHome("Web");
-        cut.UploadFixture(FixtureA);
-        await cut.EditMinAsync("0.01");
-        await cut.ApplyFiltersAsync();
-        Assert.Contains("rows match current filters", cut.Markup);
-
-        // A new selection is a new source: the applied filter is dropped, the
-        // preview blanks and Download is dark until the user applies again.
-        cut.UploadFixture(FixtureB);
-        Assert.Null(InEffectForSelection());
-        Assert.Contains("set filters and click Apply Filter", cut.Markup);
-        Assert.True(cut.DownloadButton().HasAttribute("disabled"));
-
-        // Apply is re-armed by the same rule — no edit needed.
-        await cut.ApplyFiltersAsync();
-        Assert.Equal(NonEmpty, InEffectForSelection());
-        Assert.Contains("rows match current filters", cut.Markup);
-        Assert.False(cut.DownloadButton().HasAttribute("disabled"));
-    }
-
-    [Fact]
-    public void WebReselection_WithTheEmptyFilter_StaysInEffect_PreviewFollowsTheNewSelection()
-    {
-        var cut = RenderHome("Web");
-        cut.UploadFixture(FixtureA);
-        var firstPick = Setup.Current.Source;
-
-        cut.UploadFixture(FixtureB);
-
-        // A new source, and the empty selection ready for it at once: the
-        // preview is the new selection's rows, all of them.
-        Assert.NotEqual(firstPick, Setup.Current.Source);
-        Assert.Equal(new FilterConfig(), InEffectForSelection());
-        var cache = cut.FindComponent<WebModePanel>().Instance.RowCache;
-        Assert.NotEmpty(cache.Rows);
-        Assert.All(cache.Rows, r => Assert.Equal(FixtureB, r.SourceFile));
-        Assert.Contains($"{cache.Rows.Count} of {cache.Rows.Count} rows match current filters", cut.Markup);
-        Assert.False(cut.DownloadButton().HasAttribute("disabled"));
-    }
-
     // ── Saved filters over the file relay ───────────────────────────────────
 
     [Fact]
     public async Task SavedFilters_DocumentInSourceFolder_RendersItsRows()
     {
-        var stub = this.AddHomeServices("Local");
+        var stub = this.AddHomeServices();
         stub.Documents[(Folder, SavedFiltersDocument.FileName)] =
             NamedFilterCollection.Empty.With("Blitz", new FilterConfig()).ToJson();
 
@@ -369,7 +291,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task SavedFilters_SaveAs_WritesDocumentIntoLatchedFolder()
     {
-        var stub = this.AddHomeServices("Local");
+        var stub = this.AddHomeServices();
         var cut = this.RenderHome();
         await cut.CommitFolderAsync(Folder);
         cut.WaitForState(() => cut.FindAll("#saveFilterName").Any(), TimeSpan.FromSeconds(5));
@@ -394,7 +316,7 @@ public class HomeWiringTests : BunitContext
     [Fact]
     public async Task SavedFilters_FolderChange_ReloadsContextFromNewFolder()
     {
-        var stub = this.AddHomeServices("Local");
+        var stub = this.AddHomeServices();
         stub.Documents[(Folder, SavedFiltersDocument.FileName)] =
             NamedFilterCollection.Empty.With("Blitz", new FilterConfig()).ToJson();
 
@@ -414,37 +336,21 @@ public class HomeWiringTests : BunitContext
         });
     }
 
-    [Fact]
-    public async Task SavedFilters_WebMode_RendersNoSection()
-    {
-        var stub = this.AddHomeServices("Web");
-        var cut = this.RenderHome();
-
-        // Web mode binds Storage = null (ruled: no second store — no
-        // localStorage fallback), so no saved-filters section exists in any
-        // Web state, selection or not — and nothing ever calls the relay.
-        cut.UploadFixture(FixtureA);
-        await cut.EditMinAsync("0.01");
-        await cut.ApplyFiltersAsync();
-
-        Assert.Empty(cut.FindAll("#saveFilterName"));
-        Assert.DoesNotContain("Saved Filters", cut.Markup);
-        Assert.Empty(stub.DocumentReads);
-    }
-
-    // ── XGP option wiring (unchanged contracts, mode-shell level) ───────────
+    // ── Format and XGP option wiring ────────────────────────────────────────
 
     [Fact]
-    public void XgpRadio_EnabledInWebMode()
+    public void EveryFormatRadio_IsEnabled()
     {
-        var cut = RenderHome("Web");
-        Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
+        var cut = RenderPage();
+
+        foreach (var id in new[] { "#fmtCsv", "#fmtDiagram", "#fmtPptx", "#fmtPdf", "#fmtXgp" })
+            Assert.False(cut.Find(id).HasAttribute("disabled"), id);
     }
 
     [Fact]
-    public void XgpRadio_EnabledInLocalMode_AndOptionsPropagateToLocalPanel()
+    public void XgpRadio_Enabled_AndOptionsPropagateToThePanel()
     {
-        var cut = RenderHome("Local");
+        var cut = RenderPage();
         Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
 
         // The recovery protocol's three hand-offs (SPEC-notices.md §7.5) are
@@ -457,38 +363,21 @@ public class HomeWiringTests : BunitContext
     }
 
     [Fact]
-    public void XgpOptionsBlock_RendersOnlyWhileXgpSelected_AndPropagatesToWebPanel()
+    public void XgpOptionsBlock_RendersOnlyWhileXgpSelected_AndPropagatesToThePanel()
     {
-        var cut = RenderHome("Web");
+        var cut = RenderPage();
 
         Assert.Empty(cut.FindAll("#xgpOptions"));
 
         cut.Find("#fmtXgp").Change(true);
         Assert.Single(cut.FindAll("#xgpOptions"));
 
-        var webPanel = cut.FindComponent<WebModePanel>();
-        Assert.NotNull(webPanel.Instance.XgpOptions);
-        Assert.True(webPanel.Instance.XgpOptions.TryValidate(out _));
+        var panel = cut.FindComponent<LocalModePanel>();
+        Assert.NotNull(panel.Instance.XgpOptions);
+        Assert.True(panel.Instance.XgpOptions.TryValidate(out _));
 
         cut.Find("#fmtCsv").Change(true);
         Assert.Empty(cut.FindAll("#xgpOptions"));
     }
 
-    [Fact]
-    public async Task OnXgpExported_AdvancesTheCounter()
-    {
-        var cut = RenderHome("Web");
-        cut.Find("#fmtXgp").Change(true);
-
-        var webPanel = cut.FindComponent<WebModePanel>();
-        Assert.Equal(1, webPanel.Instance.XgpOptions.StartNumber);
-
-        // Panel reports an export of 5 decisions under the options it was
-        // handed → counter advances to 6. What is persisted is pinned, with
-        // storage planned, in HomeXgpPatternTests.
-        await cut.InvokeAsync(() => webPanel.Instance.OnXgpExported.InvokeAsync(
-            new XgpExportCommit(webPanel.Instance.XgpOptions, 5)));
-
-        Assert.Equal(6, webPanel.Instance.XgpOptions.StartNumber);
-    }
 }

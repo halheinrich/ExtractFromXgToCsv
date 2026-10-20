@@ -9,12 +9,9 @@ using Bunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the Local-mode filtered-to-zero notice, the sibling of the
-/// <see cref="WebModePanel"/> zero-match notice shipped at 6850b5a. Local
-/// mode has no browser-side rows to count, so it can't reuse Web's emergent
-/// <c>_filteredRows.Count == 0</c> signal: <c>TotalRows == 0</c> alone is
-/// ambiguous (empty folder vs. filtered-to-zero). The distinguisher is the
-/// lib seam <see cref="DecisionFilterSet.IsEmpty"/> — an empty set admits
+/// Pins the Local-mode filtered-to-zero notice. The panel has no browser-side
+/// rows to count, and <c>TotalRows == 0</c> alone is ambiguous (empty folder
+/// vs. filtered-to-zero). The distinguisher is the lib seam <see cref="DecisionFilterSet.IsEmpty"/> — an empty set admits
 /// every row, so zero rows through a non-empty set is a genuine filter miss.
 ///
 /// The notice hangs off the completed-success branch only: it must appear

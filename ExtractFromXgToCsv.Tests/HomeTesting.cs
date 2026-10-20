@@ -7,7 +7,6 @@ using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
 using ExtractFromXgToCsv.Client.Services;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Razor.TestSupport;
@@ -17,50 +16,47 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// What a test that renders <see cref="Home"/> needs: the app's own
 /// registrations over a stub server, a render that waits for Home's restore to
-/// resolve the mode, and the gestures the tests drive.
+/// resolve the source, and the gestures the tests drive.
 /// </summary>
 internal static class HomeTesting
 {
     /// <summary>
     /// Registers what the app registers (<c>AddClientServices</c>) and an
-    /// <see cref="HttpClient"/> over a stub server answering
-    /// <paramref name="mode"/>; returns the stub.
+    /// <see cref="HttpClient"/> over a stub server, whose processing
+    /// endpoints are <paramref name="processing"/>'s when given; returns the stub.
     /// </summary>
-    public static StubAppModeHandler AddHomeServices(
-        this BunitContext ctx, string mode, HttpMessageHandler? processing = null)
+    public static StubServerHandler AddHomeServices(
+        this BunitContext ctx, HttpMessageHandler? processing = null)
     {
         ctx.Services.AddClientServices();
         // Identities a test can name: the owed job's appears in the numbering
         // record's document.
         ctx.Services.AddSingleton<IJobIdentities>(new SequentialJobIdentities());
-        var server = new StubAppModeHandler(mode) { Processing = processing };
+        var server = new StubServerHandler { Processing = processing };
         ctx.Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
         return server;
     }
 
     /// <summary>
-    /// Renders Home and waits until its restore has resolved the mode — the
-    /// moment a mode panel renders and the source is reported — and, in Local
-    /// mode, until the page has reconciled with the server.
+    /// Renders Home and waits until its restore has resolved the source — the
+    /// moment the panel renders and the source is reported — and until the
+    /// page has reconciled with the server.
     /// </summary>
     public static IRenderedComponent<Home> RenderHome(this BunitContext ctx)
     {
         var cut = ctx.Render<Home>();
-        cut.WaitForModePanel();
+        cut.WaitForLocalPanel();
         return cut;
     }
 
     /// <summary>
-    /// Waits until a mode panel is up — Home's restore has resolved the mode —
-    /// and its first after-render has run; and in Local mode until the page
-    /// has reconciled with the server, which every Local start waits on
-    /// (SPEC-notices.md §7.5).
+    /// Waits until the panel is up — Home's restore has resolved the source —
+    /// and its first after-render has run, and until the page has reconciled
+    /// with the server, which every start waits on (SPEC-notices.md §7.5).
     /// </summary>
-    public static void WaitForModePanel(this IRenderedComponent<Home> cut)
+    public static void WaitForLocalPanel(this IRenderedComponent<Home> cut)
     {
-        cut.WaitForState(
-            () => cut.FindComponents<LocalModePanel>().Any() || cut.FindComponents<WebModePanel>().Any(),
-            TimeSpan.FromSeconds(5));
+        cut.WaitForState(() => cut.FindComponents<LocalModePanel>().Any(), TimeSpan.FromSeconds(5));
 
         // The wait sees the panel in the tree, which can be before the
         // renderer has run the panel's first OnAfterRenderAsync — where it
@@ -108,25 +104,6 @@ internal static class HomeTesting
     public static IElement RunButton(this IRenderedComponent<Home> cut) =>
         cut.FindAll("button").First(b => b.TextContent.Trim() == "Run");
 
-    public static IElement DownloadButton(this IRenderedComponent<Home> cut) =>
-        cut.FindAll("button").First(b => b.TextContent.Trim().StartsWith("Download", StringComparison.Ordinal));
-
-    /// <summary>Select <paramref name="fixture"/> in Web mode's file picker.</summary>
-    public static void UploadFixture(this IRenderedComponent<Home> cut, string fixture) =>
-        // [0] is the .xg/.xgp picker; [1] is the optional opening-book input.
-        cut.FindComponents<InputFile>()[0].UploadFiles(
-            InputFileContent.CreateFromBinary(FixtureHelper.ReadFixture(fixture), fixture));
-
-    /// <summary>
-    /// A dismissed picker: a selection gesture that selects nothing. bUnit's
-    /// upload helper refuses an empty selection, so the picker's own change
-    /// event is raised with no files — what the browser sends.
-    /// </summary>
-    public static Task UploadNothingAsync(this IRenderedComponent<Home> cut)
-    {
-        var picker = cut.FindComponents<InputFile>()[0];
-        return cut.InvokeAsync(() => picker.Instance.OnChange.InvokeAsync(new InputFileChangeEventArgs([])));
-    }
 }
 
 /// <summary>
@@ -147,8 +124,6 @@ internal static class HomeStoragePlan
     public const string XgpSuffixLengthKey = "xg_xgpSuffixLength";
     public const string XgpAnonymizeKey = "xg_xgpAnonymize";
     public const string OutputPathKey = "xg_outputPath";
-    public const string CsvFileNameKey = "xg_csvFileName";
-    public const string LastFolderHintKey = "xg_lastFolderHint";
 
     /// <summary>
     /// The numbering record's document as it is stored, restated here as the
@@ -174,10 +149,15 @@ internal static class HomeStoragePlan
     /// is stored — not one that cannot be read — the keys it replaced are
     /// read, and when they hold anything, the record they migrate to is
     /// written as <paramref name="migratedDocument"/> and every key that held
-    /// something is removed.
+    /// something is removed. When <paramref name="holdTheLastRead"/>, the
+    /// restore's last read — the one after which the source is reported — is
+    /// held, and returned for the test to release.
     /// </summary>
-    public static void ExpectHomeRestore(
-        this BrowserStoragePlan plan, Dictionary<string, string>? stored = null, string? migratedDocument = null)
+    public static BrowserStorageHeldRead? ExpectHomeRestore(
+        this BrowserStoragePlan plan,
+        Dictionary<string, string>? stored = null,
+        string? migratedDocument = null,
+        bool holdTheLastRead = false)
     {
         BrowserStorageReadAnswer Answer(string key) =>
             stored is not null && stored.TryGetValue(key, out var value)
@@ -206,7 +186,10 @@ internal static class HomeStoragePlan
                     plan.ExpectRemove(BrowserStorageArea.Local, key, BrowserStorageWriteAnswer.Succeeded);
             }
         }
+        if (holdTheLastRead)
+            return plan.ExpectHeldRead(BrowserStorageArea.Local, XgpAnonymizeKey);
         plan.ExpectRead(BrowserStorageArea.Local, XgpAnonymizeKey, Answer(XgpAnonymizeKey));
+        return null;
     }
 
     /// <summary>
@@ -271,47 +254,43 @@ internal static class HomeStoragePlan
     public static void ExpectLocalPanelRestore(this BrowserStoragePlan plan, BrowserStorageReadAnswer? answer = null) =>
         plan.ExpectRead(BrowserStorageArea.Local, OutputPathKey, answer ?? BrowserStorageReadAnswer.Absent);
 
-    /// <summary>The Web panel's restore — its file name and folder hint.</summary>
-    public static void ExpectWebPanelRestore(this BrowserStoragePlan plan, BrowserStorageReadAnswer? answer = null)
-    {
-        plan.ExpectRead(BrowserStorageArea.Local, CsvFileNameKey, answer ?? BrowserStorageReadAnswer.Absent);
-        plan.ExpectRead(BrowserStorageArea.Local, LastFolderHintKey, answer ?? BrowserStorageReadAnswer.Absent);
-    }
-
     /// <summary>
-    /// One visit to Home in <paramref name="mode"/>: Home's restore (from
-    /// <paramref name="stored"/>), the mode panel's, and the filter panel's
-    /// mount. This boot's filter restoration is the test's to declare, once
-    /// per context.
+    /// One visit to Home: Home's restore (from <paramref name="stored"/>), the
+    /// panel's, the filter panel's mount, and the page's reconciliation. This
+    /// boot's filter restoration is the test's to declare, once per context.
     /// </summary>
     public static void ExpectHomeVisit(
-        this BrowserStoragePlan plan, string mode, Dictionary<string, string>? stored = null, string? migratedDocument = null)
-    {
-        plan.ExpectHomeRestore(stored, migratedDocument);
-        plan.ExpectModePanelRestore(mode);
-        plan.ExpectFilterPanelMount();
-        if (mode == "Local")
-            plan.ExpectLocalReconcile(stored is not null && stored.TryGetValue(NumberingKey, out var document)
-                ? BrowserStorageReadAnswer.Stored(document)
-                : migratedDocument is not null ? BrowserStorageReadAnswer.Stored(migratedDocument) : null);
-    }
+        this BrowserStoragePlan plan, Dictionary<string, string>? stored = null, string? migratedDocument = null) =>
+        plan.ExpectVisit(stored, migratedDocument, holdTheLastRead: false);
 
-    /// <summary>One visit to Home in <paramref name="mode"/> in a browser that refuses every read.</summary>
-    public static void ExpectHomeVisitRefused(this BrowserStoragePlan plan, string mode)
+    /// <summary>
+    /// One visit to Home, as <see cref="ExpectHomeVisit"/>, with the restore's
+    /// last read held: until the test releases it, the source is unresolved —
+    /// no panel, nothing reported.
+    /// </summary>
+    /// <returns>The held read, to release with the browser's answer.</returns>
+    public static BrowserStorageHeldRead ExpectHomeVisitWithTheLastReadHeld(
+        this BrowserStoragePlan plan, Dictionary<string, string>? stored = null) =>
+        plan.ExpectVisit(stored, migratedDocument: null, holdTheLastRead: true)!;
+
+    /// <summary>One visit to Home in a browser that refuses every read.</summary>
+    public static void ExpectHomeVisitRefused(this BrowserStoragePlan plan)
     {
         plan.ExpectHomeRestoreRefused();
-        plan.ExpectModePanelRestore(mode, BrowserStorageReadAnswer.Refused);
+        plan.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Refused);
         plan.ExpectFilterPanelMountRefused();
-        if (mode == "Local")
-            plan.ExpectLocalReconcile(BrowserStorageReadAnswer.Refused);
+        plan.ExpectLocalReconcile(BrowserStorageReadAnswer.Refused);
     }
 
-    private static void ExpectModePanelRestore(
-        this BrowserStoragePlan plan, string mode, BrowserStorageReadAnswer? answer = null)
+    private static BrowserStorageHeldRead? ExpectVisit(
+        this BrowserStoragePlan plan, Dictionary<string, string>? stored, string? migratedDocument, bool holdTheLastRead)
     {
-        if (mode == "Local")
-            plan.ExpectLocalPanelRestore(answer);
-        else
-            plan.ExpectWebPanelRestore(answer);
+        var held = plan.ExpectHomeRestore(stored, migratedDocument, holdTheLastRead);
+        plan.ExpectLocalPanelRestore();
+        plan.ExpectFilterPanelMount();
+        plan.ExpectLocalReconcile(stored is not null && stored.TryGetValue(NumberingKey, out var document)
+            ? BrowserStorageReadAnswer.Stored(document)
+            : migratedDocument is not null ? BrowserStorageReadAnswer.Stored(migratedDocument) : null);
+        return held;
     }
 }

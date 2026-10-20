@@ -13,9 +13,8 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// <b>The clock</b> counts this page's own events, never wall-clock time,
 /// which can be set back: each user edit of the next number or the pattern —
 /// a value the page restored or set is none, and changing a control away and
-/// back is one — each export this page starts — a Local job as it is recorded
-/// owed, a Web download as it begins — and each time the page sets the
-/// controls itself.
+/// back is one — each Local job this page starts, as it is recorded owed —
+/// and each time the page sets the controls itself.
 /// </para>
 /// <para>
 /// <b>When an export started.</b> One this page started started at its own
@@ -54,9 +53,6 @@ internal sealed class XgpEditClock
     // The moment the page last set the controls itself; zero until it does.
     private long _controlsSet;
 
-    // The moment the Web download in hand began.
-    private long _webDownloadStart;
-
     // The moment each Local XGP job this page started was recorded as owed,
     // by its identity.
     private readonly Dictionary<string, long> _localStarts = new(StringComparer.Ordinal);
@@ -66,9 +62,6 @@ internal sealed class XgpEditClock
 
     /// <summary>The page set the controls itself: an edit made before now no longer shows.</summary>
     public void NoteControlsSet() => _controlsSet = ++_now;
-
-    /// <summary>A Web XGP download begins.</summary>
-    public void NoteWebDownloadStart() => _webDownloadStart = ++_now;
 
     /// <summary>A Local XGP job this page is about to start, by the identity it minted, is recorded as owed.</summary>
     /// <exception cref="ArgumentException"><paramref name="jobId"/> is null or empty.</exception>
@@ -109,12 +102,6 @@ internal sealed class XgpEditClock
         foreach (var jobId in _localStarts.Keys.Where(jobId => !keep.Contains(jobId)).ToList())
             _localStarts.Remove(jobId);
     }
-
-    /// <summary>
-    /// Whether the controls follow the Web download in hand, which the record
-    /// took: unless the user has edited since it began.
-    /// </summary>
-    public bool FollowsWebDownload() => _lastEdit <= _webDownloadStart;
 
     /// <summary>
     /// Whether the controls follow <paramref name="taking"/>'s numbering:

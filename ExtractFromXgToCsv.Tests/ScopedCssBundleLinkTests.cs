@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using AngleSharp.Html.Parser;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -30,19 +29,12 @@ namespace ExtractFromXgToCsv.Tests;
 /// </summary>
 public class ScopedCssBundleLinkTests
 {
-    // AppModeService is the entry-assembly marker, for the reason
-    // FilterDocumentEndpointTests gives.
-    private sealed class WebFactory
-        : WebApplicationFactory<ExtractFromXgToCsv.Services.AppModeService>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder) =>
-            builder.UseSetting("AppMode", "Web");
-    }
-
     [Fact]
     public async Task TheRootDocument_DeliversTheNoticesScopedCss()
     {
-        using var factory = new WebFactory();
+        // JobStore is the entry-assembly marker, for the reason
+        // FilterDocumentEndpointTests gives.
+        using var factory = new WebApplicationFactory<ExtractFromXgToCsv.Services.JobStore>();
         using var client = factory.CreateClient();
 
         // 1 — the root document links this host's bundle.

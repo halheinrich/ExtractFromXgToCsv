@@ -185,9 +185,8 @@
                             // every decision, zero survivors can only mean the
                             // filters are genuinely active — so we surface it as a
                             // filtered-to-zero result rather than letting the bland
-                            // "Done — 0 rows" line read as a silent success. Sibling
-                            // of WebModePanel's zero-match notice; folder wording for
-                            // Local mode. IsEmpty is the seam — no FilterConfig peek
+                            // "Done — 0 rows" line read as a silent success, in folder
+                            // wording. IsEmpty is the seam — no FilterConfig peek
                             // — and it is the run's own filter's, never the one now
                             // on screen: this box describes the run.
                             //
@@ -242,7 +241,7 @@
         // labelled with its run and that run's ending, while "Done" and the
         // zero-match notice go; a new source, or the next run, clears it. A
         // cancelled or failed run's record is as true as a completed one's.
-        // Through the one rendering both modes share; it shows nothing for an
+        // Through the one rendering of a skip record; it shows nothing for an
         // empty record.
         <div style="max-width:800px">
             <SkipListNotice class="mt-2" Record="lastRun.Skips" Label="@lastRun.Label" />

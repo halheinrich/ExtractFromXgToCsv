@@ -248,6 +248,39 @@ public class LocalFolderProcessorXgpTests
     }
 
     [Fact]
+    public async Task ProcessXgpAsync_CopiesAnXgpSourceVerbatim_WhenNotAnonymizing()
+    {
+        // An .xgp source already is a single-position analyzed file: the
+        // export copies its exact bytes rather than re-slicing
+        // (XgpPayload.CopiesSourceVerbatim).
+        const string xgpFixture = "MTCH4064_1_22.xgp";
+        var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);
+        var inputDir = Directory.CreateTempSubdirectory("xgp-verbatim-in-").FullName;
+        var outputDir = Path.Combine(Path.GetTempPath(), $"xgp-verbatim-{Guid.NewGuid():N}");
+        File.Copy(Path.Combine(FixtureHelper.FixtureDir, xgpFixture), Path.Combine(inputDir, xgpFixture));
+
+        try
+        {
+            await processor.ProcessXgpAsync(
+                inputDir,
+                outputDir,
+                new DecisionFilterSet(),
+                new XgpExportOptions(),
+                new FilterConfig(),
+                new Progress<ProcessingProgress>());
+
+            var written = Assert.Single(Directory.GetFiles(outputDir, "*.xgp"));
+            Assert.Equal("pos001.xgp", Path.GetFileName(written));
+            Assert.Equal(FixtureHelper.ReadFixture(xgpFixture), File.ReadAllBytes(written));
+        }
+        finally
+        {
+            Directory.Delete(inputDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProcessXgpAsync_InvalidOptions_Throw()
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);

@@ -33,14 +33,14 @@ public class HomeOutputFormatRestoreTests : BunitContext
 
     public HomeOutputFormatRestoreTests()
     {
-        this.AddHomeServices("Local");
+        this.AddHomeServices();
         _storage = BrowserStoragePlan.On(JSInterop);
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
     }
 
     private IRenderedComponent<Home> RenderWithStoredFormat(string token)
     {
-        _storage.ExpectHomeVisit("Local", new() { [HomeStoragePlan.OutputFormatKey] = token });
+        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.OutputFormatKey] = token });
         return this.RenderHome();
     }
 

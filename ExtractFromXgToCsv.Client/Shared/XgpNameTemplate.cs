@@ -27,9 +27,8 @@ internal sealed class XgpNameTemplate
     /// <summary>
     /// Characters rejected in pattern literals and replaced with <c>'_'</c>
     /// in token output: the Windows-invalid filename set, checked explicitly
-    /// so Web mode (browser-sandbox zip entries) and Local mode (server
-    /// filesystem) enforce the same rule regardless of what OS the runtime
-    /// reports. Control characters are treated the same way.
+    /// so the browser's preview and the server's filesystem enforce the same
+    /// rule regardless of what OS the runtime reports. Control characters are treated the same way.
     /// </summary>
     public static IReadOnlyList<char> InvalidFileNameChars { get; } = [.. InvalidCharList];
 

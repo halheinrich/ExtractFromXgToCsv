@@ -21,13 +21,12 @@ namespace ExtractFromXgToCsv.Tests;
 /// </summary>
 public class ProcessEndpointTests : IDisposable
 {
-    // AppModeService is the entry-assembly marker; see FilterDocumentEndpointTests
-    // for why `Program` cannot be named here.
-    private sealed class LocalFactory : WebApplicationFactory<AppModeService>
+    // JobStore is the entry-assembly marker; see FilterDocumentEndpointTests
+    // for why.
+    private sealed class LocalFactory : WebApplicationFactory<JobStore>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            builder.UseSetting("AppMode", "Local");
             // Empty disables the opening book: these runs need none, and an
             // auto-detected install would be loaded by every host.
             builder.UseSetting("OpeningBookPath", "");

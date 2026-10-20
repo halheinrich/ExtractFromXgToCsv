@@ -33,7 +33,7 @@ internal sealed class LocalServer : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("xg-protocol-").FullName;
     private readonly Action<IWebHostBuilder>? _configure;
     private readonly IOutputDestination _destination;
-    private WebApplicationFactory<AppModeService> _factory;
+    private WebApplicationFactory<JobStore> _factory;
 
     /// <summary>A server over a fresh input folder holding one fixture match.</summary>
     /// <param name="configure">Anything more the test's host needs — a logger, say.</param>
@@ -70,10 +70,11 @@ internal sealed class LocalServer : IDisposable
         ended.Dispose();
     }
 
-    private WebApplicationFactory<AppModeService> Start() =>
-        new WebApplicationFactory<AppModeService>().WithWebHostBuilder(builder =>
+    // JobStore is the entry-assembly marker; see FilterDocumentEndpointTests
+    // for why.
+    private WebApplicationFactory<JobStore> Start() =>
+        new WebApplicationFactory<JobStore>().WithWebHostBuilder(builder =>
         {
-            builder.UseSetting("AppMode", "Local");
             // Empty disables the opening book: these runs need none.
             builder.UseSetting("OpeningBookPath", "");
             builder.ConfigureTestServices(services => services.AddScoped(_ => new LocalFolderProcessor(
@@ -460,14 +461,14 @@ internal sealed class LocalPage : IAsyncDisposable
         _context.Services.AddSingleton(new BrowserStorage(storage));
         _context.Services.AddSingleton(identities);
         _context.Services.AddSingleton(FastTiming);
-        var stub = new StubAppModeHandler("Local") { Processing = server.Wire };
+        var stub = new StubServerHandler() { Processing = server.Wire };
         _context.Services.AddSingleton(new HttpClient(stub) { BaseAddress = new Uri("http://localhost/") });
         if (jobs is not null)
             _context.Services.AddScoped(services => jobs(new LocalJobsClient(services.GetRequiredService<HttpClient>())));
 
         Home = _context.Render<Home>();
         if (reconciled)
-            Home.WaitForModePanel();
+            Home.WaitForLocalPanel();
         else
             Home.WaitForState(() => Home.FindComponents<LocalModePanel>().Any(), NoticeTesting.OperationBound);
     }

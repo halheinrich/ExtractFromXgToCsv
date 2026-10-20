@@ -201,17 +201,4 @@ public class XgpEditClockTests
         Assert.Equal(2, _clock.HeldStarts);
         Assert.True(_clock.Follows(Taking(ledger, 2)));
     }
-
-    // ── A Web download ──────────────────────────────────────────────────────
-
-    [Fact]
-    public void AnEditBeforeAWebDownloadBegan_IsFollowedPast_AndOneSinceStands()
-    {
-        _clock.NoteEdit();
-        _clock.NoteWebDownloadStart();
-        Assert.True(_clock.FollowsWebDownload());
-
-        _clock.NoteEdit();
-        Assert.False(_clock.FollowsWebDownload());
-    }
 }

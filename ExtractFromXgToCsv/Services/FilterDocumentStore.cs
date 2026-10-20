@@ -2,19 +2,15 @@ namespace ExtractFromXgToCsv.Services;
 
 /// <summary>
 /// Text-file relay for the client's saved-filters documents: reads and writes
-/// one named file inside a caller-supplied folder — the Local-mode source
-/// folder the request names. The server owns <b>safety, not policy</b>: it
+/// one named file inside a caller-supplied folder — the source folder the
+/// request names. The server owns <b>safety, not policy</b>: it
 /// enforces the simple-filename rule (<see cref="IsValidFileName"/>) so a
 /// request can never escape its folder, but it knows nothing about which file
 /// names the filter store uses — those come from the client, whose
 /// <c>XgFilter_Razor</c> reference this project deliberately does not share.
 /// </summary>
 /// <remarks>
-/// Dependency-free IO glue, registered unconditionally (unlike the
-/// Local-guarded processing services): the Local-mode gate lives in
-/// <c>FilterDocumentController</c> as an explicit action guard, so Web mode
-/// answers with an observable 404 rather than a container resolution failure.
-/// <c>public</c> by the same framework constraint as the other server services
+/// Dependency-free IO glue. <c>public</c> by the same framework constraint as the other server services
 /// — controller constructor injection.
 /// </remarks>
 public class FilterDocumentStore

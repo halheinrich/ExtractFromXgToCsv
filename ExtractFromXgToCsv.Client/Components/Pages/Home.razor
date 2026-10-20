@@ -21,8 +21,8 @@
 
 @* A condition notice, dismissible per occurrence (SPEC-notices.md §1, §2).
    The occurrence is the app's, not this page's: the browser refused a storage
-   call this visit, whoever made it — this page's settings, either mode
-   panel's, or the filter surface's own. Its owner is the app-scoped
+   call this visit, whoever made it — this page's settings, the panel's,
+   or the filter surface's own. Its owner is the app-scoped
    BrowserStorageCondition, which holds the occurrence and the dismissal both;
    this page keeps neither bit, so a remount over a dismissed notice says
    nothing again, and a refusal made while this page was absent is shown on
@@ -65,28 +65,14 @@
     <div class="form-check form-check-inline">
         <input class="form-check-input" type="radio" name="outputFormat" id="fmtPptx"
                checked="@(_outputFormat == OutputFormat.Pptx)"
-               disabled="@(_appMode != "Local")"
                @onchange="@(() => SetOutputFormat(OutputFormat.Pptx))" />
-        <label class="form-check-label" for="fmtPptx">
-            PPTX
-            @if (_appMode != "Local")
-            {
-                <small class="text-muted ms-1">(Local mode only)</small>
-            }
-        </label>
+        <label class="form-check-label" for="fmtPptx">PPTX</label>
     </div>
     <div class="form-check form-check-inline">
         <input class="form-check-input" type="radio" name="outputFormat" id="fmtPdf"
                checked="@(_outputFormat == OutputFormat.Pdf)"
-               disabled="@(_appMode != "Local")"
                @onchange="@(() => SetOutputFormat(OutputFormat.Pdf))" />
-        <label class="form-check-label" for="fmtPdf">
-            PDF
-            @if (_appMode != "Local")
-            {
-                <small class="text-muted ms-1">(Local mode only)</small>
-            }
-        </label>
+        <label class="form-check-label" for="fmtPdf">PDF</label>
     </div>
     <div class="form-check form-check-inline">
         <input class="form-check-input" type="radio" name="outputFormat" id="fmtXgp"
@@ -100,13 +86,13 @@
 {
     @* The saved numbering record cannot be read (SPEC-notices.md §7.5): it
        may hold exports this browser has not accounted for, so it is never
-       read as nothing outstanding. A gate reason — XGP export is blocked, in
-       either mode, until the user resolves it — so not dismissible (§4), and
-       assertive. It suggests no number. Its action is the user's deliberate
-       resolution, which replaces the document with a fresh record and nothing
-       more: the page then reconciles before XGP is admitted. The wording is
-       Hal's (2026-10-12): one text in both modes, and in Local mode, whose
-       exports write files to a folder, a sentence more. *@
+       read as nothing outstanding. A gate reason — XGP export is blocked
+       until the user resolves it — so not dismissible (§4), and assertive. It
+       suggests no number. Its action is the user's deliberate resolution,
+       which replaces the document with a fresh record and nothing more: the
+       page then reconciles before XGP is admitted. The wording is Hal's
+       (2026-10-12), with the sentence for exports that write files to a
+       folder. *@
     @if (_numbering.IsUnreadable)
     {
         <Notice class="unreadable-numbering-notice mb-3" style="max-width:800px"
@@ -115,10 +101,7 @@
                 This browser's saved XGP numbering couldn't be read: it may be damaged, or saved by
                 a newer version of this app. XGP export waits until you decide. Continuing replaces
                 it with a fresh record, so check Next number before you export.
-                @if (_appMode == "Local")
-                {
-                    <text>It may record exports that haven't been accounted for, so check the output folder too.</text>
-                }
+                It may record exports that haven't been accounted for, so check the output folder too.
             </div>
             <button class="btn btn-sm btn-outline-dark mt-2" @onclick="ResolveUnreadableAsync">
                 Replace it and continue
@@ -213,87 +196,64 @@
     </div>
 }
 
-@* The whole filter surface — the filter panel, and in Local mode the
-   saved-filters section with its degrade notices — is one producer composite
-   over the app-scoped FilterSetup. This host binds only what is its own to
-   say here: the saved-filters storage seam (per mode — see Storage). The
-   source is reported to the owner, not bound (see ReportSource), and the
-   filter in effect is read from it (see FilterInEffect); storage refusals
-   reach BrowserStorageCondition, this app's registered sink.
+@* The whole filter surface — the filter panel, and the saved-filters section
+   with its degrade notices — is one producer composite over the app-scoped
+   FilterSetup. This host binds only what is its own to say here: the
+   saved-filters storage seam (see Storage). The source is reported to the
+   owner, not bound (see ReportSource), and the filter in effect is read from
+   it (see FilterInEffect); storage refusals reach BrowserStorageCondition,
+   this app's registered sink.
 
    Mounted from the first render. The owner outlives this page, so a remount
    shows the existing setup as it stands; nothing here waits on this page's
    restore, because nothing is told a source until this page knows it. *@
 <FilterSurface Storage="Storage" />
 
-@* No mode panel until the restore has resolved the mode: the panels are where
-   a source is latched (a folder committed, files picked), and the mode decides
-   which source there is. Rendering Web's panel while the answer is not yet in
-   would let a pick land in a Local app, and would read and write the Web
-   panel's settings on every Local visit. *@
+@* No panel until the restore has resolved the source: the panel is where a
+   folder is committed, and a commit made before the restored folder had
+   arrived would be a source the page could not yet place. *@
 @if (_sourceResolved)
 {
-    if (_appMode == "Local")
-    {
-        <LocalModePanel OutputFormat="_outputFormat"
-                        Source="Source"
-                        FilterInEffect="FilterInEffect"
-                        FolderPath="@_folderPathText"
-                        FolderPathChanged="OnFolderPathEdited"
-                        OnFolderPathCommitted="OnFolderPathCommitted"
-                        XgpOptions="_xgpOptions"
-                        XgpAnonymize="_xgpAnonymize"
-                        StartState="_reconciler.State"
-                        OnXgpJobStarting="OnXgpJobStartingAsync"
-                        OnXgpJobEnded="_reconciler.ApplyEndedAsync"
-                        OnXgpJobNeverStarted="OnXgpJobNeverStartedAsync"
-                        OnReconcileNeeded="_reconciler.ReconcileAsync" />
-    }
-    else
-    {
-        <WebModePanel OutputFormat="_outputFormat"
-                      FilterInEffect="FilterInEffect"
-                      OnSelectionChanged="OnWebSelectionChanged"
-                      XgpOptions="_xgpOptions"
-                      XgpAnonymize="_xgpAnonymize"
-                      XgpNumberingUnreadable="_numbering.IsUnreadable"
-                      OnXgpExportStarting="OnXgpExportStarting"
-                      OnXgpExported="OnXgpExported" />
-    }
+    <LocalModePanel OutputFormat="_outputFormat"
+                    Source="Source"
+                    FilterInEffect="FilterInEffect"
+                    FolderPath="@_folderPathText"
+                    FolderPathChanged="OnFolderPathEdited"
+                    OnFolderPathCommitted="OnFolderPathCommitted"
+                    XgpOptions="_xgpOptions"
+                    XgpAnonymize="_xgpAnonymize"
+                    StartState="_reconciler.State"
+                    OnXgpJobStarting="OnXgpJobStartingAsync"
+                    OnXgpJobEnded="_reconciler.ApplyEndedAsync"
+                    OnXgpJobNeverStarted="OnXgpJobNeverStartedAsync"
+                    OnReconcileNeeded="_reconciler.ReconcileAsync" />
 }
 
 @code {
-    private string _appMode = "Web";
     private OutputFormat _outputFormat = OutputFormat.Csv;
 
     // ── Source identity ─────────────────────────────────────────────────────
     //
-    // The facts the source is minted from arrive asynchronously: the folder
-    // path from storage, and the mode from /api/appmode, both in the
-    // first-render restore below. Until both have arrived this page's answer
-    // to "what is the current source?" is not "none" — it is "not yet known".
-    // FilterSetup.ReportSource(null) is a real answer and ends an existing
-    // setup, so the source is reported only once it is known: _sourceResolved
-    // is false until the restore has resolved the mode and the folder, and
-    // ReportSource does nothing before then. No mode panel renders before then
-    // either, so no gesture can latch a source the page cannot yet place. A
-    // return to this page over an unchanged folder therefore reports the same
-    // token once, which ends nothing — the setup, its baseline and its
-    // generation stand.
+    // The folder path the source is minted from arrives asynchronously, from
+    // storage, in the first-render restore below. Until it has arrived this
+    // page's answer to "what is the current source?" is not "none" — it is
+    // "not yet known". FilterSetup.ReportSource(null) is a real answer and
+    // ends an existing setup, so the source is reported only once it is
+    // known: _sourceResolved is false until the restore has resolved the
+    // folder, and ReportSource does nothing before then. No panel renders
+    // before then either, so no gesture can latch a source the page cannot
+    // yet place. A return to this page over an unchanged folder therefore
+    // reports the same token once, which ends nothing — the setup, its
+    // baseline and its generation stand.
     private bool _sourceResolved;
 
-    // Local mode's source is the input folder path. Two fields on purpose:
+    // The source is the input folder path. Two fields on purpose:
     // _folderPathText follows every keystroke (LocalModePanel is a controlled
     // input; persistence stays per-keystroke), while _localSourcePath moves
     // only at the @onchange boundary — the source must never change per
     // keystroke.
     private string _folderPathText = string.Empty;
     private string? _localSourcePath;
-
-    // Web mode's source is the file selection, whose bytes and rows belong to
-    // WebModePanel; the panel mints the selection's token and hands it here
-    // (OnWebSelectionChanged). Null while nothing is selected.
-    private FilterSourceToken? _webSelection;
 
     // The saved-filters storage seam, created once over a delegate reading the
     // latched folder: FilterSurface rebuilds its store when the bound Storage
@@ -309,21 +269,18 @@
     //
     // The one fact of whether this page is still the page: cancelled in
     // Dispose. The owners it reports to outlive it, and its restore is async —
-    // a navigation can dispose this page while it waits on storage or on
-    // /api/appmode, and a newer page can establish another source meanwhile.
-    // Work this page no longer owns is cancelled (the app-mode request is
-    // handed the token; each restore step stops on it), and nothing is
-    // published once it is cancelled (ReportSource). A storage call already
+    // a navigation can dispose this page while it waits on storage, and a
+    // newer page can establish another source meanwhile. Work this page no
+    // longer owns stops (each restore step stops on the token), and nothing
+    // is published once it is cancelled (ReportSource). A storage call already
     // in flight is not abandoned: it completes, and a refusal still reaches
     // the app-scoped condition — only this page's use of the answer stops.
     private readonly CancellationTokenSource _lifetime = new();
 
     /// <summary>
     /// The current source's token — the one property both the reports and the
-    /// reads use. Local = the latched folder path; Web = the token of the
-    /// selection WebModePanel holds. Null while no source exists (blank path,
-    /// nothing selected). The output path is not a source and never appears
-    /// here.
+    /// reads use: the latched folder path's. Null while no source exists (a
+    /// blank path). The output path is not a source and never appears here.
     ///
     /// <para>
     /// The path goes to <see cref="FilterSourceToken.FromPath"/> in the
@@ -332,16 +289,13 @@
     /// latched path itself keeps the user's spelling, for IO and display.
     /// </para>
     /// </summary>
-    private FilterSourceToken? Source => _appMode == "Local"
-        ? _localSourcePath is { } path
-            ? FilterSourceToken.FromPath(path)
-            : null
-        : _webSelection;
+    private FilterSourceToken? Source =>
+        _localSourcePath is { } path ? FilterSourceToken.FromPath(path) : null;
 
     /// <summary>
     /// The filter in effect for the source on screen right now, or
     /// <see langword="null"/> when none is — the one filter fact this page
-    /// hands the mode panels, read from the owner on each ask
+    /// hands the panel, read from the owner on each ask
     /// (<see cref="FilterSetupSnapshot.ConfigInEffectFor"/>, a new instance
     /// each call). Source-relative by construction: a setup whose source is not
     /// this page's current one reads as nothing in effect. The ready empty
@@ -352,13 +306,12 @@
         Source is { } source ? FilterSetup.Current.ConfigInEffectFor(source) : null;
 
     /// <summary>
-    /// The composite's storage seam: the HTTP adapter while Local mode has a
-    /// latched folder to address, null otherwise — a blank path must render no
-    /// saved-filters section, never a load failure. Web mode is always null
-    /// (ruled: no second store; localStorage fallback is forbidden drift).
+    /// The composite's storage seam: the HTTP adapter while a folder is
+    /// latched to address, null otherwise — a blank path must render no
+    /// saved-filters section, never a load failure.
     /// </summary>
     private IDocumentStorage? Storage =>
-        _appMode == "Local" && _localSourcePath is not null ? _documentStorage : null;
+        _localSourcePath is not null ? _documentStorage : null;
 
     protected override void OnInitialized()
     {
@@ -387,8 +340,8 @@
     }
 
     // XGP export options. Home owns the option state (and its persistence);
-    // the panels receive an immutable XgpExportOptions snapshot and report
-    // back through OnXgpExported so the counter can advance.
+    // the panel receives an immutable XgpExportOptions snapshot, and the
+    // counter advances as the record takes the panel's jobs (§7.5).
     private string _xgpPattern = XgpExportOptions.DefaultNamePattern;
     private string _xgpTokenSelection = string.Empty;
     private int _xgpNextNumber = 1;
@@ -397,11 +350,11 @@
     private XgpExportOptions _xgpOptions = new();
 
     // The numbering record (SPEC-notices.md §7.5): one storage document, of
-    // which this page is the one owner — the panels never write it. Its
+    // which this page is the one owner — the panel never writes it. Its
     // numbering is what "next number" continues while the pattern matches it.
     private XgpNumberingKeeper _numbering = default!;
 
-    // Local mode's reconciliation with the server (§7.5): the instance every
+    // The page's reconciliation with the server (§7.5): the instance every
     // start names, the XGP ledger's entries applied, the owed jobs followed or
     // settled, and what a start may do now. It keeps the record through
     // _numbering, and lives as long as this page.
@@ -485,45 +438,28 @@
         _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
         RebuildXgpOptions();
 
-        try
-        {
-            var response = await Http.GetFromJsonAsync<AppModeResponse>("/api/appmode", lifetime);
-            _appMode = response?.Mode ?? "Web";
-        }
-        catch (Exception) when (!lifetime.IsCancellationRequested)
-        {
-            _appMode = "Web";
-        }
-        lifetime.ThrowIfCancellationRequested();
-
-        if ((_outputFormat == OutputFormat.Pptx || _outputFormat == OutputFormat.Pdf)
-            && _appMode != "Local")
-            _outputFormat = OutputFormat.Csv;
-
-        // Last, after every fact Source is minted from: the source is known
-        // now, so report it. An unchanged source — a return over the same
-        // folder — ends nothing; a different one, or none, ends the setup.
+        // Last, after the restore's every read: the source is known now, so
+        // report it. An unchanged source — a return over the same folder —
+        // ends nothing; a different one, or none, ends the setup.
         _sourceResolved = true;
         ReportSource();
 
         StateHasChanged();
 
-        // Local mode reconciles with the server as the page loads
+        // The page reconciles with the server as it loads
         // (SPEC-notices.md §7.5) — after the first render, so the panel is
         // on screen saying it is checking while the answer comes in.
-        if (_appMode == "Local")
-            await _reconciler.StartAsync();
+        await _reconciler.StartAsync();
     }
 
     // ── Source reporting ────────────────────────────────────────────────────
 
     // Tells the owner the current source at each moment this page latches
-    // one: the restore resolving the mode and folder, a Local folder commit,
-    // a Web selection change. Nothing before the restore has resolved the
-    // source (see _sourceResolved) — the markup already renders no panel to
-    // latch one before then — and nothing once this page's lifetime has
-    // ended: a disposed page's source is not the app's. Both rules are kept
-    // here, where the report is made.
+    // one: the restore resolving the folder, and a folder commit. Nothing
+    // before the restore has resolved the source (see _sourceResolved) — the
+    // markup already renders no panel to latch one before then — and nothing
+    // once this page's lifetime has ended: a disposed page's source is not
+    // the app's. Both rules are kept here, where the report is made.
     private void ReportSource()
     {
         if (_sourceResolved && !_lifetime.IsCancellationRequested)
@@ -551,15 +487,6 @@
     {
         var trimmed = path.Trim();
         _localSourcePath = trimmed.Length == 0 ? null : trimmed;
-    }
-
-    // A Web-mode selection gesture replaced or cleared the selection: hold its
-    // token and report it. A new selection carries a new token, so the setup
-    // ends; a cleared one reports no source.
-    private void OnWebSelectionChanged(FilterSourceToken? selection)
-    {
-        _webSelection = selection;
-        ReportSource();
     }
 
     private async Task SetOutputFormat(OutputFormat fmt)
@@ -626,40 +553,12 @@
     }
 
     // Anonymize is independent of the naming options (XgpExportOptions), so it
-    // isn't folded into RebuildXgpOptions — it rides to the panels as its own
+    // isn't folded into RebuildXgpOptions — it rides to the panel as its own
     // bool parameter and persists under its own key.
     private async Task OnXgpAnonymizeChanged(ChangeEventArgs e)
     {
         _xgpAnonymize = e.Value is bool b && b;
         await Settings.WriteAsync("xg_xgpAnonymize", _xgpAnonymize.ToString());
-    }
-
-    /// <summary>
-    /// Web mode's accounting: a download committed
-    /// <see cref="XgpExportCommit.Count"/> entries under the options it
-    /// captured, at its successful hand-off. Records the numbering those
-    /// entries used, so the next export under the same pattern continues where
-    /// this one ended. An export that committed nothing advances nothing.
-    /// Local mode's accounting reaches the record through the server's XGP
-    /// ledger instead (<see cref="LocalReconciler"/>).
-    /// </summary>
-    /// <remarks>
-    /// Everything recorded comes from <paramref name="commit"/>, never from
-    /// the controls: the user may have changed the pattern or the numbers while
-    /// the export ran, and the files were named by what it captured. It is one
-    /// checkpoint of the numbering record — the whole document, from a fresh
-    /// read, in one write; a refused write leaves it recorded in this page.
-    /// When the record took the download — it committed something — the
-    /// controls follow that taking's numbering (<see cref="Follow"/>), unless
-    /// the user has edited since the download began (<see cref="OnXgpExportStarting"/>):
-    /// each download taken is followed, though its numbering may equal the one
-    /// the record held. A download the record did not take moves nothing.
-    /// </remarks>
-    private async Task OnXgpExported(XgpExportCommit commit)
-    {
-        if (await _numbering.RecordExportAsync(commit) is { } taken && _edits.FollowsWebDownload())
-            Follow(taken);
-        StateHasChanged();
     }
 
     // ── The controls follow the record ──────────────────────────────────────
@@ -681,9 +580,6 @@
         _edits.ForgetLocalStart(job.JobId);
         return false;
     }
-
-    // A Web XGP download beginning: its moment is noted.
-    private void OnXgpExportStarting() => _edits.NoteWebDownloadStart();
 
     // A Local XGP job that never ran — every attempt refused, or Stop settled
     // it as retired: its moment orders nothing, and the host resolves it.
@@ -735,8 +631,6 @@
     private Task ResolveLostAsync(string jobId) => _reconciler.ResolveLostAsync(jobId);
 
     // The unreadable-record notice's action: the user's deliberate
-    // resolution. In Local mode the page then reconciles before XGP is
-    // admitted; Web mode has nothing to reconcile with.
-    private Task ResolveUnreadableAsync() =>
-        _appMode == "Local" ? _reconciler.ResolveUnreadableAsync() : _numbering.ResolveUnreadableAsync();
+    // resolution. The page then reconciles before XGP is admitted.
+    private Task ResolveUnreadableAsync() => _reconciler.ResolveUnreadableAsync();
 }

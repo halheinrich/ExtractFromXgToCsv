@@ -4,27 +4,16 @@ using Microsoft.AspNetCore.Mvc;
 namespace ExtractFromXgToCsv.Controllers;
 
 /// <summary>
-/// Local-mode pass-through for the client's saved-filters documents: reads and
-/// writes one named text file in the request's source folder via
+/// Pass-through for the client's saved-filters documents: reads and writes one
+/// named text file in the request's source folder via
 /// <see cref="FilterDocumentStore"/>. The server relays bytes and owns safety
 /// (the simple-filename rule), never policy — which files exist and what they
 /// contain is entirely the client's business.
-/// <para>
-/// The Local-mode gate is an <b>explicit action guard</b> (<c>404</c> when
-/// <see cref="AppModeService.IsLocal"/> is false), deviating from the
-/// <see cref="OpeningBookController"/> DI-constructibility precedent
-/// deliberately: an observable 404 — "this endpoint does not exist in Web
-/// mode" — is testable end to end, where an unresolvable constructor
-/// dependency is only a 500.
-/// </para>
 /// </summary>
 /// <param name="store">The file relay doing the actual IO.</param>
-/// <param name="appMode">The configured mode; non-Local requests get 404.</param>
 [ApiController]
 [Route("api/filterdocument")]
-public class FilterDocumentController(
-    FilterDocumentStore store,
-    AppModeService appMode) : ControllerBase
+public class FilterDocumentController(FilterDocumentStore store) : ControllerBase
 {
     /// <summary>
     /// GET /api/filterdocument?folder=…&amp;name=… — the named file's text as
@@ -63,11 +52,9 @@ public class FilterDocumentController(
         return Ok();
     }
 
-    // The shared request gate: the mode guard first (a Web deployment serves
-    // no file relay at all), then the shape rules the relay's safety rides on.
+    // The shared request gate: the shape rules the relay's safety rides on.
     private IActionResult? Validate(string folder, string name)
     {
-        if (!appMode.IsLocal) return NotFound();
         if (string.IsNullOrWhiteSpace(folder))
             return BadRequest("A source folder is required.");
         if (!FilterDocumentStore.IsValidFileName(name))

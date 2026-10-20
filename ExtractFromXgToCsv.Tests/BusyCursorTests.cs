@@ -10,9 +10,9 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Pins the busy-cursor discipline, which both panels share and neither owns:
-/// each puts the <c>is-busy</c> marker on its root for exactly as long as its
-/// own busy flag is up, and app.css turns that one class into the cursor.
+/// Pins the busy-cursor discipline: the panel puts the <c>is-busy</c> marker
+/// on its root for exactly as long as its own busy flag is up, and app.css
+/// turns that one class into the cursor.
 /// Because the marker rides the flag rather than any particular busy window,
 /// a window added later inherits the cursor for free — and these tests are the
 /// only place a panel that quietly stopped marking its root would be caught.
@@ -23,8 +23,8 @@ namespace ExtractFromXgToCsv.Tests;
 /// can regress. The other half — that app.css still defines a rule for this
 /// class — is deliberately unpinned: it is one rule in one file, and asserting
 /// on stylesheet text would buy a brittle string match rather than a contract.
-/// Both panels are exercised in one place because the contract is one
-/// contract; a third panel's pin belongs here too (issue halheinrich/backgammon#77).
+/// Another panel's pin belongs here too, because the contract is one contract
+/// (issue halheinrich/backgammon#77).
 /// </remarks>
 public class BusyCursorTests : BunitContext
 {
@@ -49,13 +49,6 @@ public class BusyCursorTests : BunitContext
             .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.StartState, LocalPanelRuns.Ready)
-            .Add(c => c.XgpAnonymize, false));
-
-    private IRenderedComponent<WebModePanel> RenderWeb() =>
-        Render<WebModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterInEffect, (FilterConfig?)null)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
             .Add(c => c.XgpAnonymize, false));
 
     /// <summary>A snapshot mid-render: every file read, timings stopped early.</summary>
@@ -121,53 +114,6 @@ public class BusyCursorTests : BunitContext
         cut.Render();
 
         Assert.NotEmpty(cut.FindAll("span.text-success"));
-        Assert.Empty(cut.FindAll(BusyRoot));
-    }
-
-    /// <summary>
-    /// Web mode's marker is raised by the same <c>StateHasChanged</c> that
-    /// renders the busy notice, so the yield that gets the notice painted before
-    /// the WASM thread is taken gets the cursor with it — see
-    /// <see cref="WebModePanelBusyAffordanceTests"/> for the ordering half.
-    /// Observing from inside the body is what makes the window the assertion is
-    /// about the window the user is actually stuck in.
-    /// </summary>
-    [Fact]
-    public async Task WebPanel_MarksItsRoot_ForTheWholeBusyBody()
-    {
-        var cut = RenderWeb();
-
-        var markersDuringBody = 0;
-        var noticesInsideMarker = 0;
-        await cut.InvokeAsync(() => cut.Instance.RunBusyForTest(
-            "Working on it…",
-            () =>
-            {
-                markersDuringBody = cut.FindAll(BusyRoot).Count;
-                noticesInsideMarker = cut.FindAll($"{BusyRoot} .busy-notice").Count;
-                return Task.CompletedTask;
-            }));
-
-        Assert.Equal(1, markersDuringBody);
-        Assert.Equal(1, noticesInsideMarker);
-        // ...and released with the notice when the body returns.
-        Assert.Empty(cut.FindAll(BusyRoot));
-    }
-
-    /// <summary>
-    /// The wrapper's <c>finally</c> covers the marker too — a throwing body must
-    /// not leave the cursor spinning over a panel that is done.
-    /// </summary>
-    [Fact]
-    public async Task WebPanel_ReleasesTheMarker_WhenTheBodyThrows()
-    {
-        var cut = RenderWeb();
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            cut.InvokeAsync(() => cut.Instance.RunBusyForTest(
-                "Working on it…",
-                () => throw new InvalidOperationException("boom"))));
-
         Assert.Empty(cut.FindAll(BusyRoot));
     }
 }

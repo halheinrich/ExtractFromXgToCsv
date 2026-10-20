@@ -36,24 +36,19 @@ internal static class bUnitTestHelpers
 }
 
 /// <summary>
-/// Minimal <see cref="HttpMessageHandler"/> stub. Returns the
-/// <see cref="ExtractFromXgToCsv.Client.Shared.AppModeResponse"/> JSON
-/// object shape for <c>/api/appmode</c>, matching the real server's
-/// <see cref="ExtractFromXgToCsv.Controllers.AppModeController"/>, and an
-/// in-memory edition of the saved-filters file relay
+/// Minimal <see cref="HttpMessageHandler"/> stub of the server: an in-memory
+/// edition of the saved-filters file relay
 /// (<c>GET</c>/<c>PUT /api/filterdocument</c>, matching
 /// <see cref="ExtractFromXgToCsv.Controllers.FilterDocumentController"/>'s
 /// 200/204 contract) — Home hosts a <c>FilterSurface</c> whose store reads
-/// the document at mount and on every source change, so a Local-mode Home
-/// test without these routes would degrade to LoadFailed. Anything else goes
+/// the document at mount and on every source change, so a Home test without
+/// these routes would degrade to LoadFailed. Anything else goes
 /// to <see cref="Processing"/> when a test supplies one; without one, the XGP
 /// ledger a Local page reconciles against is answered empty, and everything
 /// else 404s so a stray request fails loudly rather than hanging.
 /// </summary>
-internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
+internal sealed class StubServerHandler : HttpMessageHandler
 {
-    private readonly Queue<HeldAppMode> _appModeHolds = new();
-
     /// <summary>
     /// The Local processing endpoints, for a test that runs a job through
     /// Home — a <see cref="CapturingProcessHandler"/>, or the real server over
@@ -61,58 +56,6 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
     /// ledger and leaves the rest 404.
     /// </summary>
     public HttpMessageHandler? Processing { get; init; }
-
-    /// <summary>
-    /// Hold the next <c>/api/appmode</c> request pending until its
-    /// <see cref="HeldAppMode.Release"/> — the seam that makes Home's
-    /// mode-unresolved window observable instead of a race. Each call holds
-    /// one request, in order; later requests are answered at once.
-    /// </summary>
-    public HeldAppMode HoldNextAppMode()
-    {
-        var hold = new HeldAppMode();
-        lock (_appModeHolds) _appModeHolds.Enqueue(hold);
-        return hold;
-    }
-
-    /// <summary>One held <c>/api/appmode</c> request.</summary>
-    public sealed class HeldAppMode
-    {
-        private readonly TaskCompletionSource _release =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _reached =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<bool> _ended =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        /// <summary>Completes when the request has arrived and is being held.</summary>
-        public Task Reached => _reached.Task;
-
-        /// <summary>
-        /// Completes when the request has ended: <see langword="true"/> if the
-        /// caller cancelled it while held, <see langword="false"/> if it was
-        /// answered.
-        /// </summary>
-        public Task<bool> Cancelled => _ended.Task;
-
-        /// <summary>Answer the request, unless it was cancelled first.</summary>
-        public void Release() => _release.TrySetResult();
-
-        internal async Task WaitAsync(CancellationToken cancellationToken)
-        {
-            _reached.TrySetResult();
-            try
-            {
-                await _release.Task.WaitAsync(cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                _ended.TrySetResult(true);
-                throw;
-            }
-            _ended.TrySetResult(false);
-        }
-    }
 
     /// <summary>
     /// The in-memory documents served and updated by the filterdocument
@@ -131,21 +74,6 @@ internal sealed class StubAppModeHandler(string mode) : HttpMessageHandler
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var path = request.RequestUri?.AbsolutePath;
-
-        if (path == "/api/appmode")
-        {
-            HeldAppMode? hold;
-            lock (_appModeHolds) _appModeHolds.TryDequeue(out hold);
-            if (hold is not null)
-                await hold.WaitAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    $"{{\"Mode\":\"{mode}\"}}",
-                    System.Text.Encoding.UTF8,
-                    "application/json"),
-            };
-        }
 
         if (path == "/api/filterdocument")
         {

@@ -8,11 +8,10 @@ namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
 /// A record of skipped units, in the order they were skipped: the one record
-/// type both modes keep (the umbrella's <c>SPEC-notices.md</c> §7.1). Local
-/// mode's run record, Web mode's selection record ("this selection") and its
-/// download record ("the last download") are each one of these, and one
-/// rendering shows any of them (<c>SkipListNotice</c>). A shared type does
-/// not merge the owners: each record belongs to whoever keeps it.
+/// type (the umbrella's <c>SPEC-notices.md</c> §7.1). A Local run's record is
+/// one of these, and one rendering shows any of them (<c>SkipListNotice</c>).
+/// A shared type does not merge the owners: each record belongs to whoever
+/// keeps it.
 /// </summary>
 /// <remarks>
 /// <para>

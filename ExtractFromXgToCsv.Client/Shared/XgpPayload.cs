@@ -6,9 +6,8 @@ namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
 /// One decision's <c>.xgp</c> payload, prepared from its decoded source: the
-/// one statement, for both modes, of how a decision becomes a position file.
-/// Local mode writes each payload to the output folder; Web mode writes each
-/// into the download's archive. Preparing a payload is the per-decision unit
+/// one statement of how a decision becomes a position file, which the run
+/// writes to the output folder. Preparing a payload is the per-decision unit
 /// of the XGP export: a failure here skips that decision
 /// (<c>SPEC-notices.md</c> §7.1), while writing the payload is the commit and
 /// is not this type's.

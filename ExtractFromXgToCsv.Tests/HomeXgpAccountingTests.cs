@@ -22,7 +22,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// and §7.5): a Local XGP run's ended ledger entry — completed, cancelled or
 /// failed — is applied in one checkpoint, from the options the run captured,
 /// and the controls follow it control by control, so a newer choice in them
-/// stands; a Web download's commit reaches the same record at its hand-off.
+/// stands.
 /// <para>
 /// Storage is planned: what Home records is the subject. Each run goes
 /// through the real page, the real panel and a stub server answering the
@@ -44,7 +44,7 @@ public class HomeXgpAccountingTests : BunitContext
     private CapturingProcessHandler ServerAnswering(ProcessingProgress terminal)
     {
         var processing = new CapturingProcessHandler(CapturingProcessHandler.Terminal(terminal));
-        this.AddHomeServices("Local", processing);
+        this.AddHomeServices(processing);
         Storage = BrowserStoragePlan.On(JSInterop);
         Storage.ExpectFilterRestore(FilterRestoration.NothingStored);
         Storage.ExpectHomeRestore(new()
@@ -74,15 +74,6 @@ public class HomeXgpAccountingTests : BunitContext
             : $"{{\"version\":1,\"mark\":{{\"instance\":\"{Instance}\",\"number\":1}},\"owed\":[]}}";
         Storage.ExpectXgpRunBookkeeping(before: null, owing, applied);
     }
-
-    /// <summary>
-    /// The one checkpoint Home's handler makes for a Web export ending at
-    /// <paramref name="lastNumber"/>: a fresh read of the record, then the
-    /// whole document in one write.
-    /// </summary>
-    private void ExpectTheNumberingPersisted(string pattern, int lastNumber, int suffixLength) =>
-        Storage.ExpectNumberingCheckpoint(
-            BrowserStorageReadAnswer.Absent, HomeStoragePlan.NumberingDocument(pattern, lastNumber, suffixLength));
 
     private static XgpExportOptions PanelOptions(IRenderedComponent<Home> cut) =>
         cut.FindComponent<LocalModePanel>().Instance.XgpOptions;
@@ -232,134 +223,6 @@ public class HomeXgpAccountingTests : BunitContext
 
         Assert.Contains("✗ Error", cut.Markup);
         Assert.Equal(DefaultOptions, PanelOptions(cut));
-        Storage.Verify();
-    }
-
-    /// <summary>
-    /// The Web panel raises a download's start to Home as its attempt begins,
-    /// so a next number the user typed before clicking Download is the one the
-    /// download started from, not an edit since: the record takes the
-    /// download, and the control follows it past the numbers it used.
-    /// </summary>
-    [Fact]
-    public async Task AWebDownload_ANextNumberTypedBeforeTheClick_IsFollowedPast()
-    {
-        this.AddHomeServices("Web");
-        Storage = BrowserStoragePlan.On(JSInterop);
-        Storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        Storage.ExpectHomeVisit("Web");
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.CsvFileNameKey, "decisions.zip",
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.LastFolderHintKey, "1 file(s) — first: MTCH4064.xg",
-            BrowserStorageWriteAnswer.Succeeded);
-        JSInterop.SetupVoid("downloadFile", _ => true).SetVoidResult();
-
-        var cut = this.RenderHome();
-        cut.Find("#fmtXgp").Change(true);
-        cut.UploadFixture("MTCH4064.xg");
-        var panel = cut.FindComponent<WebModePanel>();
-        var entries = panel.Instance.RowCache.FilteredRows.Count;
-        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
-        ExpectTheNumberingPersisted("pos{n}", lastNumber: 49 + entries, suffixLength: 3);
-
-        await cut.DownloadButton().ClickAsync(new MouseEventArgs());
-
-        cut.WaitForAssertion(() => Assert.Equal(50 + entries, panel.Instance.XgpOptions.StartNumber),
-            CapturingProcessHandler.RunTimeout);
-        Storage.Verify();
-    }
-
-    /// <summary>
-    /// A Web download that committed nothing: every decision's payload failed
-    /// its preparation, so the archive handed over is empty. The record takes
-    /// nothing, so nothing is written and the controls follow nothing. The
-    /// next number was set before the download began — under the saved
-    /// numbering's pattern, to a value other than its next — and not edited
-    /// since, so a follow would be visible: it would put back the saved
-    /// numbering's next number. The value set stands.
-    /// </summary>
-    [Fact]
-    public async Task AWebDownloadThatCommittedNothing_LeavesTheNextNumberAsSet()
-    {
-        this.AddHomeServices("Web");
-        var converter = new ScriptedConverter
-        {
-            // Each file's rows replaced by one decision the file does not
-            // hold, whose payload the producer's slice refuses.
-            RewriteRows = (source, _) => [TestRecords.Row(TestRecords.CheckerPlay(
-                id: new XgDecisionId(source.Name, Game: 99, MoveNumber: 1, IsCube: false)))],
-        };
-        Services.AddSingleton<ISourceConverter>(converter);
-        Storage = BrowserStoragePlan.On(JSInterop);
-        Storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        Storage.ExpectHomeVisit("Web", new()
-        {
-            [HomeStoragePlan.NumberingKey] = HomeStoragePlan.NumberingDocument("pos{n}", 9, 3),
-        });
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.CsvFileNameKey, "decisions.zip",
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.LastFolderHintKey, "1 file(s) — first: MTCH4064.xg",
-            BrowserStorageWriteAnswer.Succeeded);
-        JSInterop.SetupVoid("downloadFile", _ => true).SetVoidResult();
-
-        var cut = this.RenderHome();
-        cut.Find("#fmtXgp").Change(true);
-        Assert.Equal("10", cut.Find("#xgpNextNumber").GetAttribute("value"));
-        cut.UploadFixture("MTCH4064.xg");
-        var panel = cut.FindComponent<WebModePanel>();
-        Assert.Single(panel.Instance.RowCache.FilteredRows);
-        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
-
-        await cut.DownloadButton().ClickAsync(new MouseEventArgs());
-
-        Assert.Equal(0, panel.Instance.Session.LastDownload!.Committed);
-        Assert.Equal("50", cut.Find("#xgpNextNumber").GetAttribute("value"));
-        Assert.Equal(50, panel.Instance.XgpOptions.StartNumber);
-        Storage.Verify();
-    }
-
-    /// <summary>
-    /// Web mode through the same handler (<c>SPEC-notices.md</c> §7.3): a
-    /// download's hand-off is pending while the user types a new next number.
-    /// The archive committed what the attempt captured, so Home persists the
-    /// attempt's numbering — the archive's entry count, from its options — and
-    /// the newer choice in the control stands.
-    /// </summary>
-    [Fact]
-    public async Task AWebDownloadsHandOff_ControlsChangedWhilePending_StandAndTheAttemptsNumberingIsPersisted()
-    {
-        this.AddHomeServices("Web");
-        Storage = BrowserStoragePlan.On(JSInterop);
-        Storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        Storage.ExpectHomeVisit("Web");
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.CsvFileNameKey, "decisions.zip",
-            BrowserStorageWriteAnswer.Succeeded);
-        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.LastFolderHintKey, "1 file(s) — first: MTCH4064.xg",
-            BrowserStorageWriteAnswer.Succeeded);
-        var handOff = JSInterop.SetupVoid("downloadFile", _ => true);
-
-        var cut = this.RenderHome();
-        cut.Find("#fmtXgp").Change(true);
-        cut.UploadFixture("MTCH4064.xg");
-        var panel = cut.FindComponent<WebModePanel>();
-        var entries = panel.Instance.RowCache.FilteredRows.Count;
-        Assert.True(entries > 0);
-
-        var click = cut.DownloadButton().ClickAsync(new MouseEventArgs());
-        cut.WaitForAssertion(() => Assert.Single(JSInterop.Invocations["downloadFile"]));
-        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
-
-        ExpectTheNumberingPersisted("pos{n}", lastNumber: entries, suffixLength: 3);
-        handOff.SetVoidResult();
-        await click.WaitAsync(CapturingProcessHandler.RunTimeout);
-
-        Assert.Equal(50, panel.Instance.XgpOptions.StartNumber);
         Storage.Verify();
     }
 }
