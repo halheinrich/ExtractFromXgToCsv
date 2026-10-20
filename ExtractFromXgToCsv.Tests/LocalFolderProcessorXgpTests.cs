@@ -248,6 +248,7 @@ public class LocalFolderProcessorXgpTests
     }
 
     [Fact]
+    [Trait("Category", "RequiresFixtureFiles")]
     public async Task ProcessXgpAsync_CopiesAnXgpSourceVerbatim_WhenNotAnonymizing()
     {
         // An .xgp source already is a single-position analyzed file: the
