@@ -549,7 +549,7 @@ public class LocalFolderProcessor
         var writer = new StreamWriter(file, Encoding.UTF8);
         await WriteThenCloseAsync(writer, path, async () =>
         {
-            await writer.WriteLineAsync(DecisionRow.CsvHeader);
+            await writer.WriteLineAsync(CsvLayout.Header);
             await ForEachFileAsync(
                 folderPath, files, record, run,
                 retainBytes: false,
@@ -557,7 +557,7 @@ public class LocalFolderProcessor
                 commit: async (rows, _) =>
                 {
                     foreach (var row in rows)
-                        await writer.WriteLineAsync(row.ToCsvLine());
+                        await writer.WriteLineAsync(CsvLayout.Line(row));
                     run.Add(rows.Count);
                 },
                 cancellationToken);

@@ -359,7 +359,7 @@ public class LocalFolderProcessorSkipTests
         var xgFile = XgFileReader.ReadFile(Path.Combine(FixtureHelper.FixtureDir, GoodFixture));
         var rows = XgDecisionIterator.Iterate(xgFile, GoodFixture, options: RunOptions)
             .Where(r => filter.Matches(r))
-            .Select(r => r.ToCsvLine())
+            .Select(CsvLayout.Line)
             .ToList();
         Assert.NotEmpty(rows);
         return rows;

@@ -82,7 +82,7 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         await Processor().ProcessAsync(
             _folder, output, MidwayFailure.InTheSecondFile(good.Count), new RecordingProgress(), record);
 
-        Assert.Equal(good.Select(r => r.ToCsvLine()), File.ReadAllLines(output).Skip(1));
+        Assert.Equal(good.Select(CsvLayout.Line), File.ReadAllLines(output).Skip(1));
         AssertTheFailingFileIsTheOneSkip(record);
     }
 
@@ -423,7 +423,7 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         Assert.Empty(record.Skips);
         Assert.Null(record.XgpCommit);
         Assert.Equal(
-            good.Concat(second).Select(r => r.ToCsvLine()),
+            good.Concat(second).Select(CsvLayout.Line),
             File.ReadAllLines(output).Skip(1));
     }
 

@@ -57,7 +57,7 @@ public class LocalFolderProcessorRankingTests
         var set = Filter().Build();
         return XgDecisionIterator.Iterate(Read(), Fixture, options: new(Ranking: ranking))
             .Where(r => set.Matches(r))
-            .Select(r => r.ToCsvLine())
+            .Select(CsvLayout.Line)
             .ToList();
     }
 

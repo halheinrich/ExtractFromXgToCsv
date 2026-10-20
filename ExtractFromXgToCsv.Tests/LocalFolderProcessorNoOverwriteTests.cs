@@ -431,7 +431,7 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
         switch (format)
         {
             case OutputFormat.Csv:
-                Assert.StartsWith(DecisionRow.CsvHeader, text);
+                Assert.StartsWith(CsvLayout.Header, text);
                 Assert.Equal(2, text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
                 break;
             case OutputFormat.DiagramJson:
