@@ -1,3 +1,4 @@
+using BgDataTypes_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging;
@@ -57,8 +58,8 @@ public class LocalFolderProcessorIllegalPlayTests
 
         try
         {
-            var logger = new CapturingLogger<LocalFolderProcessor>();
-            var iteratorLogger = new CapturingLogger<FilteredDecisionIterator>();
+            var logger = new RecordingLogger<LocalFolderProcessor>();
+            var iteratorLogger = new RecordingLogger<FilteredDecisionIterator>();
             var processor = new LocalFolderProcessor(logger, iteratorLogger, AppRanking.Ranking);
 
             ProcessingProgress? lastProgress = null;

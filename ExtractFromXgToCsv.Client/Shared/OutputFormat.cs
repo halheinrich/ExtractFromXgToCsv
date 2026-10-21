@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using BgDataTypes_Lib;
 
 namespace ExtractFromXgToCsv.Client.Shared;
 

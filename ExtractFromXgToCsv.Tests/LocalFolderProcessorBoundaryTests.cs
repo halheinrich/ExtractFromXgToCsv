@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
 using ExtractFromXgToCsv.Client.Shared;
