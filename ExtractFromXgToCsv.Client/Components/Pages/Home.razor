@@ -10,7 +10,7 @@
 @inject HttpClient Http
 @inject FilterSetup FilterSetup
 @inject BrowserStorageCondition StorageCondition
-@inject SettingsStorage Settings
+@inject ReportingBrowserStorage ReportingStorage
 @inject ILocalJobs Jobs
 @inject LocalJobTiming Timing
 @inject ILogger<Home> Logger
@@ -201,8 +201,9 @@
    FilterSetup. This host binds only what is its own to say here: the
    saved-filters storage seam (see Storage). The source is reported to the
    owner, not bound (see ReportSource), and the filter in effect is read from
-   it (see FilterInEffect); storage refusals reach BrowserStorageCondition,
-   this app's registered sink.
+   it (see FilterInEffect); storage refusals reach the shared
+   BrowserStorageCondition through XgFilter_Razor's adapter, the sink
+   AddFilterSurface() registers.
 
    Mounted from the first render. The owner outlives this page, so a remount
    shows the existing setup as it stands; nothing here waits on this page's
@@ -316,7 +317,7 @@
     protected override void OnInitialized()
     {
         _documentStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
-        _numbering = new XgpNumberingKeeper(new XgpNumberingStore(Settings));
+        _numbering = new XgpNumberingKeeper(new XgpNumberingStore(ReportingStorage));
         _reconciler = new LocalReconciler(Jobs, _numbering, Timing, FollowRecordAfterPassAsync, Logger, _lifetime.Token);
         _reconciler.Changed += () => _ = InvokeAsync(StateHasChanged);
 
@@ -387,17 +388,18 @@
     private async Task RestoreAsync(CancellationToken lifetime)
     {
         // Every read below answers the stored value, or null for "nothing
-        // stored" and for a refusal alike — SettingsStorage has reported a
-        // refusal to the condition before it returns — so each key lands on
-        // its stored value or its own documented default, and the restore
-        // runs to the end while this page lives. Each read completes whatever
-        // happens to the page (a refusal still reaches the condition); the
-        // restore stops after it if the page has gone.
+        // stored" and for a refusal alike — ReportingBrowserStorage has
+        // reported a refusal to the condition before it returns — so each key
+        // lands on its stored value or its own documented default, and the
+        // restore runs to the end while this page lives. Each read completes
+        // whatever happens to the page (a refusal still reaches the
+        // condition); the restore stops after it if the page has gone.
         async Task<string?> ReadSettingAsync(string key)
         {
-            var value = await Settings.ReadAsync(key);
+            var read = await ReportingStorage.ReadAsync(BrowserStorageArea.Local, key,
+                "the setting takes its default for this visit");
             lifetime.ThrowIfCancellationRequested();
-            return value;
+            return read.IsStored ? read.Value : null;
         }
 
         // The inverse of what persists it below (fmt.ToString()): resolve the
@@ -472,7 +474,8 @@
     private async Task OnFolderPathEdited(string path)
     {
         _folderPathText = path;
-        await Settings.WriteAsync("xg_folderPath", path);
+        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_folderPath", path,
+            "the folder path holds for this visit only");
     }
 
     // Change-boundary half: latch the committed path and report it. A blur
@@ -492,7 +495,8 @@
     private async Task SetOutputFormat(OutputFormat fmt)
     {
         _outputFormat = fmt;
-        await Settings.WriteAsync("xg_outputFormat", fmt.ToString());
+        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_outputFormat", fmt.ToString(),
+            "the output format holds for this visit only");
         StateHasChanged();
     }
 
@@ -558,7 +562,8 @@
     private async Task OnXgpAnonymizeChanged(ChangeEventArgs e)
     {
         _xgpAnonymize = e.Value is bool b && b;
-        await Settings.WriteAsync("xg_xgpAnonymize", _xgpAnonymize.ToString());
+        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpAnonymize", _xgpAnonymize.ToString(),
+            "the anonymize choice holds for this visit only");
     }
 
     // ── The controls follow the record ──────────────────────────────────────

@@ -35,7 +35,7 @@ public class XgpNumberingKeeperTests : BunitContext
     {
         Services.AddClientServices();
         _storage = BrowserStoragePlan.On(JSInterop);
-        _keeper = new XgpNumberingKeeper(new XgpNumberingStore(Services.GetRequiredService<SettingsStorage>()));
+        _keeper = new XgpNumberingKeeper(new XgpNumberingStore(Services.GetRequiredService<ReportingBrowserStorage>()));
     }
 
     private static readonly XgpExportOptions Pos = new();
@@ -569,8 +569,8 @@ public class XgpNumberingKeeperTests : BunitContext
     /// without a fresh read would land, and be seen.
     /// </summary>
     private static XgpNumberingKeeper KeeperOver(MemoryBrowserStorage memory) =>
-        new(new XgpNumberingStore(new SettingsStorage(
-            new BrowserStorage(memory), new BrowserStorageCondition(NullLogger<BrowserStorageCondition>.Instance))));
+        new(new XgpNumberingStore(new ReportingBrowserStorage(
+            new BrowserStorage(memory), new BrowserStorageCondition(), NullLogger<ReportingBrowserStorage>.Instance)));
 
     /// <summary>
     /// With no fresh read, nothing is written: a checkpoint under a refused

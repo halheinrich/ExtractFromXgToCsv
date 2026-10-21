@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BgUiPrimitives_Razor;
 using ExtractFromXgToCsv.Client.Shared;
 
 namespace ExtractFromXgToCsv.Client.Services;
@@ -35,7 +36,7 @@ namespace ExtractFromXgToCsv.Client.Services;
 /// removed, the prefix too where a pattern superseded it.
 /// </para>
 /// </remarks>
-internal sealed class XgpNumberingStore(SettingsStorage settings)
+internal sealed class XgpNumberingStore(ReportingBrowserStorage storage)
 {
     /// <summary>The document's key.</summary>
     internal const string Key = "xg_xgpNumbering";
@@ -55,7 +56,8 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
     /// <summary>Reads the stored document: one of its four outcomes; a refusal is reported.</summary>
     public async Task<NumberingRead> ReadAsync()
     {
-        var read = await settings.ReadEntryAsync(Key);
+        var read = await storage.ReadAsync(BrowserStorageArea.Local, Key,
+            "the XGP numbering starts from memory for this visit");
         if (read.IsRefused)
             return NumberingRead.Refused.Value;
         if (read.Value is not { } text)
@@ -68,8 +70,12 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
     public Task<bool> WriteAsync(XgpNumberingRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
-        return settings.WriteAsync(Key, JsonSerializer.Serialize(
-            new Document(CurrentVersion, record.Numbering, record.Mark, record.Owed), Json));
+        return SucceededAsync(storage.WriteAsync(BrowserStorageArea.Local, Key, JsonSerializer.Serialize(
+                new Document(CurrentVersion, record.Numbering, record.Mark, record.Owed), Json),
+            "the XGP numbering and any owed exports are kept for this visit only"));
+
+        // The argument check above throws at the call; only the awaiting is deferred.
+        static async Task<bool> SucceededAsync(Task<BrowserStorageWriteResult> write) => (await write).Succeeded;
     }
 
     /// <summary>
@@ -87,7 +93,9 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
         var present = new List<string>(4);
         async Task<string?> ReadLegacyAsync(string key)
         {
-            var value = await settings.ReadAsync(key);
+            var read = await storage.ReadAsync(BrowserStorageArea.Local, key,
+                "that older numbering setting is left out of the migration");
+            var value = read.IsStored ? read.Value : null;
             if (value is not null)
                 present.Add(key);
             return value;
@@ -120,7 +128,8 @@ internal sealed class XgpNumberingStore(SettingsStorage settings)
         if (stored)
         {
             foreach (var key in present)
-                await settings.RemoveAsync(key);
+                await storage.RemoveAsync(BrowserStorageArea.Local, key,
+                    "the superseded numbering key stays stored, unused");
         }
         return (record, stored);
     }

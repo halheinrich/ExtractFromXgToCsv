@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using BgDataTypes_Lib.TestSupport;
 using BgUiPrimitives_Razor;
 using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
@@ -36,8 +37,8 @@ public class LocalReconcilerTests : IAsyncLifetime
 
     private async Task<XgpNumberingKeeper> RestoredKeeperAsync()
     {
-        var keeper = new XgpNumberingKeeper(new XgpNumberingStore(new SettingsStorage(
-            new BrowserStorage(_storage), new BrowserStorageCondition(NullLogger<BrowserStorageCondition>.Instance))));
+        var keeper = new XgpNumberingKeeper(new XgpNumberingStore(new ReportingBrowserStorage(
+            new BrowserStorage(_storage), new BrowserStorageCondition(), NullLogger<ReportingBrowserStorage>.Instance)));
         await keeper.RestoreAsync();
         return keeper;
     }

@@ -29,7 +29,7 @@ public class XgpNumberingStoreTests : BunitContext
     {
         Services.AddClientServices();
         _storage = BrowserStoragePlan.On(JSInterop);
-        _store = new XgpNumberingStore(Services.GetRequiredService<SettingsStorage>());
+        _store = new XgpNumberingStore(Services.GetRequiredService<ReportingBrowserStorage>());
     }
 
     private static readonly OwedXgpJob Owed =

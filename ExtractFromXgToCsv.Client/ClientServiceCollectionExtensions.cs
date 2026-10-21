@@ -1,4 +1,3 @@
-using BgUiPrimitives_Razor;
 using ExtractFromXgToCsv.Client.Services;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Razor;
@@ -31,28 +30,17 @@ internal static class ClientServiceCollectionExtensions
         services.AddSingleton(LocalJobTiming.Default);
         services.AddSingleton<IJobIdentities, GuidJobIdentities>();
 
-        // This app's one storage condition: whether the browser has refused a
-        // storage call this visit, and the dismissal of the notice that says
-        // so. Scoped — one per loaded app under WebAssembly — because the
-        // occurrence is the app's, not a page's: a refusal while Home is
-        // absent is there on return, and a dismissal survives a navigate-back.
-        // A reload constructs a fresh instance, which is a fresh visit.
-        // Neither bit is ever stored (SPEC-notices.md §2).
-        services.AddScoped<BrowserStorageCondition>();
-
-        // The filter surface's owner (FilterSetup) and its storage, with the
-        // condition above as the sink every refusal of the surface's own
-        // storage calls goes to (halheinrich/backgammon#374). Home reports the
-        // source and reads the gate from the owner; FilterSurface injects the
-        // same instance.
-        services.AddFilterSurface<BrowserStorageCondition>();
-
-        // BgUiPrimitives' storage accessor, under this app's own settings
-        // keys. The registration above already adds the accessor; it is
-        // stated here too because SettingsStorage uses it directly, and a
-        // second call adds nothing.
-        services.AddBrowserStorage();
-        services.AddScoped<SettingsStorage>();
+        // The filter surface's owner (FilterSetup) and its storage, over
+        // BgUiPrimitives_Razor's shared storage: the app's one
+        // BrowserStorageCondition, and the ReportingBrowserStorage that this
+        // app's own settings keys go through, both scoped — one per loaded
+        // app under WebAssembly — with XgFilter_Razor's adapter as the sink
+        // every refusal of the surface's own calls goes to. One owner of the
+        // condition and its access across the apps (Hal's ruling,
+        // halheinrich/backgammon#424, 2026-10-19). Home reports the source and
+        // reads the gate from the owner; FilterSurface injects the same
+        // instance.
+        services.AddFilterSurface();
 
         return services;
     }

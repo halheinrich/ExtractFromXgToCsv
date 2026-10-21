@@ -20,7 +20,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// (halheinrich/backgammon#374, Arc 2; SPEC-notices.md §1–§2): every refusal
 /// — Home's own settings, either mode panel's, or the filter surface's — is
 /// one occurrence, held by the app-scoped <see cref="BrowserStorageCondition"/>
-/// with its dismissal, and Home shows it however and whenever it arose.
+/// with its dismissal, and Home shows it however and whenever it arose. The
+/// condition and the <see cref="ReportingBrowserStorage"/> this app's own
+/// keys go through are BgUiPrimitives_Razor's (halheinrich/backgammon#424);
+/// their own contract is pinned there, and this pins Home over them.
 /// <para>
 /// <b>Observed, not polled.</b> A panel's refusal re-renders the panel, not
 /// Home, and a commit's refusal can land after the click that made it has
@@ -185,7 +188,7 @@ public class HomeStorageUnavailableTests : BunitContext
     /// A producer refusal: the filter surface's commit write is refused. The
     /// write is held, so the click's own render has happened before the
     /// browser answers; the notice appears on the refusal, through the
-    /// registered sink.
+    /// sink <c>AddFilterSurface()</c> registers over the condition.
     /// </summary>
     [Fact]
     public async Task AProducerRefusal_ShowsTheNotice()

@@ -4,7 +4,7 @@
 @using ExtractFromXgToCsv.Client.Shared
 @using XgFilter_Razor
 @implements IDisposable
-@inject SettingsStorage Settings
+@inject ReportingBrowserStorage ReportingStorage
 @inject HttpClient Http
 @inject ILocalJobs Jobs
 @inject LocalJobTiming Timing
@@ -541,7 +541,9 @@
         if (!firstRender) return;
         // The folder path is restored by Home (its owner since the source
         // hoist); only the output path — not a source — is still panel-owned.
-        _outputPath = await Settings.ReadAsync("xg_outputPath") ?? string.Empty;
+        var read = await ReportingStorage.ReadAsync(BrowserStorageArea.Local, "xg_outputPath",
+            "the output path starts blank for this visit");
+        _outputPath = read.IsStored ? read.Value : string.Empty;
 
         // Server-side book status (Local mode only). A failure leaves the line
         // hidden rather than asserting a state we don't know.
@@ -554,7 +556,8 @@
     private async Task OnOutputPathChanged(ChangeEventArgs e)
     {
         _outputPath = e.Value?.ToString() ?? string.Empty;
-        await Settings.WriteAsync("xg_outputPath", _outputPath);
+        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_outputPath", _outputPath,
+            "the output path holds for this visit only");
     }
 
     protected override void OnParametersSet()
@@ -579,7 +582,8 @@
             if (!_outputPath.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
             {
                 _outputPath = Path.ChangeExtension(_outputPath, expectedExt);
-                _ = Settings.WriteAsync("xg_outputPath", _outputPath);
+                _ = ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_outputPath", _outputPath,
+                    "the output path's new extension holds for this visit only");
             }
         }
 
