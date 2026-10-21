@@ -140,11 +140,11 @@ components are rendered with — the test suite calls it too. Three areas:
   and the source reporter), the panel, `LocalModePanel`, `SkipListNotice`,
   the one rendering of a skip record, and `XgpNumberingHints`, the hint the
   panel gives while the numbering record cannot be read (see Components).
-- **Services** — the client's own state: `HttpDocumentStorage` (the storage seam over the server's file relay),
-  `SettingsStorage` (this app's settings keys over BgUiPrimitives'
-  `BrowserStorage`, reporting every refusal) and `BrowserStorageCondition`
-  (this app's one storage condition and its notice's dismissal; the filter
-  surface's registered refusal sink). And the page's side of the recovery
+- **Services** — the client's own state: `HttpDocumentStorage` (the storage
+  seam over the server's file relay; this app's settings keys go through
+  BgUiPrimitives_Razor's `ReportingBrowserStorage`, and the storage
+  condition is BgUiPrimitives_Razor's `BrowserStorageCondition` — see
+  "Browser storage"). And the page's side of the recovery
   protocol (see "Recovery"): `ILocalJobs` and its `LocalJobsClient` (the
   protocol's wire), `LocalReconciler` (Home's reconciliation with the
   server, and the `LedgerTaking` it offers the controls),
@@ -176,8 +176,7 @@ HTTP handlers, and a Local run to completion), `HomeTesting` (Home's
 registration, render and gestures, and `HomeStoragePlan` — Home's storage
 stated on a `BrowserStoragePlan`), `NoticeTesting` (a dismissal through
 BgUiPrimitives' `NoticeBox`, settled before its outcome is read, and the
-bound on awaiting an operation), `CapturingLogger<T>` and `ThrowingLogger<T>`
-(a logger every entry of which fails), `FixtureHelper`, `MalformedXg`
+bound on awaiting an operation), `FixtureHelper`, `MalformedXg`
 (the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`,
 `ProcessorDecisions` (a fixture's rows and records as the processor reaches
 them), `ScriptedDestination` (real output files whose create,
@@ -191,7 +190,11 @@ status itself; a `FileGate` that holds a run as it opens its next output
 file, over the file system or another destination; `MemoryBrowserStorage`;
 `LocalPage` — one page of the app over both, so a reload, disposing the
 first page, is another page — and `AnswerHeldJobs`, a page's jobs client
-holding its first start's answer after it has arrived).
+holding its first start's answer after it has arrived). The test loggers —
+`RecordingLogger<T>` (each entry's level, message and exception, as a
+`LogEntry`) and `ThrowingLogger<T>` (a logger every entry of which fails) —
+are BgDataTypes_Lib.TestSupport's, not this project's: common code has one
+shared owner (Hal's ruling, halheinrich/backgammon#424, 2026-10-19).
 Fixtures are the umbrella's `TestData/FixtureFiles`,
 linked into the build output rather than kept in this repo (see Test project,
 and the fixture pitfall).
@@ -600,7 +603,7 @@ once, by the numbering (`XgpNumbering.NextNumber`).
     the filter in effect (or the empty one).
   - **It re-renders off notifications**, not off component events: it
     attaches to `FilterSetup` (a commit, an edit, a restoration) and to
-    `BrowserStorageCondition` (a refusal from anywhere) in
+    BgUiPrimitives_Razor's `BrowserStorageCondition` (a refusal from anywhere) in
     `OnInitialized`, and disposes both attachments.
   - **The saved-filters seam.** One `HttpDocumentStorage` instance,
     constructed over a delegate reading the latched path (the composite
@@ -627,7 +630,8 @@ once, by the numbering (`XgpNumbering.NextNumber`).
     anonymize flag, and the numbering record (one document holding the
     numbering, the mark and the owed jobs, which replaced the pattern,
     counter and length keys and migrates them once) — go through
-    `SettingsStorage` (see "Browser storage"). The restore runs to its end
+    `ReportingBrowserStorage`, each call with its own consequence phrase
+    (see "Browser storage"). The restore runs to its end
     whatever storage answers: each key lands on its stored value or its own
     documented default.
   - **It is the numbering record's one owner** (`XgpNumberingKeeper`), and it
@@ -644,7 +648,7 @@ once, by the numbering (`XgpNumbering.NextNumber`).
     Its controls follow the record's takings by the edit rule
     (`XgpEditClock`, `Follow`; see "Recovery").
   - **The storage condition's notice**, `#storageUnavailableNotice`, rendered
-    from `BrowserStorageCondition` (see "Notices").
+    from the shared `BrowserStorageCondition` (see "Notices").
 - **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
   buttons, the run's start and following, progress bar (determinate, plus
   the two indeterminate states in "Busy affordance"). Parameters:
@@ -727,10 +731,15 @@ and this host adopted it in v1.12.2 (halheinrich/backgammon#374, Arc 2). Its
 "Host contract" is this host's contract; what follows is how Extract meets
 it, not a restatement.
 
-- **Registration.** `AddClientServices` registers `BrowserStorageCondition`
-  scoped and calls `AddFilterSurface<BrowserStorageCondition>()`, so the
-  condition is the sink the surface reports its refusals to, and the
-  instance Home injects is the sink. Only the WebAssembly client renders the
+- **Registration.** `AddClientServices` calls the parameterless
+  `AddFilterSurface()`, which registers, scoped, BgUiPrimitives_Razor's
+  `BrowserStorageCondition`, its `ReportingBrowserStorage` and the
+  `BrowserStorage` under it, XgFilter_Razor's adapter over the condition as
+  the sink the surface reports its refusals to, and the surface itself — so
+  the condition Home injects is the one every refusal reaches. Until
+  halheinrich/backgammon#424 (Hal's ruling, 2026-10-19: common code has one
+  shared owner) this app registered its own condition as the sink with
+  `AddFilterSurface<BrowserStorageCondition>()`. Only the WebAssembly client renders the
   surface or injects the owner: Home renders `InteractiveWebAssembly` with
   `prerender: false`, and the server renders none of either.
 - **The source is reported, never bound, and never guessed.** Home reports
@@ -768,19 +777,28 @@ ruling on halheinrich/backgammon#374; the library's "Browser storage
 access"). No Extract code calls storage interop directly, and nothing
 latches: a refusal disables nothing, and the next call is simply made.
 
-- **`SettingsStorage`** is this app's access to its own keys in the local
-  area. A read answers the stored string, or null for "nothing stored" and
-  "refused" alike — every caller already reads null as "use my default", and
-  each keeps its own parsing and default — and a refused write returns
-  normally, leaving the caller's in-memory value standing. Every refusal is
-  reported to `BrowserStorageCondition` before the call returns, and the
-  call still returns its result normally if logging the refusal fails (the
-  condition records the occurrence first and contains its logger). Anything
-  that is not the browser's refusal propagates.
-- **`BrowserStorageCondition`** is the one storage condition, host-owned
-  and app-scoped. Every refusal — `SettingsStorage`'s, and the filter
-  surface's through the registered sink, also after the page that started
-  the call has gone — is one occurrence per visit: the first begins it,
+Both types below are BgUiPrimitives_Razor's ("Browser storage access"), not
+this app's: common code has one shared owner (Hal's ruling,
+halheinrich/backgammon#424, 2026-10-19), and this app's own copies of the
+access and the condition were retired for them. Registration is
+`AddFilterSurface()` (see "Filter setup").
+
+- **`ReportingBrowserStorage`** is this app's access to its own keys, each
+  call naming `BrowserStorageArea.Local`, its key, and its **consequence
+  phrase** — what a refusal costs that caller, in a few words ("the setting
+  takes its default for this visit", "the output path holds for this visit
+  only"). A refusal is reported to the condition first, then logged once,
+  in the library's one template carrying the operation, the key and that
+  phrase; a logger that throws is contained, so the call still returns its
+  result. A read returns the accessor's result: most callers read
+  `read.IsStored ? read.Value : null` and keep their own parsing and
+  default; a refused write returns normally, leaving the caller's in-memory
+  value standing. Anything that is not the browser's refusal propagates.
+- **`BrowserStorageCondition`** is the one storage condition, app-scoped,
+  with no logger of its own. Every refusal — this app's keys' through the
+  access, and the filter surface's through XgFilter_Razor's adapter, also
+  after the page that started the call has gone — is one occurrence per
+  visit: the first begins it,
   later ones are the same occurrence, and a later success begins and ends
   nothing (a read served says nothing about writes; one key's success says
   nothing about another's). It records the occurrence and the notice's
@@ -791,7 +809,7 @@ latches: a refusal disables nothing, and the next call is simply made.
 - **A refused write never stops the gesture that made it.** At v1.12.1 the
   panels' unguarded reads and writes could throw out of a gesture or a first
   render (halheinrich/backgammon#102, Extract's portion, closed here). They
-  now go through `SettingsStorage`.
+  now go through `ReportingBrowserStorage`.
 
 The keys: Home's `xg_outputFormat`, `xg_folderPath`, `xg_xgpAnonymize` and
 the numbering record `xg_xgpNumbering` (one JSON document — version,
@@ -802,11 +820,12 @@ stored (`xg_xgpPattern`, `xg_xgpLastNumber`, `xg_xgpSuffixLength`, and the
 legacy `xg_xgpPrefix` before them); and `LocalModePanel`'s `xg_outputPath`.
 The filter
 surface's keys are its own and are not named here.
-`SettingsStorage.WriteAsync` answers whether the browser stored the value,
-which the record's checkpoint and its migration need; most callers do not
-ask. The record is also the one caller that tells a refused read from
-nothing stored (`SettingsStorage.ReadEntryAsync`): its read has four
-outcomes, and a refused one establishes nothing.
+A write's result says whether the browser stored the value
+(`written.Succeeded`), which the record's checkpoint and its migration need;
+most callers do not ask. The record is also the one caller that tells a
+refused read from nothing stored, off the read's own result (`IsRefused`,
+`IsStored`): its read has four outcomes, and a refused one establishes
+nothing.
 
 ### Notices
 
@@ -852,7 +871,8 @@ component keeps no bit that could disagree with the owner's:
   already holds. The panel's `_progress.ErrorMessage` is a different fact
   (the server's report of a job that started and then failed) and is not a
   box.
-- **Storage trouble — the app-scoped `BrowserStorageCondition`.** One
+- **Storage trouble — the app-scoped `BrowserStorageCondition`**
+  (BgUiPrimitives_Razor's since halheinrich/backgammon#424). One
   occurrence per visit: it begins at the first refusal from any reporter —
   Home's settings, the panel's, or the filter surface's — and every later
   refusal, and every later success, is the same occurrence (see "Browser
@@ -1398,14 +1418,12 @@ records what a run was computed from when the run starts.
   navigate-back row — a second `Home` stays silent after a dismissal **and
   still makes every storage call**, refused again, with the undismissed
   remount as the control.
-- `BrowserStorageConditionTests` — the condition's own contract: a fresh
-  holder (a reload) has no occurrence; the first refusal begins it and
-  notifies once, later ones are the same occurrence; a dismissal cannot
-  precede its occurrence (throws) and survives further refusals; `Attach`
-  delivers the current state before it returns and then each change; a
-  disposed attachment hears nothing; and a logger that throws still lets
-  the occurrence begin and its observers hear of it, and a storage call's
-  refused write, read and entry read return their results normally.
+- The condition's own contract — a fresh holder has no occurrence, the
+  first refusal begins it, a dismissal cannot precede it, `Attach` and its
+  disposal, and a throwing logger contained — is pinned in
+  BgUiPrimitives_Razor's suite, the logger cases as the reporting access's
+  (halheinrich/backgammon#424); this suite pins Home over it
+  (`HomeStorageUnavailableTests`, above).
 - `LocalModePanelStorageTests` — the panel's own key under a refusing
   browser, planned: a refused restore lands on the default and is reported; a refused output-path write keeps the typed
   value and is reported; and working storage restores, saves and reports
@@ -1715,15 +1733,19 @@ project reference.
   being duplicated. `OutputFormatNames.ShortName` is
   the one statement of the short name the copy gives each ("CSV", "Diagram
   JSON", "PPTX", "PDF", "XGP").
-- `StrictJsonStringEnumConverter<T>` — bundled by type-level attribute onto
+- `StrictJsonStringEnumConverter<T>` — BgDataTypes_Lib's; this app's
+  body-identical copy was retired for it, since common code has one shared
+  owner (Hal's ruling, halheinrich/backgammon#424, 2026-10-19). Bundled by
+  type-level attribute onto
   `OutputFormat`, `JobPhase`, `RefusalReason` and `SettleOutcome`, so every
   enum on the Local-mode wire crosses as
   its declaration name and a numeric ordinal is rejected. Neither end of that
   wire configures a serializer: the panel posts with `HttpClient`'s stock
   options and the server binds with a bare `AddControllers()`. Putting the rule
   on the type is what makes that work — and is why `LocalModePanel` no longer
-  owns a `_wireOptions`. `XgFilter_Lib`'s filter enums and `BgDataTypes_Lib`'s
-  `AnalysisLevel` carry their own equivalents, so one payload has one spelling
+  owns a `_wireOptions`. `BgDataTypes_Lib`'s own enums (`AnalysisLevel`
+  among them) carry the same converter and `XgFilter_Lib`'s filter enums
+  their equivalent, so one payload has one spelling
   convention throughout (halheinrich/backgammon#164,
   halheinrich/backgammon#37).
 - `XgpExportOptions` — naming options for a batch of per-decision `.xgp`
@@ -2037,14 +2059,16 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   restore in a method-wide `try`: it would have to restate every default in
   its handler (a second copy to drift from the field initializers).
 - **Every storage call goes through `BrowserStorage`, and nothing latches.**
-  This app's keys go through `SettingsStorage`; the surface's go through
-  its own seam to the same accessor. Don't call `localStorage` through
+  This app's keys go through BgUiPrimitives_Razor's
+  `ReportingBrowserStorage`, each call with its own consequence phrase; the
+  surface's go through its own seam to the same accessor. Don't call `localStorage` through
   `IJSRuntime`, don't add a "storage is unavailable" flag that skips a call,
   and don't let a refused write stop the gesture that made it (v1.12.1's
   panels did, halheinrich/backgammon#102). `BrowserStorageCondition` remembers
   that a refusal *happened*, for its notice; it never gates a call. And
-  `read ?? default` on a raw result loses the refusal — `SettingsStorage`
-  reports before it returns null, which is why callers may coalesce on it.
+  calling `BrowserStorage` directly loses the refusal — the reporting
+  access reports it before it returns, which is why its callers may read
+  `read.IsStored ? read.Value : null` and coalesce on that.
 - **`HttpDocumentStorage` is one stable instance over a delegate —
   and must never be called without a folder.** The composite rebuilds its
   saved-filters store when the bound `Storage` reference changes, so Home
