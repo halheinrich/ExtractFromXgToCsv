@@ -98,3 +98,5 @@ dotnet run --project ExtractFromXgToCsv
 ```
 
 Then open `https://localhost:5001`, enter a folder path such as `C:\XG\Matches`, and click **Process Folder**.
+
+The app starts from Visual Studio or the terminal — `dotnet run --project ExtractFromXgToCsv`, or `dotnet ExtractFromXgToCsv.dll` in the Release publish folder — and stops there: Visual Studio's Stop, or Ctrl+C. Closing the browser tab leaves the host running, and a run in progress goes on writing its files. The page has no Exit button: Hal retired it, with its `POST /api/shutdown` endpoint, on 2026-10-22 (halheinrich/backgammon#433).

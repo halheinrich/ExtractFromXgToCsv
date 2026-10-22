@@ -112,7 +112,7 @@ Architecture). Four areas:
   `appsettings*.json` (the optional `OpeningBookPath`).
 - **HTTP surface** — `Controllers/`: the Local job protocol (start, status,
   cancel, acknowledge), opening-book status, the
-  saved-filters file relay, shutdown. Thin pass-throughs to the services (see
+  saved-filters file relay. Thin pass-throughs to the services (see
   Public API).
 - **Local-mode services** — `Services/`: `LocalFolderProcessor` (the four
   output pathways over a folder), `CsvLayout` (the CSV's columns and cells,
@@ -135,14 +135,17 @@ Architecture). Four areas:
 (`ClientServiceCollectionExtensions`), the one registration of what the
 components are rendered with — the test suite calls it too. Three areas:
 
-- **Components** — `Pages/Home.razor` (the shell, the `FilterSurface` host
-  and the source reporter), the panel, `LocalModePanel`, and
-  `SkipListNotice`, the one rendering of a skip record (see Components).
-- **Services** — the client's own state: `HttpDocumentStorage` (the storage
-  seam over the server's file relay; this app's settings keys go through
-  BgUiPrimitives_Razor's `ReportingBrowserStorage`, and the storage
+- **Components** — presentation only: `Pages/Home.razor` (the shell, the
+  settings controls and the `FilterSurface` host), the panel,
+  `LocalModePanel`, and `SkipListNotice`, the one rendering of a skip record
+  (see Components).
+- **Services** — the client's own state: `ExtractApp`, the one coordinator
+  (the phase, the settings, the source and the run — see "The coordinator"),
+  and `LocalRunController`, the run it holds privately; `HttpDocumentStorage`
+  (the storage seam over the server's file relay; this app's settings keys go
+  through BgUiPrimitives_Razor's `ReportingBrowserStorage`, and the storage
   condition is BgUiPrimitives_Razor's `BrowserStorageCondition` — see
-  "Browser storage"). And the page's side of the job protocol (see "A Local
+  "Browser storage"). And the app's side of the job protocol (see "A Local
   run's job"): `ILocalJobs` and its `LocalJobsClient` (the protocol's wire),
   `LocalJobTiming` and `IJobIdentities` (seams for a test's waits and
   identities).
@@ -158,13 +161,15 @@ components are rendered with — the test suite calls it too. Three areas:
   Client-shared types.
 
 **`ExtractFromXgToCsv.Tests/`** — xUnit, one class per contract: direct tests
-of the services and the naming engine, bUnit tests of `Home` and the panel,
-hosted `WebApplicationFactory` pins for the file relay, and processor runs
-over real files. Records and rows a test states come from the producer's
-`TestRecords`. Shared support: `bUnitTestHelpers` (private-field access, stub
-HTTP handlers, and a Local run to completion), `HomeTesting` (Home's
-registration, render and gestures, and `HomeStoragePlan` — Home's storage
-stated on a `BrowserStoragePlan`), `NoticeTesting` (a dismissal through
+of the services, the naming engine and the coordinator, bUnit tests of `Home`
+and the panel, hosted `WebApplicationFactory` pins for the file relay, and
+processor runs over real files. Records and rows a test states come from the
+producer's `TestRecords`. Shared support: `bUnitTestHelpers` (a private-field
+reader for the name allocator, and stub HTTP handlers), `LocalPanelHost`
+(the panel rendered over the coordinator beside the filter surface, and the
+gestures the panel suites make), `HomeTesting` (Home's registration, render
+and gestures, and `HomeStoragePlan` — the app's storage as a visit to Home
+makes it, stated on a `BrowserStoragePlan`), `NoticeTesting` (a dismissal through
 BgUiPrimitives' `NoticeBox`, settled before its outcome is read, and the
 bound on awaiting an operation), `FixtureHelper`, `MalformedXg`
 (the synthesized unreadable input skip tests write), `XgpAnonymizeAssert`,
@@ -179,8 +184,9 @@ delivered even if its sender stops waiting — hold a response, or answer a
 status itself; a `FileGate` that holds a run as it opens its next output
 file, over the file system or another destination; `MemoryBrowserStorage`;
 `LocalPage` — one page of the app over both, so a reload, disposing the
-first page, is another page — and `AnswerHeldJobs`, a page's jobs client
-holding its first start's answer after it has arrived). The test loggers —
+first page, is another page — and two jobs clients a page can be given: `AnswerHeldJobs`,
+holding its first start's answer after it has arrived, and
+`RefusedStartJobs`, refusing its first start once released). The test loggers —
 `RecordingLogger<T>` (each entry's level, message and exception, as a
 `LogEntry`) and `ThrowingLogger<T>` (a logger every entry of which fails) —
 are BgDataTypes_Lib.TestSupport's, not this project's: common code has one
@@ -302,31 +308,39 @@ This section says where the code meets §7.5, not what it rules.
   delivered, refused (404) and failed (any other answer, or none) apart. A
   service behind an interface, so a test can hold an answer at the point the
   page takes it.
-- **The panel's run** (`LocalModePanel.RunLocalAsync`), past its gate
-  (`RunReady`, the one definition the Run button and its click share;
-  nothing about the server, since the start is the first contact): it mints
-  the identity (`IJobIdentities`) and sends the start, re-sending a request
-  that could not be made under the same identity every
+- **The run** (`ExtractApp.RunAsync`, then `LocalRunController.RunAsync`),
+  past its gate (`CanRun`, the one definition the Run button and the command
+  share: the app idle, a folder and an output path, a filter in effect,
+  valid XGP options; nothing about the server, since the start is the first
+  contact): it captures its inputs — the output path's extension following
+  the format first — and, for XGP, begins the watch for an edit of the
+  pattern or the next number before the start is sent. It mints the
+  identity (`IJobIdentities`) and sends the start, re-sending a request that
+  could not be made under the same identity every
   `LocalJobTiming.RetryDelay` — from the `FailuresBeforeError`th failure the
-  persistent-failure run error shows, and the start goes on. For an XGP run
-  it tells Home the options are captured (`OnXgpJobStarted`) before the
-  start is sent. It follows the job's status, hands an XGP job's commit to
-  Home (`OnXgpJobEnded`), and only then acknowledges the job.
+  persistent-failure run error shows, and the start goes on. It follows the
+  job's status, publishes the outcome once judged, hands an XGP job's commit
+  to the coordinator's `FollowCommitAsync`, and only then acknowledges the
+  job; the operation lasts until the acknowledgement is answered or fails
+  (see "The coordinator").
 - **Following, and its two endings** (`FollowAsync`). A status read that
   fails to communicate is retried; a failure that persists is the run error,
   saying the result hasn't arrived yet, and following goes on. Following
   ends at the terminal result, or when the server answers 404 — it no longer
   holds the job, as after a restart: the run error says the result can't be
-  shown, the panel leaves its busy state, and the files written before stay
+  shown, the run is no longer in hand, and the files written before stay
   on disk under their names. It never ends quietly.
-- **Stop** is the run's own. Once the job is known, Stop cancels it
-  (`DeliverStopAsync`) and the run follows the job to its stopped result.
-  Pressed while the start is unanswered, it is pending (`_stopPending`): the
-  start goes on being sent, and once an answer admits the job the Stop is
-  delivered before the job is followed; a refused start ran nothing. Nothing
+- **Stop** is the run's own, sent only while a run is in hand. Once the job
+  is known, Stop cancels it (`DeliverStopAsync`) and the run follows the job
+  to its stopped result. Pressed while the start is unanswered, it is
+  pending (`IsStopPending`): the start goes on being sent, the panel says
+  only "Stop requested; waiting for the server." (Hal's wording, 2026-10-22,
+  halheinrich/backgammon#424), and the moment the start is answered the Stop
+  is pending no longer — delivered before the job is followed if the answer
+  admits it, moot if it refuses, since a refused start ran nothing. Nothing
   says it was delivered until it was, so a lost start reply is never shown
-  as a confirmed cancellation. Each cancel's answer is its run's: the panel
-  holds the job the run follows as a `JobInHand`, one per run and compared
+  as a confirmed cancellation. Each cancel's answer is its run's: the run
+  controller holds the job the run follows as a `JobInHand`, one per run and compared
   by reference, and applies an answer only while that job is in hand; once
   a cancel for it is confirmed delivered, no cancel's failure undoes that,
   even one for a request sent later. A cancel refused or not confirmed, with
@@ -341,7 +355,7 @@ This section says where the code meets §7.5, not what it rules.
   delivered over it shows it at once; a Stop failure the user closes over it
   leaves it due at the next failure; once closed it stays closed for the
   rest of its streak; and contact returning ends the streak.
-- **The numbering, as remembered controls** (Home's). The pattern, the next
+- **The numbering, as remembered controls** (the coordinator's). The pattern, the next
   number and the number length are three settings under their own keys,
   read at the restore and written when they change — by the user or by a
   run's commit — as the other settings are (see "Browser storage"). A key
@@ -354,16 +368,17 @@ This section says where the code meets §7.5, not what it rules.
   change before it awaits storage, and a deferred write writes what the
   control holds then, so a pending write never puts back a value the user
   has since replaced.
-- **The commit reaching the controls** (Home's `FollowAsync`). The terminal
-  result's `XgpExportCommit` — completed, cancelled or failed alike —
-  reaches Home before the job is acknowledged. A commit of nothing moves
+- **The commit reaching the controls** (`ExtractApp.FollowCommitAsync`). The
+  terminal result's `XgpExportCommit` — completed, cancelled or failed
+  alike — reaches the coordinator before the job is acknowledged, and no
+  Run can be accepted until it has (the phase). A commit of nothing moves
   nothing (`CommittedNothing`); otherwise, unless the user has edited the
   pattern or the next number since the run captured its options, the next
   number becomes `NextNumber` and is remembered. That is an edit, not a
-  value (§7.5: "has changed the control"): one flag of Home's, cleared as an
-  XGP run starts (`OnXgpJobStarted`) and set by the pattern and next-number
-  inputs, so a control changed away and back is the user's choice and does
-  not follow. A value comparison stood here briefly; ChatGPT's review
+  value (§7.5: "has changed the control"): one flag of the coordinator's,
+  cleared as an XGP run captures its options and set by the pattern and
+  next-number commands, so a control changed away and back is the user's
+  choice and does not follow. A value comparison stood here briefly; ChatGPT's review
   (halheinrich/backgammon#424, 6331375637) corrected it, accepted at
   6331396606. The number length decides nothing. A reload during a run shows the last
   remembered values, and a run that ends after it contributes nothing to the
@@ -474,7 +489,7 @@ by the naming engine in `Client/Shared`:
 
 The default pattern `pos{n}` names files byte-identically to the pre-pattern
 `{prefix}{number:D{suffixLength}}.xgp` rule; `StartNumber`/`SuffixLength`
-govern `{n}`. `Home` owns the option state and its persistence: the
+govern `{n}`. The coordinator owns the option state and its persistence: the
 pattern, the next number and the number length are remembered settings
 under `xg_xgpPattern`, `xg_xgpNextNumber` and `xg_xgpSuffixLength` (see "A
 Local run's job"). A pattern edit keeps the remembered next number while the
@@ -489,11 +504,11 @@ and the files it committed (`NextNumber` derived). The
 processor's `RunRecord` holds it from the moment the options validate and
 replaces it as each file is written and closed; every snapshot carries it
 (`ProcessingProgress.XgpCommit`), the job runner's cancelled and failed
-results included. The panel hands the terminal result's commit to Home
-(`OnXgpJobEnded`) for every ending, whatever it shows, before it
-acknowledges the job, and Home's next-number control follows it
-(`FollowAsync`) unless the user has edited the next number or the pattern
-since the run captured its options (`OnXgpJobStarted`) — an edit, not a
+results included. The run hands the terminal result's commit to the
+coordinator (`FollowCommitAsync`) for every ending, whatever it shows,
+before it acknowledges the job, and the next-number control follows it
+unless the user has edited the next number or the pattern since the run
+captured its options — an edit, not a
 value, since §7.5 says "has changed the control": a number changed away and
 back stands (corrected from a value comparison, 6331375637, accepted
 6331396606). A length change is no such edit: it says nothing about which
@@ -503,100 +518,138 @@ commit (`XgpExportCommit.NextNumber`).
 
 ### Components
 
-- **`Home.razor`** — shell, the `FilterSurface` host, and the reporter of
-  the filter source. Owns the output format, the XGP options and the
-  folder, renders the output-format radio and the producer composite, and
-  delegates to `LocalModePanel`.
-  Its filter half is XgFilter_Razor's host contract, and nothing else (see
-  "Filter setup"):
-  - **It reports the source** to the app-scoped `FilterSetup` where it
-    latches one: the restore resolving the folder, and a folder commit.
-    `Source` is the one property
-    reports and reads both use.
-  - **It reads the filter in effect** from the owner, once, in
-    `FilterInEffect` (`Source is { } s ? FilterSetup.Current.ConfigInEffectFor(s) : null`)
-    — the one filter fact the panel is handed. Home keeps no copy of
-    a config: there is no last-committed field, and the XGP preview reads
-    the filter in effect (or the empty one).
-  - **It re-renders off notifications**, not off component events: it
-    attaches to `FilterSetup` (a commit, an edit, a restoration) and to
-    BgUiPrimitives_Razor's `BrowserStorageCondition` (a refusal from anywhere) in
-    `OnInitialized`, and disposes both attachments.
-  - **The saved-filters seam.** One `HttpDocumentStorage` instance,
-    constructed over a delegate reading the latched path (the composite
-    rebuilds its store when the bound `Storage` *reference* changes, so the
-    live folder rides the delegate). Bound while a folder is latched; null
-    otherwise — a blank path renders no saved-filters section, never a load
-    failure. It is the only parameter Home binds on `FilterSurface`.
-  - **Source identity.** The source is the input folder path:
-    `_folderPathText` follows every keystroke (and persists under
-    `xg_folderPath`), while the separate `_localSourcePath` latches only at
-    the input's `@onchange` boundary — and once at the restore, which is a
-    committed value. The token is minted from the latch only (`FromPath`,
-    handed the path in the spelling Home holds), never from the live text —
-    a half-typed path is not a source. **Path identity is the token's, not
+**The coordinator** (`Services/ExtractApp`). Hal ruled 2026-10-19
+(halheinrich/backgammon#424) that Extract takes BgQuiz_Blazor's `QuizApp`
+shape: one coordinator owns the page's state and the one operation in
+flight, and the Razor is presentation only. It is registered scoped in
+`AddClientServices` — one per loaded app, one per test context — and raises
+`Changed` on every move; pages render it and send it commands.
+
+- **The phase** (`ExtractPhase`): `Restoring` until the restore ends, then
+  `Idle`, and `Running` from a Run's click until its job's acknowledgement
+  is answered or fails — through the start, following, the result
+  published and the commit followed. A command that does not fit is refused
+  before any await: Run unless `Idle` and the gate holds (`CanRun`); every
+  settings command while `Restoring`. The settings stay open while
+  `Running`: the run captured its inputs at the click, and its result is
+  judged against the inputs when it ends, so an edit is not a second
+  operation.
+- **The run in hand** (`IsRunInHand`) is a second fact, not the phase: from
+  the click until the outcome is judged and published. It alone drives
+  Stop, which does nothing without it, the busy cursor and "Starting…", and
+  it alone exempts a result from the judgement. So once a result is on
+  screen an input move drops it at once, while Run stays refused until the
+  acknowledgement — no Run can capture a next number the commit is about to
+  move.
+- **The restore** (`EnsureRestoredAsync`) runs once per app; every caller
+  gets the same task. It reads every setting, the output path included,
+  makes the output path's extension the format's, reports the source and
+  enters `Idle`. A remount of Home reads none of these settings and reports
+  nothing, and a restore whose page has gone completes for the app. The
+  opening-book status is fetched as it starts and never awaited: no command
+  reads it.
+- **The settings**: the output format; the folder path as typed and the
+  latched source path; the output path; the XGP options, one
+  `XgpExportOptions` changed with `with`, whose defaults are the record's
+  own; the anonymize choice; the remembered pattern and number; the edit
+  flag (see "Browser storage", "A Local run's job").
+- **The source**: its token, the filter in effect read from the owner, and
+  the saved-filters storage — reported to `FilterSetup` at the restore's end
+  and at each folder commit, never before the restore has resolved it.
+- **The run** is `LocalRunController`, constructed by the coordinator and
+  held privately — not registered, so nothing else reaches a run — with its
+  facts read through (progress, run error, a Stop pending, the last run's
+  record and label, the zero-match premise). The coordinator's `Dispose`
+  ends it: in the app, the app's end, since Home is the one interactive
+  route.
+
+- **`Home.razor`** — presentation over the coordinator: the storage
+  condition's notice, the output-format radios, the XGP options and their
+  name preview, the producer composite and the panel; each gesture is a
+  command. It starts the restore on its first render and shows the settings
+  controls and the panel only once it has ended (`Phase != Restoring`): a
+  control shown before would show a default the restore is about to
+  replace, and a folder committed before the restored one had arrived would
+  be a source the app could not yet place. The token dropdown's snap-back is
+  its one field, a DOM-diff trick of its own.
+  Its filter half is XgFilter_Razor's host contract, carried by the
+  coordinator, and nothing else (see "Filter setup"):
+  - **The source is reported** to the app-scoped `FilterSetup` where it is
+    latched: the restore resolving the folder, and a folder commit.
+    `ExtractApp.Source` is the one property reports and reads both use.
+  - **The filter in effect** is read from the owner, once, in
+    `ExtractApp.FilterInEffect`
+    (`Source is { } s ? FilterSetup.Current.ConfigInEffectFor(s) : null`)
+    — the one filter fact the gate reads and the run sends. Nothing keeps a
+    copy of a config: there is no last-committed field, and the XGP preview
+    reads the filter in effect (or the empty one).
+  - **Re-rendering off notifications**, not off component events: Home and
+    the panel subscribe to the coordinator's `Changed`, which it raises on
+    every move — the filter setup's included, which it attaches to — and
+    Home attaches to BgUiPrimitives_Razor's `BrowserStorageCondition` (a
+    refusal from anywhere); both let go on disposal.
+  - **The saved-filters seam.** One `HttpDocumentStorage` instance, the
+    coordinator's, constructed over a delegate reading the latched path (the
+    composite rebuilds its store when the bound `Storage` *reference*
+    changes, so the live folder rides the delegate). Bound while a folder is
+    latched; null otherwise — a blank path renders no saved-filters section,
+    never a load failure. It is the only parameter Home binds on
+    `FilterSurface`.
+  - **Source identity.** The source is the input folder path: `FolderPath`
+    follows every keystroke (and persists under `xg_folderPath`), while the
+    latched path moves only at the input's `@onchange` boundary
+    (`CommitFolderPath`) — and once at the restore, which is a committed
+    value. The token is minted from the latch only (`FromPath`, handed the
+    path in the spelling the app holds), never from the live text — a
+    half-typed path is not a source. **Path identity is the token's, not
     this host's** (halheinrich/backgammon#94): `FromPath` folds case and
-    makes trailing separators insignificant, so Home pre-folds nothing and
+    makes trailing separators insignificant, so nothing here pre-folds and
     the latched path keeps the user's spelling for IO and display. The
     output path is **not** a source (umbrella-ratified).
-  - **The panel waits for the restore.** No panel renders until the restore
-    has resolved the source: the panel is where a folder is committed, and
-    a commit made before the restored folder had arrived would be a source
-    the page could not yet place.
-  - **Its own settings** — the output format, the folder path, the
-    anonymize flag, and the XGP pattern, next number and number length —
-    go through `ReportingBrowserStorage`, each call with its own consequence
-    phrase (see "Browser storage"). The restore runs to its end
-    whatever storage answers: each key lands on its stored value or its own
-    documented default.
-  - **Its next-number control follows a run's commit** (`FollowAsync`,
-    bound to the panel's `OnXgpJobEnded`): to the number after the last the
-    run used, unless the user has edited the pattern or the next number
-    since the run started — an edit flag cleared by the panel's
-    `OnXgpJobStarted` (see "A Local run's job"). Until Hal's ruling of
+  - **The settings** go through `ReportingBrowserStorage`, each call with
+    its own consequence phrase (see "Browser storage"). The restore runs to
+    its end whatever storage answers: each key lands on its stored value or
+    its own documented default.
+  - **The next-number control follows a run's commit**
+    (`FollowCommitAsync`): to the number after the last the run used, unless
+    the user has edited the pattern or the next number since the run
+    captured its options (see "A Local run's job"). Until Hal's ruling of
     2026-10-19 (halheinrich/backgammon#424) Home kept a numbering record and
     reconciled it with the server, with two gate reasons of its own; both
     went with it.
   - **The storage condition's notice**, `#storageUnavailableNotice`, rendered
     from the shared `BrowserStorageCondition` (see "Notices").
-- **`LocalModePanel.razor`** — folder/output-path inputs, Run/Stop/Exit
-  buttons, the run's start and following, progress bar (determinate, plus
-  the two indeterminate states in "Busy affordance"). Parameters:
-  `OutputFormat`, `Source` (the token Home reports), `FilterInEffect` (the
-  filter in effect for it, or null — the whole filter half of the Run gate,
-  and the config the run sends), the folder input's controlled-component
-  trio (`FolderPath`, `FolderPathChanged` per keystroke,
-  `OnFolderPathCommitted` at the change boundary — Home owns the value; all
-  three `[EditorRequired]`, they are the source report's wiring), the XGP
-  members, `OnXgpJobStarted` (`[EditorRequired]`, an `EventCallback`
-  raised at the click of Run for an XGP run, as its options are captured:
-  where Home begins watching for an edit) and `OnXgpJobEnded`
-  (`[EditorRequired]`, an `EventCallback<XgpExportCommit>`: a terminal
-  result's commit, raised before the job is acknowledged — see "A Local
-  run's job"). The recovery
-  protocol's other four parameters, and the start hint they fed, went with
-  it (halheinrich/backgammon#424): the panel checks nothing before a start.
-  The Run button and its click share one gate (`RunReady`). A stopped run's close
-  failure shows beside its stopped line (`#closeFailure`). The output path
-  stays panel-owned, under `xg_outputPath`.
+- **`LocalModePanel.razor`** — presentation over the coordinator: the
+  folder and output-path inputs, Run and Stop with the pending-Stop hint
+  (`#stopPendingHint`), the gate's two reasons, the run error, the progress
+  bar (determinate, plus the two indeterminate states in "Busy
+  affordance"), the result line and the skip record. It takes no
+  parameters; its code block holds the `Changed` subscription and its
+  disposal, and its gestures call commands from the markup. The Run button
+  and the Run command share one gate (`CanRun`). A stopped run's close
+  failure shows beside its stopped line (`#closeFailure`). Exit is retired
+  (Hal, 2026-10-22, halheinrich/backgammon#433): the app starts and stops
+  from Visual Studio or the terminal (see "The page and its run").
   **A result describes the inputs it was computed from.** A run records
   them when it starts (`RunInputs`: the **source visit** it started in, the
   filter's values, the output path, and whether that filter restricted
   nothing), and the result on screen — progress, Done line, zero-match box,
   run error — is dropped as soon as the visit or the filter values differ
-  from its run's (`OnParametersSet`; the filter by value: the host hands a
-  new config on every render). A visit is the stretch over which the panel
-  shows one source: replacing or removing the source ends it, and a return
-  to a folder shown before is a new one, compared by reference — so after
-  A→B→A the old run stays superseded (halheinrich/backgammon#398). Not while
-  busy: a running job's progress and Stop stay with their own job. A run's
+  from its run's (`LocalRunController.JudgeResult`, run when an input moves:
+  a folder commit, or the filter in effect moving, which the coordinator
+  hears from `FilterSetup`; the filter by value, since the owner hands a new
+  config on every ask). A visit is the stretch over which the app shows one
+  source: replacing or removing the source ends it, and a return to a
+  folder shown before is a new one, compared by reference — so after A→B→A
+  the old run stays superseded (halheinrich/backgammon#398). Not while a
+  run is in hand: a running job's progress and Stop stay with their own job. A run's
   outcome — its terminal snapshot or its failure — is **judged before it is
   published**: following renders only non-terminal progress, and when the
   run ends its outcome is shown only if the run still describes the inputs
   on screen. So a run that completes after its inputs were superseded is
   never shown as the new inputs' result, not even while the XGP export's
-  bookkeeping (Home's write of the next number) is pending. That bookkeeping
-  is the job's own: Home is handed the commit for every ending — completed,
+  bookkeeping (the coordinator's write of the next number) is pending. That bookkeeping
+  is the job's own: the coordinator is handed the commit for every ending — completed,
   cancelled or failed — whatever is on screen (see "XGP export"). Watching "a
   filter is in effect" fall is not enough, and was what this replaced: the
   empty selection stays in effect across a folder change, so nothing falls
@@ -608,7 +661,7 @@ commit (`XgpExportCommit.NextNumber`).
   file. The zero-match box asks the run's own filter, never the one on
   screen now.
   **The run's skip record lives by other rules** (`SPEC-notices.md` §7.2,
-  ruled "Option B"), so it is its own state, `_lastRun`: the record the run's
+  ruled "Option B"), so it is its own state, the run controller's `LastRunRecord`: the record the run's
   terminal snapshot carried, the source visit the run ran in, and how the
   run ended. It is published when the run ends while that visit is still the
   current one, whatever the filter now is; a filter change keeps it, an
@@ -628,9 +681,9 @@ commit (`XgpExportCommit.NextNumber`).
   instead of adding a third combined state.
 
 The Run gate's filter term is `FilterInEffect is not null`, and nothing
-else filter-shaped — one fact, one owner. The panel adds its own gates
-beside it (a folder and an output path; valid XGP options); those stay the
-panel's. A source change (a new folder commit) ends the setup: an applied selection is
+else filter-shaped — one fact, one owner. The coordinator adds its own terms
+beside it (the app idle, a folder and an output path, valid XGP options);
+those stay the app's. A source change (a new folder commit) ends the setup: an applied selection is
 dropped and needs Apply again against the new source, while the empty
 selection stays in effect without one.
 
@@ -654,24 +707,24 @@ it, not a restatement.
   `AddFilterSurface<BrowserStorageCondition>()`. Only the WebAssembly client renders the
   surface or injects the owner: Home renders `InteractiveWebAssembly` with
   `prerender: false`, and the server renders none of either.
-- **The source is reported, never bound, and never guessed.** Home reports
-  at the moments listed under Components. `ReportSource(null)` is a real
-  answer — it ends an existing setup — so "not yet known" is never reported
-  as null: until the restore has resolved the folder
-  (`_sourceResolved`), Home reports nothing and renders no panel. A
-  return over the same folder therefore reports the same token once, which
-  ends nothing: the generation and the baseline stand, and Run opens over
-  the applied filter without a re-Apply. There is no mount gate around the
-  surface, no copy-back of a resumed selection and no clear at a pick:
-  reporting the source is the whole of it.
-- **A disposed page reports nothing.** Home's async work is tied to its
-  lifetime — one `CancellationTokenSource`, cancelled in `Dispose()`. The
-  app-mode request is handed its token, so a navigation away cancels it;
-  each restore read completes (a refusal still reaches the condition) and
-  the restore stops after it; and `ReportSource()` publishes only while the
-  lifetime is live. Without it, a page disposed while its mode response was
-  pending would report its folder over a newer page's setup — advancing the
-  generation and dropping that setup's baseline.
+- **The source is reported, never bound, and never guessed.** The
+  coordinator reports at the moments listed under Components.
+  `ReportSource(null)` is a real answer — it ends an existing setup — so
+  "not yet known" is never reported as null: until the restore has resolved
+  the folder (the phase is `Restoring`), nothing is reported and Home
+  renders no panel. A remount of Home reports nothing at all, so the
+  generation and the baseline stand, and Run opens over the applied filter
+  without a re-Apply. There is no mount gate around the surface, no
+  copy-back of a resumed selection and no clear at a pick: reporting the
+  source is the whole of it.
+- **The restore is the app's, not a page's.** It runs once per app, started
+  by the first page to render; a page that goes while it is in flight
+  changes nothing — each read completes (a refusal still reaches the
+  condition) and the restore runs to its end, reporting the source for the
+  app. Until halheinrich/backgammon#424 each page ran a restore of its own,
+  tied to the page's lifetime, so that a page disposed mid-restore could
+  not report its folder over a newer page's setup; with one restore per
+  app there is no second restore to report over it.
 - **Readiness** (halheinrich/backgammon#266). With a source, a valid empty
   selection is in effect without Apply. Extract adds no empty-filter
   exception of its own, and no copy says Apply is needed for it: Local's
@@ -683,7 +736,7 @@ it, not a restatement.
 
 ### Browser storage
 
-Every storage call this app makes — Home's keys, the panel's, and the filter
+Every storage call this app makes — the coordinator's keys and the filter
 surface's own — goes through BgUiPrimitives_Razor's `BrowserStorage` (Hal's
 ruling on halheinrich/backgammon#374; the library's "Browser storage
 access"). No Extract code calls storage interop directly, and nothing
@@ -715,18 +768,21 @@ access and the condition were retired for them. Registration is
   nothing (a read served says nothing about writes; one key's success says
   nothing about another's). It records the occurrence and the notice's
   dismissal, never permission to stop calling. Home attaches to it, so a
-  refusal from a panel or the surface shows on Home without a gesture of
-  Home's, and a refusal while Home was absent is there on its return. A
-  full reload constructs a fresh holder.
+  refusal from the coordinator or the surface shows on Home without a
+  gesture of Home's, and a refusal while Home was absent is there on its
+  return. A full reload constructs a fresh holder.
 - **A refused write never stops the gesture that made it.** At v1.12.1 the
   panels' unguarded reads and writes could throw out of a gesture or a first
   render (halheinrich/backgammon#102, Extract's portion, closed here). They
   now go through `ReportingBrowserStorage`.
 
-The keys: Home's `xg_outputFormat`, `xg_folderPath`, `xg_xgpAnonymize`,
+The keys, all the coordinator's (`ExtractApp`), read once per app by its
+restore and written by its commands as each setting changes:
+`xg_outputFormat`, `xg_folderPath`, `xg_outputPath`, `xg_xgpAnonymize`,
 `xg_xgpPattern`, `xg_xgpNextNumber` and `xg_xgpSuffixLength` (the XGP
 numbering as three remembered controls, `SPEC-notices.md` §7.5; the two
-numbers in invariant digits); and `LocalModePanel`'s `xg_outputPath`. The
+numbers in invariant digits). Until halheinrich/backgammon#424 Home read and
+wrote six and the panel the output path, each page at every visit. The
 filter surface's keys are its own and are not named here. The numbering
 record's document, with its migration and its four-outcome read, went with
 the recovery protocol (halheinrich/backgammon#424, 2026-10-19): nothing
@@ -759,7 +815,8 @@ knows when a new occurrence begins and whether the old one outlives the page.
 Every dismissible box here is caller-held (`@bind-Dismissed:get/set`), so the
 component keeps no bit that could disagree with the owner's:
 
-- **The run error — the panel's `_runError`.** One occurrence is one failed
+- **The run error — the run controller's `_runError`**, read through
+  `ExtractApp.RunError` and dismissed by its command. One occurrence is one failed
   gesture: a start the server refused (its identity used for a different
   run), a job the server no longer holds, a Stop the server refused or never
   answered (following goes on), or — while it lasts — a start or a status
@@ -774,16 +831,16 @@ component keeps no bit that could disagree with the owner's:
   fresh although its text may be identical — the text was never the
   occurrence. It replaced a `_hasError` flag beside a `_statusMessage` string:
   two fields for one fact, to which a dismissal would have added a third.
-  The occurrence dies with the panel, so the panel is the right owner; it is
-  bound rather than left component-held with an `OccurrenceKey` because a key
-  would need a run counter — a new fact invented to name one the panel
-  already holds. The panel's `_progress.ErrorMessage` is a different fact
-  (the server's report of a job that started and then failed) and is not a
-  box.
+  The occurrence is the run's, so the run controller is the right owner
+  (the panel's until halheinrich/backgammon#424); it is bound rather than
+  left component-held with an `OccurrenceKey` because a key would need a run
+  counter — a new fact invented to name one the run already holds. The
+  run's `_progress.ErrorMessage` is a different fact (the server's report of
+  a job that started and then failed) and is not a box.
 - **Storage trouble — the app-scoped `BrowserStorageCondition`**
   (BgUiPrimitives_Razor's since halheinrich/backgammon#424). One
   occurrence per visit: it begins at the first refusal from any reporter —
-  Home's settings, the panel's, or the filter surface's — and every later
+  the coordinator's settings or the filter surface's — and every later
   refusal, and every later success, is the same occurrence (see "Browser
   storage"). That outlives the page, so neither bit may be a page field. The
   condition (registered Scoped — one per loaded app under WebAssembly)
@@ -816,7 +873,7 @@ The panel's progress bar already covers the CSV, Diagram JSON and Xgp
 pathways end to end (2 s runs, reporting throughout). Two states carry no
 fraction and get an indeterminate striped bar instead:
 
-- **Before the first status read** (`_busy && _progress is null`) — following
+- **Before the first status read** (`IsRunInHand && Progress is null`) — following
   waits a poll interval (`LocalJobTiming.PollInterval`, a second) before its
   first read, which alone guarantees a second of it.
 - **The deck pathway's atomic render** (`Phase == JobPhase.Rendering`) — 144 s
@@ -828,13 +885,13 @@ fraction and get an indeterminate striped bar instead:
 the user found missing (issue halheinrich/backgammon#77): through that
 multi-minute deck render the bar and the phase message were right and the
 pointer stayed a plain arrow. The panel puts an `is-busy` class on its
-**root** element for exactly as long as its own busy state, `_busy`, is up,
+**root** element for exactly as long as a run is in hand (the coordinator's `IsRunInHand`),
 and `wwwroot/app.css` turns that one class into
 `cursor: progress` for the root and everything under it. Two details are
 load-bearing:
 
-- **It rides the flag, not a window.** The pre-first-poll gap, the
-  determinate stretch and the atomic render are all inside one `_busy` — so
+- **It rides the fact, not a window.** The pre-first-poll gap, the
+  determinate stretch and the atomic render are all inside one run in hand — so
   all of them are covered by one rule, and a busy window added later is covered without a second one.
 - **The rule's descendant half and its `!important` are not defensive.**
   Bootstrap dresses the pointer over exactly the controls the wait started from
@@ -846,14 +903,14 @@ load-bearing:
   arms race would be the worse answer here, not the purer one.
 
 `progress` rather than `wait`: it is the keyword for "working, but the
-interface still responds", which a run is exactly (Stop and Exit stay live).
+interface still responds", which a run is exactly (Stop stays live).
 `BusyCursorTests` pins the state→class binding.
 
 ### The page and its run
 
 - Folder path + output path inputs. Output format: CSV, Diagram JSON, PPTX,
   or PDF; persisted to `localStorage` under key `xg_outputFormat`.
-- Run → the page mints the job's identity → `POST /api/process/start`
+- Run → the coordinator mints the job's identity → `POST /api/process/start`
   (a `StartRequest`: the identity and the run). The client reads
   `GET /api/process/{jobId}/status` every second until the terminal result,
   or a 404, then acknowledges a terminal result (see "A Local run's job" and
@@ -870,8 +927,17 @@ interface still responds", which a run is exactly (Stop and Exit stay live).
   expand into Problem/Solution pairs
   rendered via `DiagramRasterRenderer.RenderPptx` or `RenderPdf`.
 - Stop → `POST /api/process/{jobId}/cancel` once the start is answered;
-  before that, Stop waits for the answer and is delivered once it admits
-  the job (see "A Local run's job"). Exit → `ShutdownController`.
+  before that, Stop waits for the answer — "Stop requested; waiting for the
+  server." beside the button — and is delivered once it admits the job (see
+  "A Local run's job").
+- **Starting and stopping the app.** It starts from Visual Studio or the
+  terminal (`dotnet run --project ExtractFromXgToCsv`, or `dotnet
+  ExtractFromXgToCsv.dll` in the Release publish folder) and stops there
+  (Visual Studio's Stop, or Ctrl+C). Closing the browser tab leaves the host
+  running, and a run in progress goes on writing its files. The page has no
+  Exit: Hal ruled on 2026-10-22 (halheinrich/backgammon#433) that a page
+  which stops its own host is not a shape this local tool keeps, and Exit's
+  button and its endpoint, `POST /api/shutdown`, were retired; Stop stays.
 
 ### Job lifecycle (Local mode)
 
@@ -1059,14 +1125,20 @@ over the app's own lifetimes. **Browser storage is planned where it is the
 subject, and incidental elsewhere** (XgFilter_Razor's posture): a test whose
 subject is storage, a restored value or the storage condition puts a
 `BrowserStoragePlan` on its runtime, declares every call — this app's keys as
-literals (`HomeStoragePlan` for Home's), the filter surface's through
+literals (`HomeStoragePlan` for the coordinator's), the filter surface's through
 `FilterSurfaceStorage` — and ends with `Verify`. A test where storage is
 incidental runs `JSRuntimeMode.Loose`, whose answers reach the real
 `BrowserStorage` as "nothing stored" and "landed". No test spells a storage
-interop identifier or mirrors a producer storage key. A Local result is
-reached by running a job against a stub server (`LocalPanelRuns`,
-`CapturingProcessHandler`), never by seeding the progress it shows: the panel
-records what a run was computed from when the run starts.
+interop identifier or mirrors a producer storage key. **Nothing is seeded,
+and nothing is reflected into the coordinator or the panel**
+(halheinrich/backgammon#424): a test reaches a state through the
+coordinator's commands, its pages' gestures and the wire. A Local result is
+reached by running a job against a stub server (`LocalPanelHost`,
+`CapturingProcessHandler`): the run records what it was computed from when
+it starts. A busy panel is a run whose status reads are held, a progress
+state is a snapshot the server answers, and a filter is put in effect by
+applying it on the surface — or, for a whole configuration, by restoring it
+as the remembered selection and applying it.
 
 - `Make20PtSmokeTests` — wire test for the Make20Pt filter category.
   Exercises `FilterConfig.Build` + `FilteredDecisionIterator` under the
@@ -1184,12 +1256,14 @@ records what a run was computed from when the run starts.
   server and shared in-memory browser storage): a lost start reply re-sent
   under its identity and run once; a status read failing once (the result
   still delivered) and persistently (the run error, following on); a 404
-  after a restart (following ends with the run error, the panel leaves
-  busy, the files stay); Stop before the start is answered — the answer
+  after a restart (following ends with the run error, the run no longer in
+  hand, the files stay); Stop before the start is answered — the answer
   held, or a lost reply's retry held — delivering no cancel and showing
-  nothing until the job is admitted, then cancelling it, in XGP and CSV;
-  Stop after the admitted answer arrived (the answer held by
-  `AnswerHeldJobs`); a cancel not delivered (shown, following on); a
+  nothing but the pending-Stop hint (never "Stopped") until the job is
+  admitted, the hint gone with the answer, then cancelling it, in XGP and
+  CSV; a Stop pending when the start is refused, its hint gone with the
+  refusal (`RefusedStartJobs`); Stop after the admitted answer arrived (the
+  answer held by `AnswerHeldJobs`); a cancel not delivered (shown, following on); a
   stopped run's close failure reaching the page; a Stop failure standing
   through a persistent failure and contact returning; two Stops answered in
   either order (a confirmed delivery stands) and a stale cancel's failure
@@ -1201,13 +1275,27 @@ records what a run was computed from when the run starts.
   came from `LocalRecoveryTests`, which pinned the recovery protocol and
   went with it (halheinrich/backgammon#424), as did the reconciler's, the
   edit clock's and the three numbering-record suites.
+- `ExtractAppTests` — the coordinator's table (halheinrich/backgammon#424),
+  as `QuizAppTests` is BgQuiz's: driven on `ExtractApp` over the app's
+  registrations, a stub server behind a `ProtocolWire` and in-memory
+  storage, the filter surface its one component. Refusals by phase, each
+  starting and writing nothing — every settings command and Run while
+  `Restoring`, Run while `Running`, Stop with no run in hand; the phase
+  covering the whole operation, the acknowledgement held — the next number
+  already followed and Run refused, the result on screen and dropped at once
+  by a filter change (the skip record kept) or a source change (the record
+  cleared), a Stop sending no cancel and showing no hint, Run accepted once
+  released; the restore once (two callers, one set of reads); the defaults
+  over empty storage, the XGP options' the record's own; the book status
+  held while the restore ends and a Run is accepted; and the output path's
+  extension at its three moments, each with its control.
 - `HomeWiringTests` — bUnit wire tests pinning the `FilterSetup` → `Home`
   integration through the composite's rendered DOM (the panels are
   producer-internal; `FindComponent` over them is banned, host tests
-  included), reading the owner's snapshot as Home does: readiness (the empty
+  included), reading the owner's snapshot as the coordinator does: readiness (the empty
   selection is in effect without Apply once a folder is committed, and
   Apply is off with no source), a non-empty selection in effect only after
-  Apply and handed to the panel by value, an edit closing the gate and its
+  Apply and read by the coordinator by value, an edit closing the gate and its
   undo reopening it, the source-change rule (a folder commit ends the
   setup — generation
   advanced, the applied selection dropped, Apply re-armed without an edit;
@@ -1226,49 +1314,53 @@ records what a run was computed from when the run starts.
   round-trip over the file relay (document rows render, save-as writes into
   the latched folder under the producer's file name, a folder change
   reloads the context); every format radio enabled; and the XGP options
-  block, shown only while XGP is selected, handed to the panel. Storage is
+  block, shown only while XGP is selected, its options the coordinator's. Storage is
   incidental here (Loose). Uses `StubServerHandler` from `bUnitTestHelpers`
   — which serves an in-memory edition of the filterdocument relay — to
   drive the saved-filters context deterministically.
-- `HomeSourceReportTests` — how Home reports its source
+- `HomeSourceReportTests` — how the app reports its source through Home
   (halheinrich/backgammon#374, Arc 2), with storage planned: the surface is
   up from the first render and nothing is reported until the restore
   ends (its last read held by the storage plan, so the window is observed
-  rather than raced); **a return with a non-empty committed filter, the
-  restore held, released with the same folder, preserves the setup's
-  generation and baseline** — the draft on screen, Apply with nothing to
-  do, Run open over the applied filter; a different folder restored, and no
-  folder restored, each end the setup; blanking the folder reports no source
-  with the surface still mounted. And a disposed page: a Home whose restore
-  is held while a newer Home establishes folder B and applies its filter
-  reports nothing when its read completes — B's source, generation and
-  baseline stand; and a disposed Home's in-flight read,
-  refused, still reaches the condition while its restore makes no further
-  call.
+  rather than raced); **a remount over a non-empty committed filter reads no
+  setting and reports nothing, so the setup's generation and baseline
+  stand** — the folder and the draft on screen, Apply with nothing to do,
+  Run open over the applied filter; a remount keeps this app's folder and an
+  explicit commit of another still ends the setup; a remount after the
+  folder was cleared reports nothing and the source stays none; blanking the
+  folder reports no source with the surface still mounted. And a restore
+  whose page has gone: held while a second Home mounts — which starts no
+  restore of its own — it completes for the app and reports its folder
+  once; and an in-flight read, refused after its page has gone, still
+  reaches the condition while the restore runs to its end. The remount
+  cases were re-based when the restore became once per app
+  (halheinrich/backgammon#424); before, each visit ran its own.
 - `HomeStorageUnavailableTests` — the storage condition as Home shows it,
-  with storage planned. A browser that refuses **everything** — Home, the
-  panel, the filter surface — leaves a working page and the notice, every
-  option on its documented default; working storage says nothing. The three
-  reporters: a panel-only refusal after Home has settled (the keystroke
-  re-renders the panel, not Home); a producer refusal (the commit's write
-  held, so the click's own render has happened before the browser answers);
-  and a producer refusal answered after Home has gone, shown on return. And
-  readable storage with refused writes followed by a successful write: one
-  occurrence throughout, and once dismissed, a further refusal does not bring
-  it back. The notice as a box (`NoticeBox`): a warning, assertive,
-  dismissible, its id and style on the box, saying Hal's ruled wording
-  exactly; dismissed by either gesture with the condition standing; and the
-  navigate-back row — a second `Home` stays silent after a dismissal **and
-  still makes every storage call**, refused again, with the undismissed
-  remount as the control.
+  with storage planned. A browser that refuses **everything** — the
+  coordinator's settings, the filter surface — leaves a working page and the
+  notice, every option on its documented default; working storage says
+  nothing. The three reporters: a setting's refusal after Home has settled
+  (the keystroke rendered before the browser answers); a producer refusal
+  (the commit's write held, so the click's own render has happened before
+  the browser answers); and a producer refusal answered after Home has
+  gone, shown on a remount. And readable storage with refused writes
+  followed by a successful write: one occurrence throughout, and once
+  dismissed, a further refusal does not bring it back. The notice as a box
+  (`NoticeBox`): a warning, assertive, dismissible, its id and style on the
+  box, saying Hal's ruled wording exactly; dismissed by either gesture with
+  the condition standing; and the remount row — a second `Home` stays
+  silent after a dismissal **and storage is still attempted**: its filter
+  panel's reads and the next settings write, refused again, with the
+  undismissed remount as the control.
 - The condition's own contract — a fresh holder has no occurrence, the
   first refusal begins it, a dismissal cannot precede it, `Attach` and its
   disposal, and a throwing logger contained — is pinned in
   BgUiPrimitives_Razor's suite, the logger cases as the reporting access's
   (halheinrich/backgammon#424); this suite pins Home over it
   (`HomeStorageUnavailableTests`, above).
-- `LocalModePanelStorageTests` — the panel's own key under a refusing
-  browser, planned: a refused restore lands on the default and is reported; a refused output-path write keeps the typed
+- `LocalModePanelStorageTests` — the output-path key, the coordinator's, as
+  the panel shows it under a refusing browser, planned: a refused restore
+  lands on the default and is reported; a refused output-path write keeps the typed
   value and is reported; and working storage restores, saves and reports
   nothing.
 - `LocalModePanelNoticeTests` — what kind of box each of the panel's
@@ -1295,8 +1387,9 @@ records what a run was computed from when the run starts.
 - `HomeRestoreNoticeTests` — the §4 notice through this host, with the
   boot's restoration planned (`FilterSurfaceStorage.ExpectFilterRestore`): a
   restored selection is announced with Apply armed, an edit ends the notice,
-  and a navigation back neither announces it again nor restores over the
-  user's edit — the owner's app scope, as this host registers it. The
+  and a navigation back — a remount, reading none of the coordinator's
+  settings — neither announces it again nor restores over the user's edit:
+  the owner's app scope, as this host registers it. The
   notice's own mechanics are the producer's to pin and are pinned there.
 - `FilterDocumentStoreTests` — the server relay's unit contracts: the
   filename-shape rule's accept/reject matrix, absent file *and* absent
@@ -1306,6 +1399,10 @@ records what a run was computed from when the run starts.
   (`WebApplicationFactory` over the real `Program` pipeline) for what only
   hosting observes: the round-trip landing on disk at the real route, 204
   for absent, and 400 for non-simple names.
+- `ShutdownEndpointRetiredTests` — hosted: `POST /api/shutdown`, retired
+  with Exit (halheinrich/backgammon#433), is answered as a route that never
+  existed is, and the host goes on serving. Not by status: this host answers
+  any unmapped POST 405 (see Pitfalls).
 - `HttpDocumentStorageTests` — the client adapter's producer contracts:
   204 → null (absence is a value), body round-trips, folder and name
   travel escaped with the folder read from the delegate at call time,
@@ -1313,12 +1410,13 @@ records what a run was computed from when the run starts.
   call with no current folder propagates unwrapped as the adapter-contract
   bug it is.
 - `LocalModePanelGateTests` — bUnit tests pinning `LocalModePanel`'s gate
-  and what its result describes: the Run-button filter gate (`FilterInEffect`
-  plus non-empty paths to enable); the `ErrorMessage` render branch (a
-  `Complete + ErrorMessage != null` `ProcessingProgress` renders in a
+  and what its result describes, over the coordinator: the Run-button filter
+  gate (`FilterInEffect` plus non-empty paths to enable); the `ErrorMessage`
+  render branch (a `Complete + ErrorMessage != null` terminal renders in a
   `.text-danger` span, not the in-progress slot); and, through real runs,
-  the result's lifetime — kept across a re-render that changes neither input
-  (an equal config in a new instance), dropped when the filter leaves effect
+  the result's lifetime — kept across a move that changes neither input (a
+  format change, the filter read again as an equal config in a new
+  instance), dropped when the filter leaves effect
   or its values change, **dropped on a folder change while the empty filter
   stays ready**, and **not shown when the run completes after its inputs were
   superseded** — its progress and Stop staying with it while it runs — with
@@ -1357,8 +1455,8 @@ records what a run was computed from when the run starts.
 - `LocalModePanelRunRecordLifetimeTests` — §7.2's lifetime through real runs:
   a filter change keeps the record and drops "Done" and the zero-match
   notice; replacing or removing the source clears it; a run completing after
-  its source was replaced publishes none — nor after A→B→A, while the host
-  is still handed its commit, before it is acknowledged — with a run whose filter
+  its source was replaced publishes none — nor after A→B→A, while its
+  commit is still followed, before it is acknowledged — with a run whose filter
   changed instead as the control (its record, not its result); the next run
   replaces it from its start.
 - `SkipListNoticeTests` — the one rendering: an empty record renders nothing,
@@ -1371,21 +1469,25 @@ records what a run was computed from when the run starts.
   covers its format/anonymize half): the applied `FilterConfig` reaches the
   server intact, the depth facet's three toggle+levels pairs cross verbatim
   under an asymmetric selection, the bound config activates the same
-  `GetActiveFacets()` set the panel described, and untoggled level lists stay
+  `GetActiveFacets()` set the user applied, and untoggled level lists stay
   inert rather than reviving the retired "levels alone activate" semantics.
+  Each configuration is put in effect as the boot's remembered selection,
+  then applied — a selection that restricts nothing is in effect without
+  Apply.
   Both halves of each pair are pinned because either one lost in transit widens
   the run silently — no error, just different output.
-- `LocalModePanelBusyAffordanceTests` — the two no-fraction progress states:
+- `LocalModePanelBusyAffordanceTests` — the two no-fraction progress states,
+  each a real run's (a status read held, or a snapshot the server answers):
   busy-before-first-poll and `JobPhase.Rendering` both render an indeterminate
   striped bar, the rendering branch suppresses the frozen elapsed/throughput
   figures, and — the pin that catches a regression to prefix-matching — the
   same snapshot with a "Rendering…" `FileName` but `Phase = Processing` keeps
   the determinate bar and its figures.
-- `BusyCursorTests` — the busy-cursor binding: the panel's root carries
-  `is-busy` exactly while its own busy flag is up (the pre-first-poll gap and
-  the atomic-render branch), and
-  carries nothing once the flag drops — pinned against a terminal snapshot,
-  which keeps the progress block on screen after the flag is down, because a
+- `BusyCursorTests` — the busy-cursor binding, through real runs: the
+  panel's root carries `is-busy` exactly while a run is in hand (the
+  pre-first-poll gap and the atomic-render branch), and
+  carries nothing once it is not — pinned against a terminal snapshot,
+  which keeps the progress block on screen after the run has ended, because a
   busy cursor stranded over an idle app is worse than the arrow this replaced.
   The marker is asserted to *enclose* the panel (the Run button included): a
   marker on a leaf would satisfy a bare "class is present" check and dress
@@ -1528,14 +1630,13 @@ PUT  /api/filterdocument?folder=…&name=…
 
 The `filterdocument` pair is the saved-filters file relay: the client-side
 `HttpDocumentStorage` adapter is its only caller, supplying file names
-from `SavedFiltersDocument` (producer-owned) and the folder from Home's
-latched source path — the server validates the name's *shape* but never
-knows the names themselves.
+from `SavedFiltersDocument` (producer-owned) and the folder from the
+coordinator's latched source path — the server validates the name's *shape*
+but never knows the names themselves.
 
-```
-POST /api/shutdown
-  200 →  (empty; host begins graceful shutdown)
-```
+`POST /api/shutdown`, which stopped the host for the page's Exit, was
+retired with it (Hal, 2026-10-22, halheinrich/backgammon#433): the app
+stops from Visual Studio or the terminal (see "The page and its run").
 
 The protocol's types live in `ExtractFromXgToCsv.Client/Shared/` — the
 client owns the wire shape and the server deserializes against it. The
@@ -1666,8 +1767,8 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `IAsyncEnumerable` endpoint expecting WASM to consume it.
 - **The busy cursor is one class and one rule — don't add per-spot cursor CSS.**
   The affordance is `is-busy` on the panel's root element plus the single
-  `wwwroot/app.css` rule. A new slow gesture inherits it by raising the busy
-  state the panel already holds; putting `cursor:` on an individual button, notice or progress bar forks the
+  `wwwroot/app.css` rule. A new slow gesture inherits it by running inside
+  the coordinator's run in hand (`IsRunInHand`); putting `cursor:` on an individual button, notice or progress bar forks the
   discipline and drifts. Corollary: nothing links the class to the rule at
   compile or test time — `BusyCursorTests` pins state→class only — so the name
   must be changed in the panel and the stylesheet together. That is the price
@@ -1728,7 +1829,7 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   closed.
 - **Don't add a dismissed flag beside `_runError`, and don't hold the
   storage notice's dismissal in `Home`.** Each dismissal has exactly one
-  holder, the occurrence's owner (see "Notices"). A panel-side flag would be
+  holder, the occurrence's owner (see "Notices"). A flag beside it would be
   a second bit that can disagree with the field; a page-side one would die on
   navigation while the condition it belongs to does not, so a navigate-back
   would re-show a notice the user had closed.
@@ -1805,13 +1906,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   appropriate for the current non-commercial posture
   (revenue ≤ $1M / year); revisit if commercial distribution ever becomes
   a goal.
-- **`FilterConfig` is materialized on the server.** The panel takes the
-  filter in effect as a `FilterConfig` and POSTs it unbuilt;
+- **`FilterConfig` is materialized on the server.** The coordinator takes
+  the filter in effect as a `FilterConfig` and its run POSTs it unbuilt;
   `ProcessController` calls `request.Filters.Build()` to materialize the
   `DecisionFilterSet` before handing it to `LocalFolderProcessor`.
 - **Compare configs by value, never by reference.** The owner's
-  `ConfigInEffectFor` returns a new instance on every call, so Home hands
-  the panel a new instance on every render. A reference comparison — a
+  `ConfigInEffectFor` returns a new instance on every call, so the
+  coordinator reads a new instance on every ask. A reference comparison — a
   cache key, a "did the filter change" check, an `Assert.Same` in a test —
   reads every render as a change. `FilterConfig` has value equality
   (`Equals`, order-insensitive over its lists) and no `==` operator; it is
@@ -1829,19 +1930,19 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   client adapter. Adding an XgFilter_Razor reference to the server csproj
   "for the constants" would re-couple what the split exists to decouple.
 - **Run gating is the owner's, read once — don't re-derive it, and don't
-  re-split it.** The panel's filter term is `FilterInEffect`, which
-  Home reads from `FilterSetup` source-relatively, in one property, and
-  from nothing else. Don't call `ConfigInEffectFor` at a use site with a
-  token minted there — a second mint is a second chance to mint it
-  differently — and don't hand a panel a config beside a separate "applied"
-  flag: one nullable is one fact, and two parameters can disagree. If Run
+  re-split it.** The gate's filter term is `ExtractApp.FilterInEffect`,
+  which the coordinator reads from `FilterSetup` source-relatively, in one
+  property, and from nothing else. Don't call `ConfigInEffectFor` at a use
+  site with a token minted there — a second mint is a second chance to mint
+  it differently — and don't keep a config beside a separate "applied"
+  flag: one nullable is one fact, and two can disagree. If Run
   is ever enabled with the selection on screen not in effect, or
   with what is in effect for a *different* source, that's a regression: the
   owner is the gate, not a cosmetic hint. Don't add an empty-filter
   exception either — the owner's readiness already puts the empty selection
   in effect without Apply (halheinrich/backgammon#266).
-- **A source change ends the setup — and only Home says so.** Home latches
-  the folder path at the input's `@onchange` boundary (plus the restore),
+- **A source change ends the setup — and only the coordinator says so.** It
+  latches the folder path at the input's `@onchange` boundary (plus the restore),
   and reports
   the token (`ReportSource`) whether or not the surface is mounted, and the
   owner ends the setup on any different token, `null` included: the applied
@@ -1855,21 +1956,33 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   output path never ends anything — it is not a source (umbrella-ratified).
   Don't wire the latch to `@oninput` — a half-typed path is not a source.
 - **Never report a source before it is known.** `ReportSource(null)` is a
-  real answer: it ends an existing setup. Home's folder arrives in its
-  first-render restore, from storage, so until the restore has ended the
-  answer is "not yet known", which is never reported. Reporting early would end the setup on every
-  return to the page and then report the restored folder as a new source:
-  the baseline gone, Apply re-armed, Run dark. Hence `_sourceResolved`, and
-  hence no panel renders before it (the panel is where a source is
-  latched). The surface itself mounts from the first render: the owner
-  outlives the page, so it shows the existing setup as it stands until the
-  report arrives. Don't "simplify" this into a report from `OnInitialized`
-  or `OnParametersSet`. `HomeSourceReportTests` holds the restore's last
-  read open to pin it. **Nor after the page has gone**: the restore's awaits
-  belong to the page's lifetime (see "Filter setup"), so don't add an await
-  to the restore that is not checked against the lifetime.
-- **The restore runs to its end, over results.** Every read in Home's
-  restore answers a value or "nothing stored" (a refusal is reported and
+  real answer: it ends an existing setup. The folder arrives in the
+  coordinator's restore, from storage, so until the restore has ended the
+  answer is "not yet known", which is never reported. Reporting early would end the setup and
+  then report the restored folder as a new source: the baseline gone,
+  Apply re-armed, Run dark. Hence the `Restoring` phase, which refuses a
+  folder commit, and hence no panel renders before it ends (the panel is
+  where a source is latched). The surface itself mounts from the first
+  render: the owner outlives the page, so it shows the existing setup as it
+  stands until the report arrives. Don't "simplify" this into a report from
+  a page's `OnInitialized` or `OnParametersSet`. `HomeSourceReportTests`
+  holds the restore's last read open to pin it.
+- **The restore is once per app — don't start one per page.** Every page
+  asks `EnsureRestoredAsync` and gets the one task. A restore per page would
+  read every setting again at each remount, report the source again, and
+  race the app's own restore if a page went mid-way — which is what the
+  page's cancellation lifetime used to guard before
+  halheinrich/backgammon#424.
+- **Two facts about a run — don't merge them.** The phase (`Running`, to the
+  acknowledgement) refuses another Run; the run in hand (`IsRunInHand`, to
+  the publication) drives Stop, the busy cursor and the judgement's
+  exemption. Keying Stop or the exemption on the phase would send a cancel
+  for a published run, or keep a stale result on screen while the
+  acknowledgement is pending; keying Run on the run in hand would let a Run
+  capture a next number the commit is about to move. `ExtractAppTests` pins
+  each.
+- **The restore runs to its end, over results.** Every read in the
+  coordinator's restore answers a value or "nothing stored" (a refusal is reported and
   answers "nothing stored" too), so the restore always reaches the source
   report with facts, not with reads that never landed. Don't wrap the
   restore in a method-wide `try`: it would have to restate every default in
@@ -1887,10 +2000,10 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   `read.IsStored ? read.Value : null` and coalesce on that.
 - **`HttpDocumentStorage` is one stable instance over a delegate —
   and must never be called without a folder.** The composite rebuilds its
-  saved-filters store when the bound `Storage` reference changes, so Home
-  constructs the adapter once and the live folder rides the
-  `Func<string?>`. While the latched path is blank Home binds
-  `Storage = null` — no section renders and nothing calls
+  saved-filters store when the bound `Storage` reference changes, so the
+  coordinator constructs the adapter once and the live folder rides the
+  `Func<string?>`. While the latched path is blank its `SavedFiltersStorage`,
+  which Home binds, is null — no section renders and nothing calls
   the relay; a call with no folder is therefore an adapter-contract bug
   and throws `InvalidOperationException` unwrapped, while everything that
   means "the I/O failed" wraps in `DocumentStorageException` so the store
@@ -1995,17 +2108,26 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   (Until v1.12.2 the Xgp pathway reported on every file so its last
   `TotalRows` could stand in for the count; that special case is gone.)
 - **Xgp `OutputPath` is a folder.** `ProcessXgpAsync` treats it as a
-  directory (created if absent) and `LocalModePanel` skips the
-  extension-swap logic for Xgp. No Local output file is overwritten (see
+  directory (created if absent) and the coordinator's extension rule skips
+  Xgp. No Local output file is overwritten (see
   above): the one file the other formats write takes the next free name
   beside the path the user named, as each XGP file does in its folder.
 - **In a bUnit test, wait on the screen for what the screen shows.** A
-  condition on a child component's parameter can hold before the child has
-  re-rendered — Home's render sets the panel's parameters ahead of the
-  panel's own render — so a DOM assertion after a state wait can read the
-  previous render (`LocalPage.WaitForScreen`). And a planned Local XGP Home
+  condition on the coordinator's state can hold before a page has
+  re-rendered — the coordinator moves first, and the pages render on its
+  notification — so a DOM assertion after a state wait can read the
+  previous render (`LocalPage.WaitForScreen`). The converse too: bUnit's
+  `WaitForAssertion` re-checks only when the component renders, so a call
+  made after the last render — the next-number write a run's commit makes,
+  after the render that published the result — is polled
+  (`SpinWait.SpinUntil`), not waited on. And a planned Local XGP Home
   test declares the next-number write a run's commit makes
   (`HomeStoragePlan.ExpectNextNumberWrite`).
+- **An unmapped POST answers 405 here, not 404.** The host's page endpoints
+  match every path for GET, so a POST to a path nothing maps — a retired
+  endpoint such as `POST /api/shutdown` included — is answered 405 Method
+  Not Allowed (a GET of it is 404). A test that a route is gone compares it
+  with a route that never existed rather than naming a status.
 - **Opening-book config: absent ≠ empty.** `OpeningBookProvider.ResolvePath`
   reads `configuration["OpeningBookPath"]`: `null` (key absent) auto-detects the
   default install path; `""` (key present, empty) *disables* enrichment. Don't
