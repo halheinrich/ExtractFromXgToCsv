@@ -1402,7 +1402,8 @@ as the remembered selection and applying it.
 - `ShutdownEndpointRetiredTests` — hosted: `POST /api/shutdown`, retired
   with Exit (halheinrich/backgammon#433), is answered as a route that never
   existed is, and the host goes on serving. Not by status: the test host
-  answers an unmapped POST 405, the published app 404 (see Pitfalls).
+  answers an unmapped POST 405 and the published app 404, for a cause not
+  established (see Pitfalls).
 - `HttpDocumentStorageTests` — the client adapter's producer contracts:
   204 → null (absence is a value), body round-trips, folder and name
   travel escaped with the folder read from the delegate at call time,
@@ -2123,13 +2124,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   (`SpinWait.SpinUntil`), not waited on. And a planned Local XGP Home
   test declares the next-number write a run's commit makes
   (`HomeStoragePlan.ExpectNextNumberWrite`).
-- **An unmapped POST's status depends on the environment.** Under the test
-  host (`WebApplicationFactory`, the Development environment) a POST to a
+- **An unmapped POST's status differs between the test host and the
+  published app.** Under the test host (`WebApplicationFactory`) a POST to a
   path nothing maps — a retired endpoint such as `POST /api/shutdown`
   included — is answered 405 Method Not Allowed (a GET of it is 404); the
-  published app answers it 404 (both measured 2026-10-22). A test that a
-  route is gone compares it with a route that never existed rather than
-  naming a status.
+  published app answers it 404 (both measured 2026-10-22). Why the two
+  hosts differ was not established. A test that a route is gone compares it
+  with a route that never existed rather than naming a status.
 - **Opening-book config: absent ≠ empty.** `OpeningBookProvider.ResolvePath`
   reads `configuration["OpeningBookPath"]`: `null` (key absent) auto-detects the
   default install path; `""` (key present, empty) *disables* enrichment. Don't
