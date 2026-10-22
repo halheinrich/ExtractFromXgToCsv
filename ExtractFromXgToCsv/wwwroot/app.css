@@ -13,7 +13,7 @@
    without a second rule. Nothing in the components names a cursor.
 
    `progress` rather than `wait`: it is the CSS keyword for "working, but the
-   interface still responds", which a run is exactly (Stop and Exit stay live
+   interface still responds", which a run is exactly (Stop stays live
    throughout it).
 
    Both the descendant selector and `!important` are load-bearing, not

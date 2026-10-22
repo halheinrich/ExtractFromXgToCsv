@@ -31,8 +31,8 @@ builder.Services.AddScoped(sp => new LocalFolderProcessor(
     sp.GetRequiredService<ILogger<FilteredDecisionIterator>>(),
     AppRanking.Ranking,
     sp.GetRequiredService<OpeningBookProvider>()));
-// The jobs live as long as the process (SPEC-notices.md §7.5): Exit, a crash
-// or a restart ends them all.
+// The jobs live as long as the process (SPEC-notices.md §7.5): stopping the
+// host, a crash or a restart ends them all.
 builder.Services.AddSingleton<JobStore>();
 
 // The saved-filters file relay.

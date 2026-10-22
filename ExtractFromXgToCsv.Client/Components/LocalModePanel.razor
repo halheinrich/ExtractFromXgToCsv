@@ -2,7 +2,6 @@
 @using ExtractFromXgToCsv.Client.Shared
 @implements IDisposable
 @inject ExtractApp App
-@inject HttpClient Http
 
 @* The Local panel: the coordinator's folder, output path and run, rendered,
    and the gestures on them sent to it as commands. It holds nothing of its
@@ -103,9 +102,6 @@
                 <small class="text-muted" id="stopPendingHint">Stop requested; waiting for the server.</small>
             }
         }
-        <button class="btn btn-outline-secondary" @onclick="ExitAsync">
-            Exit
-        </button>
         @* Only with a source: without a folder nothing can be in effect, the
            empty filter included, and the blank folder box already says why
            Run is dark. With one, a filter not in effect is a selection that
@@ -263,10 +259,4 @@
     private void OnAppChanged() => _ = InvokeAsync(StateHasChanged);
 
     public void Dispose() => App.Changed -= OnAppChanged;
-
-    private async Task ExitAsync()
-    {
-        try { await Http.PostAsync("/api/shutdown", null); }
-        catch { /* server shuts down, request may not complete */ }
-    }
 }

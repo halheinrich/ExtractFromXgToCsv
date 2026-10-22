@@ -57,9 +57,10 @@ internal sealed class LocalServer : IDisposable
     public string CsvOutputPath => Path.Combine(_root, "out.csv");
 
     /// <summary>
-    /// Restarts the server, as Exit and a fresh start, or a crash, do: a new
-    /// process — with an empty job store, so it holds none of the jobs the
-    /// last one did — over the same folders, which the same wire now reaches.
+    /// Restarts the server, as stopping the host and a fresh start, or a
+    /// crash, do: a new process — with an empty job store, so it holds none of
+    /// the jobs the last one did — over the same folders, which the same wire
+    /// now reaches.
     /// </summary>
     public void Restart()
     {
