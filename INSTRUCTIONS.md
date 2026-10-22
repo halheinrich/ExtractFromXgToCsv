@@ -308,9 +308,10 @@ This section says where the code meets §7.5, not what it rules.
   the identity (`IJobIdentities`) and sends the start, re-sending a request
   that could not be made under the same identity every
   `LocalJobTiming.RetryDelay` — from the `FailuresBeforeError`th failure the
-  persistent-failure run error shows, and the start goes on. It follows the
-  job's status, hands an XGP job's commit to Home (`OnXgpJobEnded`), and
-  only then acknowledges the job.
+  persistent-failure run error shows, and the start goes on. For an XGP run
+  it tells Home the options are captured (`OnXgpJobStarted`) before the
+  start is sent. It follows the job's status, hands an XGP job's commit to
+  Home (`OnXgpJobEnded`), and only then acknowledges the job.
 - **Following, and its two endings** (`FollowAsync`). A status read that
   fails to communicate is retried; a failure that persists is the run error,
   saying the result hasn't arrived yet, and following goes on. Following
@@ -349,15 +350,22 @@ This section says where the code meets §7.5, not what it rules.
   them: there is no migration (§7.5). A pattern edit keeps the remembered
   next number while the pattern is the one it was remembered under — the
   restored pair, or the one the last commit moved it to — and otherwise
-  resets it to 1; the user can override it.
+  resets it to 1; the user can override it. An edit applies every control
+  change before it awaits storage, and a deferred write writes what the
+  control holds then, so a pending write never puts back a value the user
+  has since replaced.
 - **The commit reaching the controls** (Home's `FollowAsync`). The terminal
   result's `XgpExportCommit` — completed, cancelled or failed alike —
   reaches Home before the job is acknowledged. A commit of nothing moves
-  nothing (`CommittedNothing`); otherwise, while the pattern and the next
-  number still equal the options the run captured, the next number becomes
-  `NextNumber` and is remembered. "Not changed since the run started" is
-  that value comparison, so a control changed away and back follows; the
-  number length decides nothing. A reload during a run shows the last
+  nothing (`CommittedNothing`); otherwise, unless the user has edited the
+  pattern or the next number since the run captured its options, the next
+  number becomes `NextNumber` and is remembered. That is an edit, not a
+  value (§7.5: "has changed the control"): one flag of Home's, cleared as an
+  XGP run starts (`OnXgpJobStarted`) and set by the pattern and next-number
+  inputs, so a control changed away and back is the user's choice and does
+  not follow. A value comparison stood here briefly; ChatGPT's review
+  (halheinrich/backgammon#424, 6331375637) corrected it, accepted at
+  6331396606. The number length decides nothing. A reload during a run shows the last
   remembered values, and a run that ends after it contributes nothing to the
   screen (§7.2): its files are on disk under their names, and the next run
   into that folder writes incremented names, the ruled cost.
@@ -484,9 +492,11 @@ replaces it as each file is written and closed; every snapshot carries it
 results included. The panel hands the terminal result's commit to Home
 (`OnXgpJobEnded`) for every ending, whatever it shows, before it
 acknowledges the job, and Home's next-number control follows it
-(`FollowAsync`) unless the user has changed the next number or the pattern
-since the run started — compared by value with the options the run
-captured. A length change is no such change: it says nothing about which
+(`FollowAsync`) unless the user has edited the next number or the pattern
+since the run captured its options (`OnXgpJobStarted`) — an edit, not a
+value, since §7.5 says "has changed the control": a number changed away and
+back stands (corrected from a value comparison, 6331375637, accepted
+6331396606). A length change is no such edit: it says nothing about which
 number comes next. A commit of nothing changes no number
 (`XgpExportCommit.CommittedNothing`). The next number is stated once, by the
 commit (`XgpExportCommit.NextNumber`).
@@ -541,8 +551,9 @@ commit (`XgpExportCommit.NextNumber`).
     documented default.
   - **Its next-number control follows a run's commit** (`FollowAsync`,
     bound to the panel's `OnXgpJobEnded`): to the number after the last the
-    run used, unless the user changed the pattern or the next number since
-    the run started (see "A Local run's job"). Until Hal's ruling of
+    run used, unless the user has edited the pattern or the next number
+    since the run started — an edit flag cleared by the panel's
+    `OnXgpJobStarted` (see "A Local run's job"). Until Hal's ruling of
     2026-10-19 (halheinrich/backgammon#424) Home kept a numbering record and
     reconciled it with the server, with two gate reasons of its own; both
     went with it.
@@ -557,9 +568,12 @@ commit (`XgpExportCommit.NextNumber`).
   trio (`FolderPath`, `FolderPathChanged` per keystroke,
   `OnFolderPathCommitted` at the change boundary — Home owns the value; all
   three `[EditorRequired]`, they are the source report's wiring), the XGP
-  members, and `OnXgpJobEnded` (`[EditorRequired]`, an
-  `EventCallback<XgpExportCommit>`: a terminal result's commit, raised before
-  the job is acknowledged — see "A Local run's job"). The recovery
+  members, `OnXgpJobStarted` (`[EditorRequired]`, an `EventCallback`
+  raised at the click of Run for an XGP run, as its options are captured:
+  where Home begins watching for an edit) and `OnXgpJobEnded`
+  (`[EditorRequired]`, an `EventCallback<XgpExportCommit>`: a terminal
+  result's commit, raised before the job is acknowledged — see "A Local
+  run's job"). The recovery
   protocol's other four parameters, and the start hint they fed, went with
   it (halheinrich/backgammon#424): the panel checks nothing before a start.
   The Run button and its click share one gate (`RunReady`). A stopped run's close
@@ -1320,10 +1334,12 @@ records what a run was computed from when the run starts.
 - `HomeXgpAccountingTests` — a run's commit reaching the next-number
   control through the real page, storage planned (each next-number write
   declared): a failed Local run and a cancelled one each advance the next
-  number by their commit, and remember it; a control changed while a run
-  ran stands, and one changed away and back follows (the value rule); a
-  length change alone still advances the next number; and a run that
-  committed nothing changes no number and writes nothing.
+  number by their commit, and remember it; a next number changed while a
+  run ran stands, and one changed away and back — or a pattern changed away
+  and back — is the user's choice and does not follow (the edit rule); an
+  edit before the run started keeps nothing from following; a length change
+  alone still advances the next number; and a run that committed nothing
+  changes no number and writes nothing.
 - `LocalModePanelZeroMatchTests` — the Local zero-match notice, through real
   runs against a zero-row server: shown beside the Done line for an active
   filter, not for the empty one, and not when an active filter comes into
@@ -1406,8 +1422,10 @@ records what a run was computed from when the run starts.
   and the numbering as remembered controls — a reload showing the stored
   pattern, next number and length (no older key read), a stored value that
   is not a number leaving the default, a pattern edit continuing the
-  remembered number only under its pattern, and every change written —
-  storage planned, so each read and write is declared and verified.
+  remembered number only under its pattern, every change written, and a
+  next number set while a pattern edit's write is held standing — no stale
+  write of the edit's reset lands after it — storage planned, so each read
+  and write is declared and verified.
 - `HomeOutputFormatRestoreTests` — the stored output format restored by
   declaration name only, never by ordinal (halheinrich/backgammon#164), with
   storage planned.
@@ -1902,9 +1920,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   from a terminal result's `XgpExportCommit` — the options the run captured
   and the files it committed. Don't reconstruct a count from `TotalRows`, a
   progress snapshot or the selected rows, and don't overwrite a control the
-  user changed since the run started — compared by value with the options
-  the run captured (a length change is not a choice about the next number;
-  `HomeXgpAccountingTests`). Continuity is not promised across a reload,
+  user has edited since the run started — judged by the edit, never by
+  comparing values: a number changed away and back is the user's choice
+  (§7.5, "has changed the control"; a length change is not a choice about
+  the next number; `HomeXgpAccountingTests`). And apply a control change
+  before awaiting its storage write: a value computed before an await and
+  set after it overwrites whatever the user chose meanwhile
+  (`HomeXgpPatternTests`). Continuity is not promised across a reload,
   another tab or a restart (Hal, 2026-10-19, halheinrich/backgammon#424);
   don't add a record, a ledger or a migration back to promise it. Nothing
   scans previously exported files, and no number is ever inferred from file

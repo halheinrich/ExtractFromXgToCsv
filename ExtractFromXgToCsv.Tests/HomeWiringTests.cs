@@ -353,10 +353,12 @@ public class HomeWiringTests : BunitContext
         var cut = RenderPage();
         Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
 
-        // The commit's hand-off (SPEC-notices.md §7.5) is bound: a silently
-        // splatted one would leave the next number behind every export.
+        // The run's two hand-offs (SPEC-notices.md §7.5) are bound: a
+        // silently splatted one would let the next number follow over an
+        // edit, or leave it behind every export.
         var localPanel = cut.FindComponent<LocalModePanel>();
         Assert.NotNull(localPanel.Instance.XgpOptions);
+        Assert.True(localPanel.Instance.OnXgpJobStarted.HasDelegate);
         Assert.True(localPanel.Instance.OnXgpJobEnded.HasDelegate);
     }
 

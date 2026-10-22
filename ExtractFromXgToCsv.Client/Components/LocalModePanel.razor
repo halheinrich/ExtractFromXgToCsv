@@ -281,11 +281,22 @@
     [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
 
     /// <summary>
+    /// Raised at the click of Run for an XGP run, as the run captures its
+    /// options, before its start is sent: the host begins watching for an
+    /// edit of the pattern or the next number, which keeps the control from
+    /// following this run's commit (SPEC-notices.md §7.5, "has changed the
+    /// control"). EditorRequired: a silently splatted binding would let the
+    /// control follow over an edit, or never follow at all.
+    /// </summary>
+    [Parameter, EditorRequired] public EventCallback OnXgpJobStarted { get; set; }
+
+    /// <summary>
     /// Raised with what an XGP job committed once the panel has taken its
     /// terminal result — completed, cancelled or failed, whatever the panel
     /// shows, since a failed run's files were written too — and before the
     /// panel acknowledges the job: the host's next-number control follows it
-    /// (SPEC-notices.md §7.5). A terminal result without a commit raises
+    /// unless the user has edited the pattern or the next number since
+    /// <see cref="OnXgpJobStarted"/> (SPEC-notices.md §7.5). A terminal result without a commit raises
     /// nothing. EditorRequired: a silently splatted binding would leave the
     /// control behind every export.
     /// </summary>
@@ -646,7 +657,8 @@
 
     /// <summary>
     /// One Local run (SPEC-notices.md §7.5): its identity minted before
-    /// anything is sent, the start sent — and retried under the same identity
+    /// anything is sent, the host told when an XGP run has captured its
+    /// options, the start sent — and retried under the same identity
     /// — until the server answers, the job followed to its terminal result,
     /// an XGP job's commit handed to the host, and only then the job
     /// acknowledged.
@@ -679,6 +691,11 @@
             XgpOptions = XgpOptions,
             Anonymize = XgpAnonymize,
         });
+
+        // The options are captured: from here an edit of the pattern or the
+        // next number is the user's choice over this run's commit.
+        if (OutputFormat == OutputFormat.Xgp)
+            await OnXgpJobStarted.InvokeAsync();
 
         // The run's outcome, held back until it is judged: the terminal
         // snapshot, or the client's own failure to start or follow the job.

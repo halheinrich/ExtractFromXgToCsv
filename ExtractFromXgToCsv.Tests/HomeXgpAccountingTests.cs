@@ -102,9 +102,9 @@ public class HomeXgpAccountingTests : BunitContext
 
     /// <summary>
     /// A control changed while the run ran: the user types a new next number,
-    /// which is remembered. The run's commit was made under the options it
-    /// captured, which the control no longer holds, so the newer choice
-    /// stands and nothing more is written. Before the commit path, Home
+    /// which is remembered. The user has edited the control since the run
+    /// captured its options, so the newer choice stands and nothing more is
+    /// written. Before the commit path, Home
     /// computed the number from whatever the controls showed when the run
     /// ended, and overwrote them.
     /// </summary>
@@ -134,14 +134,73 @@ public class HomeXgpAccountingTests : BunitContext
     }
 
     /// <summary>
-    /// "Changed since the run started" is the controls' value against the
-    /// options the run captured: a next number changed away and back again
-    /// while the run ran holds the run's start once more, so the control
-    /// follows the run. (The edit clock this replaced kept such a control as
-    /// the user's choice; the value rule is the simpler one, said once.)
+    /// A pattern edited away and back while the run ran is an edit too: the
+    /// control does not follow the commit, though the pattern ends where the
+    /// run captured it.
     /// </summary>
     [Fact]
-    public async Task AControlChangedAwayAndBackWhileTheRunRan_Follows()
+    public async Task APatternEditedAwayAndBackWhileTheRunRan_IsTheUsersChoice_AndDoesNotFollow()
+    {
+        var processing = ServerAnswering(new ProcessingProgress
+        {
+            Complete = true,
+            TotalRows = 2,
+            XgpCommit = new XgpExportCommit(DefaultOptions, 2),
+        });
+        var cut = this.RenderHome();
+        processing.HoldStatus();
+        var run = cut.RunButton().ClickAsync(new MouseEventArgs());
+        await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, "other{n}", BrowserStorageWriteAnswer.Succeeded);
+        await cut.Find("#xgpPattern").InputAsync(new ChangeEventArgs { Value = "other{n}" });
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, "pos{n}", BrowserStorageWriteAnswer.Succeeded);
+        await cut.Find("#xgpPattern").InputAsync(new ChangeEventArgs { Value = "pos{n}" });
+
+        processing.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Equal(DefaultOptions, PanelOptions(cut));
+        Storage.Verify();
+    }
+
+    /// <summary>
+    /// An edit made before the run started is not one "since the run
+    /// started": the run captures the control as edited, and the control
+    /// follows its commit.
+    /// </summary>
+    [Fact]
+    public async Task AnEditBeforeTheRunStarted_DoesNotKeepTheControlFromFollowing()
+    {
+        ServerAnswering(new ProcessingProgress
+        {
+            Complete = true,
+            TotalRows = 2,
+            XgpCommit = new XgpExportCommit(DefaultOptions, 2),
+        });
+        var cut = this.RenderHome();
+        Storage.ExpectNextNumberWrite(9);
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "9" });
+        Storage.ExpectNextNumberWrite(1);
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+
+        Storage.ExpectNextNumberWrite(3);
+        await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Assert.Equal(3, PanelOptions(cut).StartNumber);
+        Storage.Verify();
+    }
+
+    /// <summary>
+    /// "Changed since the run started" is an edit, not a value (§7.5: "has
+    /// changed the control"): a next number changed away and back again while
+    /// the run ran holds the run's start once more, but the user changed it,
+    /// so it is the user's choice and does not follow the commit. The old
+    /// recovery suite pinned the same; a value comparison briefly replaced it
+    /// and was corrected (ChatGPT's review 6331375637, accepted 6331396606).
+    /// </summary>
+    [Fact]
+    public async Task AControlChangedAwayAndBackWhileTheRunRan_IsTheUsersChoice_AndDoesNotFollow()
     {
         var processing = ServerAnswering(new ProcessingProgress
         {
@@ -159,11 +218,10 @@ public class HomeXgpAccountingTests : BunitContext
         Storage.ExpectNextNumberWrite(1);
         await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
 
-        Storage.ExpectNextNumberWrite(3);
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Equal(3, PanelOptions(cut).StartNumber);
+        Assert.Equal(1, PanelOptions(cut).StartNumber);
         Storage.Verify();
     }
 

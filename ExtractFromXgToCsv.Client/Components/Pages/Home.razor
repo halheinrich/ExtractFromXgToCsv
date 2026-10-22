@@ -171,6 +171,7 @@
                     OnFolderPathCommitted="OnFolderPathCommitted"
                     XgpOptions="_xgpOptions"
                     XgpAnonymize="_xgpAnonymize"
+                    OnXgpJobStarted="OnXgpJobStarted"
                     OnXgpJobEnded="FollowAsync" />
 }
 
@@ -294,8 +295,16 @@
     // The pattern and next number the control was last remembered under —
     // restored, or moved to by a run's commit (FollowAsync). A pattern edit
     // continues that number while the pattern is the one it was remembered
-    // under (ApplyPatternEditAsync).
+    // under (ApplyPatternEditAsync). It decides nothing about whether a
+    // commit is followed: that is the edit flag's, below.
     private (string Pattern, int NextNumber) _remembered = (XgpExportOptions.DefaultNamePattern, 1);
+
+    // Whether the user has edited the pattern or the next number since the
+    // current XGP run captured its options (SPEC-notices.md §7.5: "has changed
+    // the control"). An edit, not a value: a number changed away and back has
+    // been changed, so the run's commit does not move it. Cleared as a run
+    // starts (OnXgpJobStarted); set by the pattern and next-number inputs.
+    private bool _editedSinceRunStarted;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -436,16 +445,21 @@
 
     private async Task ApplyPatternEditAsync(string pattern)
     {
-        _xgpPattern = pattern;
+        _editedSinceRunStarted = true;
         // Continue the remembered numbering only while the pattern is the one
         // it was remembered under; a different pattern starts a fresh series
         // at 1. The user can still override the number afterwards.
-        var next = _xgpPattern == _remembered.Pattern ? _remembered.NextNumber : 1;
+        var next = pattern == _remembered.Pattern ? _remembered.NextNumber : 1;
+        var nextChanged = next != _xgpNextNumber;
+        // Every control change before any storage await: a next number the
+        // user sets while a write is pending is never overwritten by this one.
+        _xgpPattern = pattern;
+        _xgpNextNumber = next;
         RebuildXgpOptions();
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpPattern", _xgpPattern,
+        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpPattern", pattern,
             "the name pattern holds for this visit only");
-        if (next != _xgpNextNumber)
-            await SetNextNumberAsync(next);
+        if (nextChanged)
+            await WriteNextNumberAsync();
     }
 
     private async Task OnXgpInsertTokenAsync(ChangeEventArgs e)
@@ -467,6 +481,7 @@
 
     private async Task OnXgpNextNumberChanged(ChangeEventArgs e)
     {
+        _editedSinceRunStarted = true;
         if (int.TryParse(e.Value?.ToString(), out var n))
             await SetNextNumberAsync(n);
     }
@@ -497,25 +512,34 @@
     {
         _xgpNextNumber = next;
         RebuildXgpOptions();
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpNextNumber", FormatStoredNumber(next),
-            "the next number holds for this visit only");
+        await WriteNextNumberAsync();
     }
+
+    // Remembers what the next-number control holds at the write — never a
+    // value read before an await, so a newer choice is never written over.
+    private async Task WriteNextNumberAsync() =>
+        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpNextNumber", FormatStoredNumber(_xgpNextNumber),
+            "the next number holds for this visit only");
+
+    // An XGP run has captured its options: an edit from here on is the
+    // user's choice over its commit.
+    private void OnXgpJobStarted() => _editedSinceRunStarted = false;
 
     /// <summary>
     /// The next-number control follows what an XGP run committed
     /// (SPEC-notices.md §7.5) — completed, cancelled or failed alike — to the
-    /// number after the last the run used, and remembers it. Only while the
-    /// controls still hold the options the run captured: a pattern or next
-    /// number the user has changed since the run started is the user's choice
-    /// and stands, compared by value, so a control changed away and back
-    /// follows. A run that committed nothing moves nothing. The number length
-    /// decides nothing here: it says nothing about which number comes next.
+    /// number after the last the run used, and remembers it, unless the user
+    /// has edited the pattern or the next number since the run captured its
+    /// options. An edit, not a value: §7.5 says "has changed the control", so
+    /// a number changed away and back to the run's start was the user's
+    /// choice and stands (the umbrella's correction, ChatGPT's review
+    /// 6331375637, accepted 6331396606). A run that committed nothing moves
+    /// nothing. The number length decides nothing here: it says nothing about
+    /// which number comes next.
     /// </summary>
     private async Task FollowAsync(XgpExportCommit commit)
     {
-        if (commit.CommittedNothing
-            || commit.Options.NamePattern != _xgpPattern
-            || commit.Options.StartNumber != _xgpNextNumber)
+        if (commit.CommittedNothing || _editedSinceRunStarted)
             return;
         _remembered = (_xgpPattern, commit.NextNumber);
         await SetNextNumberAsync(commit.NextNumber);

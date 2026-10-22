@@ -190,6 +190,43 @@ public class HomeXgpPatternTests : BunitContext
         _storage.Verify();
     }
 
+    /// <summary>
+    /// A next number the user sets while a pattern edit's write is pending
+    /// stands: the pattern edit applied its own reset of the number before it
+    /// awaited storage, so when its write is answered it writes what the
+    /// control holds — never the 1 it computed earlier over the newer 77.
+    /// The plan answers only the writes it declares, so a stale write of 1
+    /// fails at the call.
+    /// </summary>
+    [Fact]
+    public async Task ANextNumberSetWhileAPatternWriteIsPending_Stands()
+    {
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.XgpPatternKey] = "quiz{n}",
+            [HomeStoragePlan.XgpNextNumberKey] = "43",
+        });
+
+        var patternWrite = _storage.ExpectHeldWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, "other{n}");
+        var userWrite = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpNextNumberKey, "77",
+            BrowserStorageWriteAnswer.Succeeded);
+        var patternEditsWrite = _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpNextNumberKey, "77",
+            BrowserStorageWriteAnswer.Succeeded);
+        _storage.RequireOrder(patternWrite, userWrite, patternEditsWrite);
+
+        var patternEdit = cut.Find("#xgpPattern").InputAsync(new ChangeEventArgs { Value = "other{n}" });
+        cut.WaitForAssertion(() => Assert.True(patternWrite.IsReached));
+        Assert.Equal(1, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "77" });
+        patternWrite.Release(BrowserStorageWriteAnswer.Succeeded);
+        await patternEdit.WaitAsync(NoticeTesting.OperationBound);
+
+        Assert.Equal(new XgpExportOptions { NamePattern = "other{n}", StartNumber = 77 },
+            cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
+        _storage.Verify();
+    }
+
     /// <summary>The user's own next number and length are remembered as typed.</summary>
     [Fact]
     public void TheNextNumberAndTheLength_AreRememberedAsTheyChange()
