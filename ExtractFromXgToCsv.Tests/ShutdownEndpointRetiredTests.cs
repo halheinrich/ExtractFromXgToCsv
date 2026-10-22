@@ -15,10 +15,11 @@ namespace ExtractFromXgToCsv.Tests;
 /// host goes on serving.
 /// </summary>
 /// <remarks>
-/// Not 404: this host answers any POST to a path it does not map 405, since
-/// its page endpoints match every path for GET (a GET of the same path is
-/// 404). So the pin compares with a route that never existed rather than
-/// naming a status.
+/// Not by status: the test host (<see cref="WebApplicationFactory{TEntryPoint}"/>,
+/// the Development environment) answers any POST to a path it does not map
+/// 405 (a GET of it is 404), while the published app answers it 404 (both
+/// measured 2026-10-22). So the pin compares with a route that never existed
+/// rather than naming a status.
 /// </remarks>
 public class ShutdownEndpointRetiredTests
 {

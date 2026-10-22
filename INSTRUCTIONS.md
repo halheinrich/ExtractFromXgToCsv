@@ -1401,8 +1401,8 @@ as the remembered selection and applying it.
   for absent, and 400 for non-simple names.
 - `ShutdownEndpointRetiredTests` — hosted: `POST /api/shutdown`, retired
   with Exit (halheinrich/backgammon#433), is answered as a route that never
-  existed is, and the host goes on serving. Not by status: this host answers
-  any unmapped POST 405 (see Pitfalls).
+  existed is, and the host goes on serving. Not by status: the test host
+  answers an unmapped POST 405, the published app 404 (see Pitfalls).
 - `HttpDocumentStorageTests` — the client adapter's producer contracts:
   204 → null (absence is a value), body round-trips, folder and name
   travel escaped with the folder read from the delegate at call time,
@@ -2123,11 +2123,13 @@ lib type directly; nothing in this subproject duplicates or shadows it.
   (`SpinWait.SpinUntil`), not waited on. And a planned Local XGP Home
   test declares the next-number write a run's commit makes
   (`HomeStoragePlan.ExpectNextNumberWrite`).
-- **An unmapped POST answers 405 here, not 404.** The host's page endpoints
-  match every path for GET, so a POST to a path nothing maps — a retired
-  endpoint such as `POST /api/shutdown` included — is answered 405 Method
-  Not Allowed (a GET of it is 404). A test that a route is gone compares it
-  with a route that never existed rather than naming a status.
+- **An unmapped POST's status depends on the environment.** Under the test
+  host (`WebApplicationFactory`, the Development environment) a POST to a
+  path nothing maps — a retired endpoint such as `POST /api/shutdown`
+  included — is answered 405 Method Not Allowed (a GET of it is 404); the
+  published app answers it 404 (both measured 2026-10-22). A test that a
+  route is gone compares it with a route that never existed rather than
+  naming a status.
 - **Opening-book config: absent ≠ empty.** `OpeningBookProvider.ResolvePath`
   reads `configuration["OpeningBookPath"]`: `null` (key absent) auto-detects the
   default install path; `""` (key present, empty) *disables* enrichment. Don't
