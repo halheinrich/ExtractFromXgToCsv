@@ -5,6 +5,7 @@ using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
+using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
@@ -72,11 +73,13 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
 
         // The shelved facets — position types, play types — have no box on
         // the filter surface, so no run the page starts carries them. Their
-        // token kind is pinned on the request as the page's client writes it
-        // (PostAsJsonAsync, the web defaults), which is what a run would send
+        // token kind is pinned on the bytes the app's own client puts on the
+        // wire: a start carrying them, sent through the registered
+        // ILocalJobs to the same capturing server — what a run would send
         // were they offered again.
-        var shelved = JsonSerializer.Serialize(
-            new StartRequest("job-1", new ProcessRequest
+        var jobs = Services.GetRequiredService<ILocalJobs>();
+        await jobs.StartAsync(
+            new StartRequest("job-shelved", new ProcessRequest
             {
                 Filters = new FilterConfig
                 {
@@ -84,7 +87,9 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
                     PlayTypes = { PlayType.Make20Pt },
                 },
             }),
-            JsonOptions.Web);
+            CancellationToken.None);
+        var shelved = handler.CapturedJson!;
+        Assert.Contains("\"job-shelved\"", shelved);
         Assert.Contains("\"VsTwoPlusUp\"", shelved);
         Assert.Contains("\"Make20Pt\"", shelved);
     }
