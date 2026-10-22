@@ -128,10 +128,10 @@ public partial class LocalGoldenBaseline(ITestOutputHelper output)
 
     private static async Task<ProcessingProgress> Complete(Func<IProgress<ProcessingProgress>, Task> run)
     {
-        var progress = new LastReport();
+        var progress = new RecordingProgress();
         await run(progress);
-        Assert.True(progress.Value?.Complete, "The run did not report completion.");
-        return progress.Value!;
+        Assert.True(progress.Last?.Complete, "The run did not report completion.");
+        return progress.Last!;
     }
 
     private static FormatEntry Describe(string format, string folder, ProcessingProgress result)
@@ -246,14 +246,6 @@ public partial class LocalGoldenBaseline(ITestOutputHelper output)
     private sealed record PptxStructure(int SlideCount, IReadOnlyList<ZipEntry> Entries);
 
     private sealed record ZipEntry(string Name, string Sha256);
-
-    /// <summary>A synchronous <see cref="IProgress{T}"/> that keeps the last snapshot reported.</summary>
-    private sealed class LastReport : IProgress<ProcessingProgress>
-    {
-        public ProcessingProgress? Value { get; private set; }
-
-        public void Report(ProcessingProgress value) => Value = value;
-    }
 
     [GeneratedRegex(@"^ppt/slides/slide\d+\.xml$")]
     private static partial Regex SlidePart();

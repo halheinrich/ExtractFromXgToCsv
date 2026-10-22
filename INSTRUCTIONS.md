@@ -165,7 +165,11 @@ of the services, the naming engine and the coordinator, bUnit tests of `Home`
 and the panel, hosted `WebApplicationFactory` pins for the file relay, and
 processor runs over real files. Records and rows a test states come from the
 producer's `TestRecords`. Shared support: `bUnitTestHelpers` (a private-field
-reader for the name allocator, and stub HTTP handlers), `LocalPanelHost`
+reader for the name allocator, and stub HTTP handlers), `RecordingProgress`
+(the one synchronous progress sink: every report recorded in order on the
+reporting thread, the last at hand, and an optional callback run inline
+after the report is recorded — never `Progress<T>`, whose posted callbacks
+can still land after the processor's call returns), `LocalPanelHost`
 (the panel rendered over the coordinator beside the filter surface, and the
 gestures the panel suites make), `HomeTesting` (Home's registration, render
 and gestures, and `HomeStoragePlan` — the app's storage as a visit to Home
@@ -1185,8 +1189,9 @@ as the remembered selection and applying it.
   snapshot records no skip, and nothing logged the cancellation as a skip.
   The log half is what catches the Diagram JSON pathway: there, the old
   catches' swallow was re-thrown by the final write before any snapshot could
-  show it. Uses a synchronous `IProgress<T>`, because `Progress<T>` posts its
-  callback and would race the cancellation point.
+  show it. Uses `RecordingProgress`, the test project's one synchronous
+  progress sink, because `Progress<T>` posts its callback and would race the
+  cancellation point.
 - `LocalFolderProcessorBoundaryTests` — Local mode's boundaries
   (`SPEC-notices.md` §7.1): a file failing midway — a filter that throws on a
   chosen decision, which the filtering operation propagates — contributes no

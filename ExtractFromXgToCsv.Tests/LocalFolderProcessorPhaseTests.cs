@@ -49,8 +49,8 @@ public class LocalFolderProcessorPhaseTests
         var outputPath = Path.Combine(folder, "deck.pptx");
         try
         {
-            var reports = new List<ProcessingProgress>();
-            var progress = new Progress<ProcessingProgress>(reports.Add);
+            var progress = new RecordingProgress();
+            var reports = progress.Reports;
 
             await new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking)
                 .ProcessPptxAsync(folder, outputPath, NarrowFilter().Build(), progress);
@@ -79,8 +79,8 @@ public class LocalFolderProcessorPhaseTests
         var folder = OneFileFolder();
         try
         {
-            var reports = new List<ProcessingProgress>();
-            var progress = new Progress<ProcessingProgress>(reports.Add);
+            var progress = new RecordingProgress();
+            var reports = progress.Reports;
 
             await new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking)
                 .ProcessAsync(

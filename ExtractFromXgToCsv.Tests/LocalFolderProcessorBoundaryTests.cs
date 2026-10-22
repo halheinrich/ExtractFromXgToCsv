@@ -174,7 +174,7 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         var output = Path.Combine(_folder, "out.csv");
         bool? closedAtSuccess = null;
         string[]? linesAtSuccess = null;
-        var progress = new OnReport(snapshot =>
+        var progress = new RecordingProgress(snapshot =>
         {
             if (!snapshot.Complete)
                 return;
@@ -471,12 +471,6 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
         }
     }
 
-    /// <summary>A progress sink that acts on each snapshot as it is reported, on the run's own flow.</summary>
-    private sealed class OnReport(Action<ProcessingProgress> act) : IProgress<ProcessingProgress>
-    {
-        public void Report(ProcessingProgress value) => act(value);
-    }
-
     /// <summary>
     /// A filter that passes every decision until call <c>throwAt</c>, where it
     /// throws — the conversion of the file that decision belongs to fails
@@ -510,12 +504,5 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
                 cts.Cancel();
             return true;
         }
-    }
-
-    /// <summary>A synchronous <see cref="IProgress{T}"/> that keeps every snapshot.</summary>
-    private sealed class RecordingProgress : IProgress<ProcessingProgress>
-    {
-        public List<ProcessingProgress> Reports { get; } = [];
-        public void Report(ProcessingProgress value) => Reports.Add(value);
     }
 }

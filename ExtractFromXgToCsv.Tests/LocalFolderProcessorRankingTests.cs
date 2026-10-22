@@ -87,7 +87,7 @@ public class LocalFolderProcessorRankingTests
         var outPath = Path.Combine(dir, "out", "decisions.csv");
         try
         {
-            await Processor().ProcessAsync(dir, outPath, Filter().Build(), new LastReport());
+            await Processor().ProcessAsync(dir, outPath, Filter().Build(), new RecordingProgress());
 
             var lines = (await File.ReadAllLinesAsync(outPath)).Skip(1).ToList();
             Assert.Equal(ReferenceCsvLines(Ranking), lines);
@@ -104,7 +104,7 @@ public class LocalFolderProcessorRankingTests
         var outPath = Path.Combine(dir, "out", "decisions.json");
         try
         {
-            await Processor().ProcessDiagramAsync(dir, outPath, Filter().Build(), new LastReport());
+            await Processor().ProcessDiagramAsync(dir, outPath, Filter().Build(), new RecordingProgress());
 
             var written = JsonSerializer.Deserialize<List<BgDecisionData>>(
                 await File.ReadAllTextAsync(outPath))!;
@@ -119,7 +119,7 @@ public class LocalFolderProcessorRankingTests
         AssertTheFixtureDiscriminates();
         var dir = InputFolder();
         var outDir = Path.Combine(dir, "out");
-        var progress = new LastReport();
+        var progress = new RecordingProgress();
         try
         {
             await Processor().ProcessXgpAsync(
@@ -139,7 +139,7 @@ public class LocalFolderProcessorRankingTests
         AssertTheFixtureDiscriminates();
         var dir = InputFolder();
         var outPath = Path.Combine(dir, "out", "decisions.pdf");
-        var progress = new LastReport();
+        var progress = new RecordingProgress();
         try
         {
             await Processor().ProcessPdfAsync(dir, outPath, Filter().Build(), progress);
@@ -164,12 +164,5 @@ public class LocalFolderProcessorRankingTests
         Directory.CreateDirectory(dir);
         File.Copy(Path.Combine(FixtureHelper.FixtureDir, Fixture), Path.Combine(dir, Fixture));
         return dir;
-    }
-
-    /// <summary>Keeps the last report, applied inline (Progress&lt;T&gt; would post it).</summary>
-    private sealed class LastReport : IProgress<ProcessingProgress>
-    {
-        public ProcessingProgress? Last { get; private set; }
-        public void Report(ProcessingProgress value) => Last = value;
     }
 }

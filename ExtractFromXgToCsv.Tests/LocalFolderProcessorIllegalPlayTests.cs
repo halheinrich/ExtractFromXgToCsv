@@ -62,8 +62,7 @@ public class LocalFolderProcessorIllegalPlayTests
             var iteratorLogger = new RecordingLogger<FilteredDecisionIterator>();
             var processor = new LocalFolderProcessor(logger, iteratorLogger, AppRanking.Ranking);
 
-            ProcessingProgress? lastProgress = null;
-            var progress = new Progress<ProcessingProgress>(p => lastProgress = p);
+            var progress = new RecordingProgress();
 
             await processor.ProcessPdfAsync(folder, outputPath, new DecisionFilterSet(), progress);
 
@@ -72,6 +71,7 @@ public class LocalFolderProcessorIllegalPlayTests
             Assert.True(new FileInfo(outputPath).Length > 0);
 
             // Not dropped wholesale: decisions emitted and the run completed.
+            var lastProgress = progress.Last;
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.True(lastProgress.TotalRows > 0);

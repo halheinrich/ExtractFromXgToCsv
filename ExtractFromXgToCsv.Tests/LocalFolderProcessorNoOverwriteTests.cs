@@ -393,7 +393,7 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
     {
         var processor = Processor();
         var filters = new DecisionFilterSet().Add(new FirstDecisionOnly());
-        var progress = new LastReport();
+        var progress = new RecordingProgress();
         await (format switch
         {
             OutputFormat.Csv => processor.ProcessAsync(_folder, outputPath, filters, progress, record),
@@ -402,17 +402,9 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
             OutputFormat.Pdf => processor.ProcessPdfAsync(_folder, outputPath, filters, progress, record),
             _ => throw new ArgumentOutOfRangeException(nameof(format)),
         });
-        var completed = progress.Value!;
+        var completed = progress.Last!;
         Assert.True(completed.Complete);
         return completed;
-    }
-
-    /// <summary>A synchronous <see cref="IProgress{T}"/> that keeps the last snapshot reported.</summary>
-    private sealed class LastReport : IProgress<ProcessingProgress>
-    {
-        public ProcessingProgress? Value { get; private set; }
-
-        public void Report(ProcessingProgress value) => Value = value;
     }
 
     private static string Extension(OutputFormat format) => format switch

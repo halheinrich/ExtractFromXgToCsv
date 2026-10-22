@@ -26,8 +26,7 @@ public class LocalFolderProcessorPptxTests
 
         try
         {
-            ProcessingProgress? lastProgress = null;
-            var progress = new Progress<ProcessingProgress>(p => lastProgress = p);
+            var progress = new RecordingProgress();
 
             await processor.ProcessPptxAsync(
                 FixtureHelper.FixtureDir,
@@ -48,6 +47,7 @@ public class LocalFolderProcessorPptxTests
             using var archive = ZipFile.OpenRead(outputPath);
             Assert.Contains(archive.Entries, e => e.FullName == "[Content_Types].xml");
 
+            var lastProgress = progress.Last;
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.True(lastProgress.TotalRows > 0);

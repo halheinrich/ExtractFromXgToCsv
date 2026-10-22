@@ -30,8 +30,7 @@ public class LocalFolderProcessorPdfTests
 
         try
         {
-            ProcessingProgress? lastProgress = null;
-            var progress = new Progress<ProcessingProgress>(p => lastProgress = p);
+            var progress = new RecordingProgress();
 
             await processor.ProcessPdfAsync(
                 FixtureHelper.FixtureDir,
@@ -50,6 +49,7 @@ public class LocalFolderProcessorPdfTests
             Assert.Equal((byte)'F', bytes[3]);
             Assert.Equal((byte)'-', bytes[4]);
 
+            var lastProgress = progress.Last;
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.True(lastProgress.TotalRows > 0);

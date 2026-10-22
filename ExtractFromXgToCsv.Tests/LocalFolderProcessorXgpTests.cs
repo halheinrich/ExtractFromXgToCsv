@@ -80,8 +80,7 @@ public class LocalFolderProcessorXgpTests
 
         try
         {
-            ProcessingProgress? lastProgress = null;
-            var progress = new Progress<ProcessingProgress>(p => lastProgress = p);
+            var progress = new RecordingProgress();
 
             await processor.ProcessXgpAsync(
                 FixtureHelper.FixtureDir,
@@ -91,6 +90,7 @@ public class LocalFolderProcessorXgpTests
                 filters,
                 progress);
 
+            var lastProgress = progress.Last;
             Assert.NotNull(lastProgress);
             Assert.True(lastProgress!.Complete);
             Assert.Equal(expected.Count, lastProgress.TotalRows);

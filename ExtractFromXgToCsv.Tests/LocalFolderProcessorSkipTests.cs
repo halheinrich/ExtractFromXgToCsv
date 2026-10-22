@@ -398,23 +398,4 @@ public class LocalFolderProcessorSkipTests
     {
         try { Directory.Delete(folder, recursive: true); } catch { /* best effort */ }
     }
-
-    /// <summary>
-    /// A synchronous <see cref="IProgress{T}"/>: records every snapshot and runs
-    /// <c>onReport</c> inside <see cref="Report"/>. <see cref="Progress{T}"/>
-    /// posts its callback instead, which would let the processor race past the
-    /// point a test cancels at — and leave "the last snapshot" unsettled when
-    /// the call returns.
-    /// </summary>
-    private sealed class RecordingProgress(Action<ProcessingProgress>? onReport = null)
-        : IProgress<ProcessingProgress>
-    {
-        public List<ProcessingProgress> Reports { get; } = [];
-
-        public void Report(ProcessingProgress value)
-        {
-            Reports.Add(value);
-            onReport?.Invoke(value);
-        }
-    }
 }
