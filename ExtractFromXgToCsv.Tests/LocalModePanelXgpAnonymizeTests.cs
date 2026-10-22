@@ -1,19 +1,16 @@
 using Bunit;
 using ExtractFromXgToCsv.Client;
-using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
-using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Wire test for the Local-mode anonymize propagation: the Home-owned
-/// <c>XgpAnonymize</c> parameter must ride into the <c>/api/process/start</c>
-/// POST body as <see cref="ProcessRequest.Anonymize"/>. Only the HTTP boundary
-/// is faked (<see cref="CapturingProcessHandler"/>); the panel's real
+/// Wire test for the Local-mode anonymize propagation: the coordinator's
+/// anonymize choice must ride into the <c>/api/process/start</c> POST body as
+/// <see cref="ProcessRequest.Anonymize"/>. Only the HTTP boundary is faked
+/// (<see cref="CapturingProcessHandler"/>); the coordinator's real
 /// request-building runs. <see cref="LocalModePanelFilterWireTests"/> is the
 /// sibling covering the same POST's <see cref="ProcessRequest.Filters"/> half.
 /// </summary>
@@ -32,21 +29,10 @@ public class LocalModePanelXgpAnonymizeTests : BunitContext
     {
         var handler = new CapturingProcessHandler();
         Services.AddSingleton(new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") });
+        var host = await LocalPanelHost.RenderReadyAsync(this, OutputFormat.Xgp);
+        await host.SetAnonymizeAsync(anonymize);
 
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Xgp)
-            .Add(c => c.FilterInEffect, new FilterConfig())
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, anonymize)
-            .Add(c => c.FolderPath, "D:\\xg"));
-
-        // The folder path is a parameter since the source hoist; the output
-        // path is still panel state normally restored from browser storage — seed
-        // it directly so the Run button's path gate is satisfied.
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\positions");
-        cut.Render();
-
-        await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
+        await host.ClickRunAsync();
 
         Assert.NotNull(handler.Captured);
         Assert.Equal(OutputFormat.Xgp, handler.Captured!.OutputFormat);

@@ -15,18 +15,16 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Shared helpers for bUnit-based component tests. Kept narrow on purpose:
-/// reflection accessors for private state (used to pin the name allocator's
-/// bookkeeping, and to seed panel fields normally restored from browser
-/// storage, without exposing either as a permanent seam) and the minimal
-/// HttpMessageHandlers the panels' own endpoints need.
+/// a reflection reader for private state (used to pin the name allocator's
+/// bookkeeping without exposing it as a permanent seam) and the minimal
+/// HttpMessageHandlers the panels' own endpoints need. Nothing seeds a
+/// component's or the coordinator's state: a test reaches it through the
+/// coordinator's commands and the wire.
 /// </summary>
 internal static class bUnitTestHelpers
 {
     public static T GetPrivateField<T>(object instance, string fieldName) =>
         (T)PrivateField(instance, fieldName).GetValue(instance)!;
-
-    public static void SetPrivateField(object instance, string fieldName, object? value) =>
-        PrivateField(instance, fieldName).SetValue(instance, value);
 
     private static FieldInfo PrivateField(object instance, string fieldName) =>
         instance.GetType().GetField(
@@ -135,7 +133,7 @@ internal static class JsonOptions
 }
 
 /// <summary>
-/// Fakes the Local-mode processing endpoints so <c>LocalModePanel.RunLocalAsync</c>
+/// Fakes the Local-mode processing endpoints so the coordinator's run
 /// runs its real request-building, start and polling loop against an in-memory
 /// server speaking the job protocol (the umbrella's <c>SPEC-notices.md</c>
 /// §7.5) in its simplest form: it captures the <see cref="StartRequest"/>
@@ -316,41 +314,4 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
-}
-
-/// <summary>
-/// A <see cref="LocalModePanel"/> one
-/// click from a run, and the run itself — for tests whose subject is what a
-/// completed run shows. The panel records what a run was computed from when
-/// the run starts, so a result is reached by running, never by seeding the
-/// progress it shows.
-/// </summary>
-internal static class LocalPanelRuns
-{
-    public const string Folder = @"D:\xg\matches";
-
-    /// <summary>
-    /// Renders the panel over <see cref="Folder"/> with
-    /// <paramref name="filter"/> in effect, and types an output path.
-    /// </summary>
-    public static IRenderedComponent<LocalModePanel> RenderReadyLocalPanel(
-        this BunitContext ctx, FilterConfig filter)
-    {
-        var cut = ctx.Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.Source, FilterSourceToken.FromPath(Folder))
-            .Add(c => c.FilterInEffect, filter)
-            .Add(c => c.FolderPath, Folder)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
-        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
-        return cut;
-    }
-
-    /// <summary>Clicks Run and waits for the run to complete.</summary>
-    public static Task RunToCompletionAsync(
-        this IRenderedComponent<LocalModePanel> cut) =>
-        cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run")
-           .ClickAsync(new MouseEventArgs())
-           .WaitAsync(CapturingProcessHandler.RunTimeout);
 }

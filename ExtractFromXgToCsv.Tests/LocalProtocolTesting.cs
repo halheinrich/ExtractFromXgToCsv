@@ -354,6 +354,9 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
     /// <summary>The keys of every write the browser refused, in order.</summary>
     public List<string> RefusedWrites { get; } = [];
 
+    /// <summary>The keys of every local read the page made, in order.</summary>
+    public List<string> Reads { get; } = [];
+
     /// <summary>Whether the browser refuses every read.</summary>
     public bool RefuseReads { get; set; }
 
@@ -383,6 +386,8 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
         switch (operation)
         {
             case "getItem":
+                if (ReferenceEquals(area, _local))
+                    Reads.Add(key);
                 if (RefuseReads)
                     throw new JSException("The browser refused the read.");
                 return new ValueTask<TValue>((TValue)(object?)(area.TryGetValue(key, out var value) ? value : null)!);
@@ -408,9 +413,10 @@ internal sealed class MemoryBrowserStorage : IJSRuntime
 }
 
 /// <summary>
-/// One page of the app in Local mode — Home, with the real panel — over a
-/// shared <see cref="LocalServer"/> and a shared browser storage. A reload is
-/// a new page over the same two; the old one is disposed with its context.
+/// One page of the app in Local mode — Home, with the real panel, over its
+/// own coordinator — over a shared <see cref="LocalServer"/> and a shared
+/// browser storage. A reload is a new page and a new app over the same two;
+/// the old one is disposed with its context.
 /// </summary>
 internal sealed class LocalPage : IAsyncDisposable
 {
@@ -449,11 +455,11 @@ internal sealed class LocalPage : IAsyncDisposable
     /// <summary>The page.</summary>
     public IRenderedComponent<Home> Home { get; }
 
-    /// <summary>The page's Local panel.</summary>
-    public LocalModePanel Panel => Home.FindComponent<LocalModePanel>().Instance;
+    /// <summary>The page's coordinator.</summary>
+    public ExtractApp App => _context.Services.GetRequiredService<ExtractApp>();
 
-    /// <summary>The options the panel would run with now.</summary>
-    public XgpExportOptions Options => Panel.XgpOptions;
+    /// <summary>The options a run would capture now.</summary>
+    public XgpExportOptions Options => App.XgpOptions;
 
     /// <summary>The Run button.</summary>
     public AngleSharp.Dom.IElement RunButton => Home.RunButton();
@@ -463,9 +469,9 @@ internal sealed class LocalPage : IAsyncDisposable
 
     /// <summary>Waits until <paramref name="condition"/> holds.</summary>
     /// <remarks>
-    /// A condition on component state can hold before the DOM shows it: the
-    /// panel's parameters are set during Home's render, ahead of the panel's
-    /// own. What the page shows is waited for with <see cref="WaitForScreen"/>.
+    /// A condition on the coordinator's state can hold before the DOM shows
+    /// it: the coordinator moves first, and the page renders on its
+    /// notification. What the page shows is waited for with <see cref="WaitForScreen"/>.
     /// </remarks>
     public void WaitFor(Func<bool> condition) => Home.WaitForState(condition, NoticeTesting.OperationBound);
 
@@ -560,6 +566,42 @@ internal sealed class AnswerHeldJobs(ILocalJobs inner) : ILocalJobs
         _arrived.TrySetResult();
         await _release.Task.WaitAsync(NoticeTesting.OperationBound);
         return answer;
+    }
+
+    public Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken) =>
+        inner.ReadStatusAsync(jobId, cancellationToken);
+
+    public Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken) => inner.CancelAsync(jobId, cancellationToken);
+
+    public Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken) => inner.AcknowledgeAsync(jobId, cancellationToken);
+}
+
+/// <summary>
+/// A page's jobs client whose first start is refused — as an identity
+/// admitted for a different request — once the test releases it, without
+/// reaching the server: the start is unanswered until then, so a Stop pressed
+/// meanwhile waits for an answer that runs nothing. Every other call passes
+/// straight through.
+/// </summary>
+internal sealed class RefusedStartJobs(ILocalJobs inner) : ILocalJobs
+{
+    private readonly TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _starts;
+
+    /// <summary>Completes when the first start has been sent, and is held.</summary>
+    public Task Arrived => _arrived.Task;
+
+    /// <summary>Answers the held start: refused.</summary>
+    public void Release() => _release.TrySetResult();
+
+    public async Task<StartAnswer> StartAsync(StartRequest request, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Increment(ref _starts) != 1)
+            return await inner.StartAsync(request, cancellationToken);
+        _arrived.TrySetResult();
+        await _release.Task.WaitAsync(NoticeTesting.OperationBound, cancellationToken);
+        return new StartAnswer.Refused(RefusalReason.ChangedRequest);
     }
 
     public Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken) =>

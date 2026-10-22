@@ -15,8 +15,9 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// What a test that renders <see cref="Home"/> needs: the app's own
-/// registrations over a stub server, a render that waits for Home's restore to
-/// resolve the source, and the gestures the tests drive.
+/// registrations over a stub server, a render that waits for the
+/// coordinator's restore to resolve the source, and the gestures the tests
+/// drive.
 /// </summary>
 internal static class HomeTesting
 {
@@ -37,8 +38,9 @@ internal static class HomeTesting
     }
 
     /// <summary>
-    /// Renders Home and waits until its restore has resolved the source — the
-    /// moment the panel renders and the source is reported.
+    /// Renders Home and waits until the coordinator's restore has resolved the
+    /// source — the moment the settings controls and the panel render and the
+    /// source is reported.
     /// </summary>
     public static IRenderedComponent<Home> RenderHome(this BunitContext ctx)
     {
@@ -47,21 +49,9 @@ internal static class HomeTesting
         return cut;
     }
 
-    /// <summary>
-    /// Waits until the panel is up — Home's restore has resolved the source —
-    /// and its first after-render has run.
-    /// </summary>
-    public static void WaitForLocalPanel(this IRenderedComponent<Home> cut)
-    {
+    /// <summary>Waits until the panel is up: the coordinator's restore has ended.</summary>
+    public static void WaitForLocalPanel(this IRenderedComponent<Home> cut) =>
         cut.WaitForState(() => cut.FindComponents<LocalModePanel>().Any(), TimeSpan.FromSeconds(5));
-
-        // The wait sees the panel in the tree, which can be before the
-        // renderer has run the panel's first OnAfterRenderAsync — where it
-        // restores its settings. Queueing an empty item behind it on the
-        // renderer's own context means the panel's restore reads have been
-        // made when this returns.
-        cut.InvokeAsync(() => { }).GetAwaiter().GetResult();
-    }
 
     // ── Gestures ────────────────────────────────────────────────────────────
 
@@ -98,14 +88,16 @@ internal static class HomeTesting
     public static IElement RunButton(this IRenderedComponent<Home> cut) =>
         cut.FindAll("button").First(b => b.TextContent.Trim() == "Run");
 
+    /// <summary>The app's coordinator, as the page renders it.</summary>
+    public static ExtractApp App(this BunitContext ctx) => ctx.Services.GetRequiredService<ExtractApp>();
 }
 
 /// <summary>
-/// Home's browser storage, and the storage of the components it renders,
-/// stated on a <see cref="BrowserStoragePlan"/>: this app's own keys as
-/// literals — the test's oracle for them, independent of the code under test
-/// — and the filter surface's through <see cref="FilterSurfaceStorage"/>, so
-/// no producer key is mirrored here.
+/// The app's browser storage as a visit to Home makes it, stated on a
+/// <see cref="BrowserStoragePlan"/>: the coordinator's keys as literals — the
+/// test's oracle for them, independent of the code under test — and the
+/// filter surface's through <see cref="FilterSurfaceStorage"/>, so no producer
+/// key is mirrored here.
 /// </summary>
 internal static class HomeStoragePlan
 {
@@ -118,13 +110,14 @@ internal static class HomeStoragePlan
     public const string OutputPathKey = "xg_outputPath";
 
     /// <summary>
-    /// Home's first-render restore: each of its keys answered from
-    /// <paramref name="stored"/>, or absent — the XGP numbering's three among
-    /// them, and no other. When <paramref name="holdTheLastRead"/>, the
-    /// restore's last read — the one after which the source is reported — is
-    /// held, and returned for the test to release.
+    /// The coordinator's restore, once per app: each of its keys answered from
+    /// <paramref name="stored"/>, or absent — the output path and the XGP
+    /// numbering's three among them, and no other. When
+    /// <paramref name="holdTheLastRead"/>, the restore's last read — the one
+    /// after which the source is reported — is held, and returned for the
+    /// test to release.
     /// </summary>
-    public static BrowserStorageHeldRead? ExpectHomeRestore(
+    public static BrowserStorageHeldRead? ExpectRestore(
         this BrowserStoragePlan plan,
         Dictionary<string, string>? stored = null,
         bool holdTheLastRead = false)
@@ -134,7 +127,7 @@ internal static class HomeStoragePlan
                 ? BrowserStorageReadAnswer.Stored(value)
                 : BrowserStorageReadAnswer.Absent;
 
-        foreach (var key in new[] { OutputFormatKey, FolderPathKey, XgpPatternKey, XgpNextNumberKey, XgpSuffixLengthKey })
+        foreach (var key in new[] { OutputFormatKey, FolderPathKey, OutputPathKey, XgpPatternKey, XgpNextNumberKey, XgpSuffixLengthKey })
             plan.ExpectRead(BrowserStorageArea.Local, key, Answer(key));
         if (holdTheLastRead)
             return plan.ExpectHeldRead(BrowserStorageArea.Local, XgpAnonymizeKey);
@@ -142,10 +135,10 @@ internal static class HomeStoragePlan
         return null;
     }
 
-    /// <summary>Home's first-render restore in a browser that refuses every read.</summary>
-    public static void ExpectHomeRestoreRefused(this BrowserStoragePlan plan)
+    /// <summary>The coordinator's restore in a browser that refuses every read.</summary>
+    public static void ExpectRestoreRefused(this BrowserStoragePlan plan)
     {
-        foreach (var key in new[] { OutputFormatKey, FolderPathKey, XgpPatternKey, XgpNextNumberKey, XgpSuffixLengthKey, XgpAnonymizeKey })
+        foreach (var key in new[] { OutputFormatKey, FolderPathKey, OutputPathKey, XgpPatternKey, XgpNextNumberKey, XgpSuffixLengthKey, XgpAnonymizeKey })
             plan.ExpectRead(BrowserStorageArea.Local, key, BrowserStorageReadAnswer.Refused);
     }
 
@@ -164,41 +157,46 @@ internal static class HomeStoragePlan
         return null;
     }
 
-    /// <summary>The Local panel's restore — its output path.</summary>
-    public static void ExpectLocalPanelRestore(this BrowserStoragePlan plan, BrowserStorageReadAnswer? answer = null) =>
-        plan.ExpectRead(BrowserStorageArea.Local, OutputPathKey, answer ?? BrowserStorageReadAnswer.Absent);
-
     /// <summary>
-    /// One visit to Home: Home's restore (from <paramref name="stored"/>), the
-    /// panel's, and the filter panel's mount. This boot's filter restoration
-    /// is the test's to declare, once per context.
+    /// This app's first visit to Home: the coordinator's restore (from
+    /// <paramref name="stored"/>) and the filter panel's mount. This boot's
+    /// filter restoration is the test's to declare, once per context.
     /// </summary>
     public static void ExpectHomeVisit(this BrowserStoragePlan plan, Dictionary<string, string>? stored = null) =>
         plan.ExpectVisit(stored, holdTheLastRead: false);
 
     /// <summary>
-    /// One visit to Home, as <see cref="ExpectHomeVisit"/>, with the restore's
-    /// last read held: until the test releases it, the source is unresolved —
-    /// no panel, nothing reported.
+    /// The first visit to Home, as <see cref="ExpectHomeVisit"/>, with the
+    /// restore's last read held: until the test releases it, the source is
+    /// unresolved — no settings controls, no panel, nothing reported.
     /// </summary>
     /// <returns>The held read, to release with the browser's answer.</returns>
     public static BrowserStorageHeldRead ExpectHomeVisitWithTheLastReadHeld(
         this BrowserStoragePlan plan, Dictionary<string, string>? stored = null) =>
         plan.ExpectVisit(stored, holdTheLastRead: true)!;
 
-    /// <summary>One visit to Home in a browser that refuses every read.</summary>
+    /// <summary>The first visit to Home in a browser that refuses every read.</summary>
     public static void ExpectHomeVisitRefused(this BrowserStoragePlan plan)
     {
-        plan.ExpectHomeRestoreRefused();
-        plan.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Refused);
+        plan.ExpectRestoreRefused();
         plan.ExpectFilterPanelMountRefused();
     }
+
+    /// <summary>
+    /// A later visit to Home in the same app — a remount. The restore has run
+    /// for the app, so none of the coordinator's settings is read again; the
+    /// only reads are the filter panel's two display preferences, which every
+    /// mount of it makes (XgFilter_Razor's contract).
+    /// </summary>
+    public static void ExpectHomeRemount(this BrowserStoragePlan plan) => plan.ExpectFilterPanelMount();
+
+    /// <summary>A remount, as <see cref="ExpectHomeRemount"/>, in a browser that refuses every read.</summary>
+    public static void ExpectHomeRemountRefused(this BrowserStoragePlan plan) => plan.ExpectFilterPanelMountRefused();
 
     private static BrowserStorageHeldRead? ExpectVisit(
         this BrowserStoragePlan plan, Dictionary<string, string>? stored, bool holdTheLastRead)
     {
-        var held = plan.ExpectHomeRestore(stored, holdTheLastRead);
-        plan.ExpectLocalPanelRestore();
+        var held = plan.ExpectRestore(stored, holdTheLastRead);
         plan.ExpectFilterPanelMount();
         return held;
     }

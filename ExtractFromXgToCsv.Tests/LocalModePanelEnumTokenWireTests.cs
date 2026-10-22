@@ -1,5 +1,7 @@
 using System.Text.Json;
 using BgDataTypes_Lib;
+using BgUiPrimitives_Razor;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
@@ -8,6 +10,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Enums;
 using XgFilter_Lib.Filtering;
+using XgFilter_Razor.TestSupport;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -56,8 +59,6 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
         {
             DecisionType = DecisionTypeOption.CubeOnly,
             ContactTypes = { ContactType.Race },
-            PositionTypes = { PositionType.VsTwoPlusUp },
-            PlayTypes = { PlayType.Make20Pt },
             IncludeEvaluations = true,
             EvaluationLevels = { AnalysisLevel.Ply3Red },
         });
@@ -66,10 +67,26 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
 
         Assert.Contains("\"CubeOnly\"", json);
         Assert.Contains("\"Race\"", json);
-        Assert.Contains("\"VsTwoPlusUp\"", json);
-        Assert.Contains("\"Make20Pt\"", json);
         Assert.Contains("\"Ply3Red\"", json);
         Assert.Contains("\"DiagramJson\"", json);
+
+        // The shelved facets — position types, play types — have no box on
+        // the filter surface, so no run the page starts carries them. Their
+        // token kind is pinned on the request as the page's client writes it
+        // (PostAsJsonAsync, the web defaults), which is what a run would send
+        // were they offered again.
+        var shelved = JsonSerializer.Serialize(
+            new StartRequest("job-1", new ProcessRequest
+            {
+                Filters = new FilterConfig
+                {
+                    PositionTypes = { PositionType.VsTwoPlusUp },
+                    PlayTypes = { PlayType.Make20Pt },
+                },
+            }),
+            JsonOptions.Web);
+        Assert.Contains("\"VsTwoPlusUp\"", shelved);
+        Assert.Contains("\"Make20Pt\"", shelved);
     }
 
     /// <summary>
@@ -170,20 +187,27 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
         var handler = new CapturingProcessHandler();
         Services.AddSingleton(new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") });
 
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.DiagramJson)
-            .Add(c => c.FilterInEffect, config)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.FolderPath, "D:\\xg"));
+        // The format, the folder and the output path are restored, and the
+        // selection reaches the filter owner as this boot's remembered one,
+        // then Applied (see LocalModePanelFilterWireTests).
+        var storage = BrowserStoragePlan.On(JSInterop);
+        storage.ExpectFilterRestore(config);
+        storage.ExpectFilterPanelMount();
+        storage.ExpectRestore(new()
+        {
+            [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.DiagramJson),
+            [HomeStoragePlan.FolderPathKey] = "D:\\xg",
+            [HomeStoragePlan.OutputPathKey] = "D:\\xg\\decisions.json",
+        });
+        storage.ExpectFilterCommit(config, BrowserStorageWriteAnswer.Succeeded);
+        var host = await LocalPanelHost.RenderAsync(this);
+        await host.ApplyAsync();
 
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\decisions.json");
-        cut.Render();
-
-        await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
+        await host.ClickRunAsync();
 
         Assert.NotNull(handler.Captured);
         Assert.NotNull(handler.CapturedJson);
+        storage.Verify();
         return handler;
     }
 }

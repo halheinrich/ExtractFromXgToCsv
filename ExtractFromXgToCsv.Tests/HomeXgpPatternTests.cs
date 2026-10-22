@@ -54,8 +54,7 @@ public class HomeXgpPatternTests : BunitContext
         ExpectPatternWrite("Move{dice}");
         cut.Find("#xgpPattern").Input("Move{dice}");
 
-        var panel = cut.FindComponent<LocalModePanel>();
-        Assert.Equal("Move{dice}", panel.Instance.XgpOptions.NamePattern);
+        Assert.Equal("Move{dice}", this.App().XgpOptions.NamePattern);
         _storage.Verify();
     }
 
@@ -77,7 +76,7 @@ public class HomeXgpPatternTests : BunitContext
         cut.Find("#xgpInsertToken").Change("dice");
 
         Assert.Equal("pos{n}{dice}",
-            cut.FindComponent<LocalModePanel>().Instance.XgpOptions.NamePattern);
+            this.App().XgpOptions.NamePattern);
         Assert.Equal("pos{n}{dice}", cut.Find("#xgpPattern").GetAttribute("value"));
         _storage.Verify();
     }
@@ -143,7 +142,7 @@ public class HomeXgpPatternTests : BunitContext
         Assert.Equal("quiz{n}", cut.Find("#xgpPattern").GetAttribute("value"));
         Assert.Equal("43", cut.Find("#xgpNextNumber").GetAttribute("value"));
         Assert.Equal(new XgpExportOptions { NamePattern = "quiz{n}", StartNumber = 43, SuffixLength = 2 },
-            cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
+            this.App().XgpOptions);
         _storage.Verify();
     }
 
@@ -160,7 +159,7 @@ public class HomeXgpPatternTests : BunitContext
             [HomeStoragePlan.XgpSuffixLengthKey] = "",
         });
 
-        Assert.Equal(new XgpExportOptions(), cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
+        Assert.Equal(new XgpExportOptions(), this.App().XgpOptions);
         _storage.Verify();
     }
 
@@ -181,12 +180,12 @@ public class HomeXgpPatternTests : BunitContext
         ExpectPatternWrite("other{n}");
         ExpectNextNumberWrite("1");
         cut.Find("#xgpPattern").Input("other{n}");
-        Assert.Equal(1, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+        Assert.Equal(1, this.App().XgpOptions.StartNumber);
 
         ExpectPatternWrite("quiz{n}");
         ExpectNextNumberWrite("43");
         cut.Find("#xgpPattern").Input("quiz{n}");
-        Assert.Equal(43, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+        Assert.Equal(43, this.App().XgpOptions.StartNumber);
         _storage.Verify();
     }
 
@@ -216,14 +215,14 @@ public class HomeXgpPatternTests : BunitContext
 
         var patternEdit = cut.Find("#xgpPattern").InputAsync(new ChangeEventArgs { Value = "other{n}" });
         cut.WaitForAssertion(() => Assert.True(patternWrite.IsReached));
-        Assert.Equal(1, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+        Assert.Equal(1, this.App().XgpOptions.StartNumber);
 
         await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "77" });
         patternWrite.Release(BrowserStorageWriteAnswer.Succeeded);
         await patternEdit.WaitAsync(NoticeTesting.OperationBound);
 
         Assert.Equal(new XgpExportOptions { NamePattern = "other{n}", StartNumber = 77 },
-            cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
+            this.App().XgpOptions);
         _storage.Verify();
     }
 
@@ -240,7 +239,7 @@ public class HomeXgpPatternTests : BunitContext
         cut.Find("#xgpSuffixLength").Input("5");
 
         Assert.Equal(new XgpExportOptions { StartNumber = 12, SuffixLength = 5 },
-            cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
+            this.App().XgpOptions);
         _storage.Verify();
     }
 

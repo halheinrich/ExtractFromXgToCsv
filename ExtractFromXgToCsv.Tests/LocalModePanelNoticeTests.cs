@@ -7,7 +7,6 @@ using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -66,13 +65,8 @@ public class LocalModePanelNoticeTests : BunitContext
     public static TheoryData<NoticeDismissGesture> BothGestures =>
         new(Enum.GetValues<NoticeDismissGesture>());
 
-    private IRenderedComponent<LocalModePanel> RenderPanel() =>
-        Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterInEffect, new FilterConfig())
-            .Add(c => c.FolderPath, @"D:\xg")
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
+    private async Task<IRenderedComponent<LocalModePanel>> RenderPanelAsync() =>
+        (await LocalPanelHost.RenderAsync(this)).Panel;
 
     // ── The two gate reasons ────────────────────────────────────────────────
 
@@ -89,8 +83,10 @@ public class LocalModePanelNoticeTests : BunitContext
         {
             BaseAddress = new Uri("http://localhost/"),
         });
-        var cut = ctx.RenderReadyLocalPanel(new FilterConfig { Players = ["Alice"] });
-        await cut.RunToCompletionAsync();
+        var host = await LocalPanelHost.RenderReadyAsync(ctx);
+        await host.ApplyErrorMinAsync("0.05");
+        await host.RunToCompletionAsync();
+        var cut = host.Panel;
 
         // <Notice class="zero-match-notice mt-2" Kind="Warning" Announcement="Assertive">
         var box = NoticeBox.ByMarkerClass(cut, "zero-match-notice").ShouldBe(
@@ -116,8 +112,9 @@ public class LocalModePanelNoticeTests : BunitContext
         {
             BaseAddress = new Uri("http://localhost/"),
         });
-        var cut = ctx.RenderReadyLocalPanel(new FilterConfig());
-        await cut.RunToCompletionAsync();
+        var host = await LocalPanelHost.RenderReadyAsync(ctx);
+        await host.RunToCompletionAsync();
+        var cut = host.Panel;
 
         // Through the shared rendering: <Notice class="skipped-notice mt-2"
         // Kind="Warning" Announcement="Assertive">
@@ -134,13 +131,9 @@ public class LocalModePanelNoticeTests : BunitContext
     private static IReadOnlyList<NoticeBox> RunErrors(IRenderedComponent<LocalModePanel> cut) =>
         NoticeBox.AllIn(cut).Where(b => b.Kind == NoticeKind.Error).ToList();
 
-    /// <summary>A panel one click from a run: folder bound, output path typed.</summary>
-    private IRenderedComponent<LocalModePanel> RenderReadyToRun()
-    {
-        var cut = RenderPanel();
-        cut.Find("#outputPath").Input(@"D:\xg\out.csv");
-        return cut;
-    }
+    /// <summary>A panel one click from a run: folder committed, output path typed.</summary>
+    private async Task<IRenderedComponent<LocalModePanel>> RenderReadyToRunAsync() =>
+        (await LocalPanelHost.RenderReadyAsync(this)).Panel;
 
     /// <summary>
     /// Clicks Run and awaits the click's own completion — the whole failed
@@ -157,7 +150,7 @@ public class LocalModePanelNoticeTests : BunitContext
     [Fact]
     public async Task RunError_IsAnAssertiveDismissibleNotice()
     {
-        var cut = RenderReadyToRun();
+        var cut = await RenderReadyToRunAsync();
 
         var box = await FailARunAsync(cut);
 
@@ -173,7 +166,7 @@ public class LocalModePanelNoticeTests : BunitContext
     [MemberData(nameof(BothGestures))]
     public async Task RunError_DismissesByEitherGesture_AndTheNextFailureShowsFresh(NoticeDismissGesture gesture)
     {
-        var cut = RenderReadyToRun();
+        var cut = await RenderReadyToRunAsync();
         var first = await FailARunAsync(cut);
         var dismissedText = first.Content.TextContent;
 
@@ -188,9 +181,9 @@ public class LocalModePanelNoticeTests : BunitContext
     }
 
     [Fact]
-    public void RunError_NoRunHasFailed_RendersNothing()
+    public async Task RunError_NoRunHasFailed_RendersNothing()
     {
-        var cut = RenderPanel();
+        var cut = await RenderPanelAsync();
 
         Assert.Empty(RunErrors(cut));
     }

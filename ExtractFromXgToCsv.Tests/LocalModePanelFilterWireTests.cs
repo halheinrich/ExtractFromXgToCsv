@@ -1,4 +1,6 @@
 using BgDataTypes_Lib;
+using BgUiPrimitives_Razor;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
@@ -7,6 +9,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Enums;
 using XgFilter_Lib.Filtering;
+using XgFilter_Razor.TestSupport;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -18,7 +21,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// <see cref="FilterConfig.Build"/>) and nothing downstream can recover a member
 /// lost in transit. Sibling of <see cref="LocalModePanelXgpAnonymizeTests"/>,
 /// which covers the same POST's format/anonymize half; only the HTTP boundary is
-/// faked, so the panel's real request-building runs.
+/// faked, so the coordinator's real request-building runs.
 ///
 /// <para>
 /// The depth facet is the sharp edge. Since XgFilter_Lib cbca4b3 it is three
@@ -83,7 +86,7 @@ public class LocalModePanelFilterWireTests : BunitContext
     /// The end-to-end claim, stated through the lib's own SSOT rather than
     /// field by field: the config the server binds activates exactly the facets
     /// the user applied, so <see cref="FilterConfig.Build"/> server-side yields
-    /// the same filter set the panel described.
+    /// the same filter set the user applied.
     /// </summary>
     [Fact]
     public async Task RunLocal_PostedConfig_ActivatesTheSameFacetsServerSide()
@@ -127,22 +130,31 @@ public class LocalModePanelFilterWireTests : BunitContext
         var handler = new CapturingProcessHandler();
         Services.AddSingleton(new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") });
 
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterInEffect, config)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.FolderPath, "D:\\xg"));
+        // The folder and the output path are restored, and the selection
+        // reaches the filter owner as this boot's remembered one, then
+        // Applied: the one way to put a whole configuration in effect without
+        // typing it into the surface's boxes. A selection that restricts
+        // nothing is in effect as restored, without Apply
+        // (halheinrich/backgammon#266), so there is nothing to commit.
+        var restricts = config.GetActiveFacets().Count > 0;
+        var storage = BrowserStoragePlan.On(JSInterop);
+        storage.ExpectFilterRestore(config);
+        storage.ExpectFilterPanelMount();
+        storage.ExpectRestore(new()
+        {
+            [HomeStoragePlan.FolderPathKey] = "D:\\xg",
+            [HomeStoragePlan.OutputPathKey] = "D:\\xg\\decisions.csv",
+        });
+        if (restricts)
+            storage.ExpectFilterCommit(config, BrowserStorageWriteAnswer.Succeeded);
+        var host = await LocalPanelHost.RenderAsync(this);
+        if (restricts)
+            await host.ApplyAsync();
 
-        // The folder path is a parameter since the source hoist; the output
-        // path is still panel state normally restored from browser storage — seed
-        // it directly so the Run button's path gate is satisfied.
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", "D:\\xg\\decisions.csv");
-        cut.Render();
-
-        await cut.Find("button.btn-primary").ClickAsync(new MouseEventArgs());
+        await host.ClickRunAsync();
 
         Assert.NotNull(handler.Captured);
+        storage.Verify();
         return handler.Captured!.Filters;
     }
 }

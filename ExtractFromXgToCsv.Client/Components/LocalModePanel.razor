@@ -1,41 +1,44 @@
-@using BgDataTypes_Lib
-@using XgFilter_Lib.Filtering
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
-@using XgFilter_Razor
 @implements IDisposable
-@inject ReportingBrowserStorage ReportingStorage
+@inject ExtractApp App
 @inject HttpClient Http
-@inject ILocalJobs Jobs
-@inject LocalJobTiming Timing
-@inject IJobIdentities Identities
 
-@* Panel root. It exists to carry the busy marker: everything the user can
+@* The Local panel: the coordinator's folder, output path and run, rendered,
+   and the gestures on them sent to it as commands. It holds nothing of its
+   own (halheinrich/backgammon#424).
+
+   Panel root. It exists to carry the busy marker: everything the user can
    point at while a run is in flight sits inside it, so one class here dresses
-   the whole panel with the busy cursor (app.css owns which cursor that is). *@
-<div class="@BusyCssClass">
+   the whole panel with the busy cursor (app.css owns which cursor that is).
+   It rides the run in hand, so every window that fact covers gets the cursor:
+   the pre-first-poll "Starting…" gap, the deck pathway's multi-minute atomic
+   render, the determinate stretch between them, and any busy window added
+   later. The class carries no cursor of its own; app.css holds the single
+   rule (issue halheinrich/backgammon#77). *@
+<div class="@(App.IsRunInHand ? "is-busy" : null)">
 
     <section class="mb-4">
         <div style="max-width:800px">
             <div class="mb-3">
                 <label class="form-label">Folder path</label>
-                @* Controlled input — Home owns the text, its persistence, and
-                   the change-boundary latch the filter source token is minted
-                   from (the folder is Local mode's filter *source*, so its
-                   identity lives with the FilterSurface host). Two events on
-                   purpose: @oninput follows every keystroke for persistence,
-                   @onchange marks the commit boundary that may re-gate. *@
+                @* Controlled input — the coordinator owns the text, its
+                   persistence, and the change-boundary latch the filter source
+                   token is minted from (the folder is Local mode's filter
+                   *source*). Two events on purpose: @oninput follows every
+                   keystroke for persistence, @onchange marks the commit
+                   boundary that may re-gate. *@
                 <input id="folderPath" class="form-control" placeholder="e.g. D:\xg\matches"
-                       value="@FolderPath"
-                       @oninput="@(e => FolderPathChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty))"
-                       @onchange="@(e => OnFolderPathCommitted.InvokeAsync(e.Value?.ToString() ?? string.Empty))" />
-                @if (_bookStatus is not null)
+                       value="@App.FolderPath"
+                       @oninput="@(e => App.EditFolderPathAsync(e.Value?.ToString() ?? string.Empty))"
+                       @onchange="@(e => App.CommitFolderPath(e.Value?.ToString() ?? string.Empty))" />
+                @if (App.BookStatus is { } bookStatus)
                 {
                     <div class="small mt-1" id="bookStatus">
-                        @if (_bookStatus.Loaded)
+                        @if (bookStatus.Loaded)
                         {
                             <span class="text-success">
-                                ✓ Opening book loaded on the server (@_bookStatus.EntryCount entries) —
+                                ✓ Opening book loaded on the server (@bookStatus.EntryCount entries) —
                                 book decisions show their enriched depth.
                             </span>
                         }
@@ -51,45 +54,54 @@
                 }
             </div>
             <div class="mb-3">
-                <label class="form-label">@(OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
+                <label class="form-label">@(App.OutputFormat == OutputFormat.Xgp ? "Output folder" : "Output path")</label>
                 <input id="outputPath" class="form-control"
-                       placeholder="@(OutputFormat == OutputFormat.Xgp ? "e.g. D:\\xg\\positions" : "e.g. D:\\xg\\decisions.csv")"
-                       value="@_outputPath"
-                       @oninput="OnOutputPathChanged" />
+                       placeholder="@(App.OutputFormat == OutputFormat.Xgp ? "e.g. D:\\xg\\positions" : "e.g. D:\\xg\\decisions.csv")"
+                       value="@App.OutputPath"
+                       @oninput="@(e => App.SetOutputPathAsync(e.Value?.ToString() ?? string.Empty))" />
             </div>
         </div>
     </section>
 
     @* The run error — dismissible (SPEC-notices.md, Fork A), and assertive: a
-       gesture the user made failed. One occurrence is one failed run, and
-       _runError is non-null exactly while one stands, so closing the box ends
-       the occurrence — the field is cleared, as the next Run, and inputs that
+       gesture the user made failed. One occurrence is one failed run, and the
+       run error is non-null exactly while one stands, so closing the box ends
+       the occurrence — the fact is cleared, as the next Run, and inputs that
        no longer match the run's, already clear it — and the Notice keeps no
        dismissed bit (the binding makes it caller-held). A second failure
-       assigns the field again and shows fresh although its text may be
-       identical: the text was never the occurrence. While the run goes on,
-       what the field shows of it is ShowInFlight's to say; there the one
-       remembered dismissal is the persistent-failure notice's, which holds
-       for the rest of its failure streak (StillTryingNotice). No @if around
-       it — one fact, read once. *@
+       sets it again and shows fresh although its text may be identical: the
+       text was never the occurrence. While the run goes on, what it shows is
+       the run's to say; there the one remembered dismissal is the
+       persistent-failure notice's, which holds for the rest of its failure
+       streak. No @if around it — one fact, read once. *@
     <Notice class="mt-2" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
             Dismissible="true"
-            @bind-Dismissed:get="_runError is null"
-            @bind-Dismissed:set="_ => DismissRunError()">
-        @_runError
+            @bind-Dismissed:get="App.RunError is null"
+            @bind-Dismissed:set="_ => App.DismissRunError()">
+        @App.RunError
     </Notice>
 
     <div class="mb-4 d-flex gap-2 align-items-center" style="max-width:800px">
         <button class="btn btn-primary"
-                @onclick="RunLocalAsync"
-                disabled="@(!RunReady)">
+                @onclick="App.RunAsync"
+                disabled="@(!App.CanRun)">
             Run
         </button>
-        @if (_busy)
+        @if (App.IsRunInHand)
         {
-            <button class="btn btn-danger" @onclick="StopLocalAsync">
+            <button class="btn btn-danger" @onclick="App.StopAsync">
                 Stop
             </button>
+            @* A Stop pressed before the start is answered waits for the
+               answer (SPEC-notices.md §7.5): nothing is shown as delivered
+               that was not, and a hint that it is pending is allowed. In the
+               status-line style of "Starting…", not a notice box, and gone
+               the moment the start is answered (Hal's wording, 2026-10-22,
+               halheinrich/backgammon#424). *@
+            @if (App.IsStopPending)
+            {
+                <small class="text-muted" id="stopPendingHint">Stop requested; waiting for the server.</small>
+            }
         }
         <button class="btn btn-outline-secondary" @onclick="ExitAsync">
             Exit
@@ -99,20 +111,21 @@
            Run is dark. With one, a filter not in effect is a selection that
            needs Apply — the empty selection is in effect without it
            (halheinrich/backgammon#266). *@
-        @if (Source is not null && FilterInEffect is null)
+        @if (App.AwaitsApply)
         {
             <small class="text-muted">Apply filters first</small>
         }
-        else if (XgpRunBlocked)
+        else if (App.XgpOptionsInvalid)
         {
             <small class="text-muted">Fix the XGP export options first</small>
         }
     </div>
 
-    @if (_busy || _progress is not null)
+    @if (App.IsRunInHand || App.Progress is not null)
     {
+        var progress = App.Progress;
         <div style="max-width:800px">
-            @if (_progress is null)
+            @if (progress is null)
             {
                 // Busy, but no status snapshot has landed yet — the polling loop's
                 // opening Task.Delay(1000) alone guarantees a second of this, and a
@@ -127,7 +140,7 @@
                     <span class="text-muted" id="startingNotice">Starting…</span>
                 </div>
             }
-            else if (_progress is { Complete: false, Phase: JobPhase.Rendering })
+            else if (progress is { Complete: false, Phase: JobPhase.Rendering })
             {
                 // The deck pathway's atomic render. Current/Total has stopped at
                 // 100% and ElapsedSec/FilesPerSec are frozen at the values they
@@ -141,7 +154,7 @@
                 </div>
                 <div class="small">
                     <span class="text-muted" id="renderingNotice">
-                        @_progress.FileName — @_progress.TotalRows rows collected.
+                        @progress.FileName — @progress.TotalRows rows collected.
                         This step can't report progress; it finishes in one go.
                     </span>
                 </div>
@@ -149,27 +162,27 @@
             else
             {
                 <div class="progress mb-2" style="height:24px">
-                    <div class="progress-bar @(_progress.Cancelled ? "bg-warning" : "")"
+                    <div class="progress-bar @(progress.Cancelled ? "bg-warning" : "")"
                          role="progressbar"
-                         style="width:@(_progress.PercentComplete)%">
-                        @_progress.PercentComplete%
+                         style="width:@(progress.PercentComplete)%">
+                        @progress.PercentComplete%
                     </div>
                 </div>
                 <div class="small">
-                    @if (_progress.Complete && _progress.ErrorMessage is not null)
+                    @if (progress.Complete && progress.ErrorMessage is not null)
                     {
                         <span class="text-danger fw-bold">
-                            ✗ Error: @_progress.ErrorMessage
+                            ✗ Error: @progress.ErrorMessage
                         </span>
                     }
-                    else if (_progress.Complete && !_progress.Cancelled)
+                    else if (progress.Complete && !progress.Cancelled)
                     {
                         <span class="text-success fw-bold">
-                            ✓ Done — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec) → @_progress.WrittenPath
+                            ✓ Done — @progress.TotalRows rows written in @progress.ElapsedSec.ToString("F1")s
+                            (@progress.FilesPerSec files/sec) → @progress.WrittenPath
                         </span>
-                        @if (_progress.TotalRows == 0 && _run is { FilterRestrictsNothing: false }
-                             && _progress.Skipped.Count == 0)
+                        @if (progress.TotalRows == 0 && App.RunFilterRestricted
+                             && progress.Skipped.Count == 0)
                         {
                             // A successful run wrote zero rows through a non-empty
                             // filter set. Because an empty (inactive) set admits
@@ -195,14 +208,14 @@
                             </Notice>
                         }
                     }
-                    else if (_progress.Cancelled)
+                    else if (progress.Cancelled)
                     {
                         <span class="text-warning fw-bold">
-                            ⏹ Stopped at file @_progress.Current of @_progress.Total
-                            — @_progress.TotalRows rows written in @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec)
+                            ⏹ Stopped at file @progress.Current of @progress.Total
+                            — @progress.TotalRows rows written in @progress.ElapsedSec.ToString("F1")s
+                            (@progress.FilesPerSec files/sec)
                         </span>
-                        @if (_progress.CloseFailureMessage is { } closeFailure)
+                        @if (progress.CloseFailureMessage is { } closeFailure)
                         {
                             // The stop stands (SPEC-notices.md §7.1); a failure
                             // closing the file it left unfinished is reported
@@ -213,9 +226,9 @@
                     else
                     {
                         <span class="text-muted">
-                            File @_progress.Current of @_progress.Total: @_progress.FileName
-                            — @_progress.TotalRows rows, @_progress.ElapsedSec.ToString("F1")s
-                            (@_progress.FilesPerSec files/sec)
+                            File @progress.Current of @progress.Total: @progress.FileName
+                            — @progress.TotalRows rows, @progress.ElapsedSec.ToString("F1")s
+                            (@progress.FilesPerSec files/sec)
                         </span>
                     }
                 </div>
@@ -223,7 +236,7 @@
         </div>
     }
 
-    @if (_lastRun is { } lastRun)
+    @if (App.LastRunSkips is { } lastRunSkips)
     {
         // The last run's skip record (SPEC-notices.md §7.2): a skip never ends
         // a run, so without this a terminal line reads as a clean result while
@@ -235,696 +248,25 @@
         // Through the one rendering of a skip record; it shows nothing for an
         // empty record.
         <div style="max-width:800px">
-            <SkipListNotice class="mt-2" Record="lastRun.Skips" Label="@lastRun.Label" />
+            <SkipListNotice class="mt-2" Record="lastRunSkips" Label="@App.LastRunLabel" />
         </div>
     }
 
 </div>
 
 @code {
-    [Parameter] public OutputFormat OutputFormat { get; set; }
+    // The coordinator moves while no gesture of this panel is running — a
+    // status read landing, a Stop's answer — so the panel re-renders off its
+    // notification.
+    protected override void OnInitialized() => App.Changed += OnAppChanged;
 
-    /// <summary>
-    /// The current source's token, as Home reports it to the filter setup —
-    /// the latched folder, or <see langword="null"/> while none is latched.
-    /// Half of what a run's result describes (see <see cref="RunInputs"/>).
-    /// </summary>
-    [Parameter, EditorRequired] public FilterSourceToken? Source { get; set; }
+    private void OnAppChanged() => _ = InvokeAsync(StateHasChanged);
 
-    /// <summary>
-    /// The filter in effect for <see cref="Source"/>, or
-    /// <see langword="null"/> when none is — the host's one filter fact
-    /// (<c>Home.FilterInEffect</c>), the whole filter half of this panel's
-    /// gate, and the filter a run sends. The empty selection is in effect
-    /// without Apply (halheinrich/backgammon#266); an edit that moves the
-    /// selection off what is in effect makes this null on its own.
-    /// </summary>
-    /// <remarks>
-    /// One fact, so one parameter: a config beside a separate "applied" flag
-    /// could disagree with it. The host hands a new instance on each render
-    /// (the owner's <c>ConfigInEffectFor</c> does), so compare it by value
-    /// (<see cref="FilterConfig.Equals(FilterConfig)"/>), never by reference.
-    /// </remarks>
-    [Parameter, EditorRequired] public FilterConfig? FilterInEffect { get; set; }
-
-    // The folder input's controlled-component surface. Home owns the value
-    // (it is Local mode's filter-source identity, latched host-side at the
-    // change boundary); this panel renders it and forwards both event
-    // boundaries verbatim. All three are load-bearing for reporting the
-    // source, so all three are EditorRequired — a silently splatted binding
-    // here would be a source change nobody hears of.
-    [Parameter, EditorRequired] public string FolderPath { get; set; } = string.Empty;
-    [Parameter, EditorRequired] public EventCallback<string> FolderPathChanged { get; set; }
-    [Parameter, EditorRequired] public EventCallback<string> OnFolderPathCommitted { get; set; }
-
-    [Parameter, EditorRequired] public XgpExportOptions XgpOptions { get; set; } = default!;
-    [Parameter, EditorRequired] public bool XgpAnonymize { get; set; }
-
-    /// <summary>
-    /// Raised at the click of Run for an XGP run, as the run captures its
-    /// options, before its start is sent: the host begins watching for an
-    /// edit of the pattern or the next number, which keeps the control from
-    /// following this run's commit (SPEC-notices.md §7.5, "has changed the
-    /// control"). EditorRequired: a silently splatted binding would let the
-    /// control follow over an edit, or never follow at all.
-    /// </summary>
-    [Parameter, EditorRequired] public EventCallback OnXgpJobStarted { get; set; }
-
-    /// <summary>
-    /// Raised with what an XGP job committed once the panel has taken its
-    /// terminal result — completed, cancelled or failed, whatever the panel
-    /// shows, since a failed run's files were written too — and before the
-    /// panel acknowledges the job: the host's next-number control follows it
-    /// unless the user has edited the pattern or the next number since
-    /// <see cref="OnXgpJobStarted"/> (SPEC-notices.md §7.5). A terminal result without a commit raises
-    /// nothing. EditorRequired: a silently splatted binding would leave the
-    /// control behind every export.
-    /// </summary>
-    [Parameter, EditorRequired] public EventCallback<XgpExportCommit> OnXgpJobEnded { get; set; }
-
-    private bool XgpRunBlocked =>
-        OutputFormat == OutputFormat.Xgp && !XgpOptions.TryValidate(out _);
-
-    // The Run gate — the button's and its click's one definition, so a click
-    // that reaches the run past a dark button starts nothing: no run in hand,
-    // a folder and an output path, a filter in effect, and valid options for
-    // XGP. Nothing about the server: the start is the first contact.
-    private bool RunReady =>
-        !_busy
-        && !string.IsNullOrWhiteSpace(FolderPath)
-        && !string.IsNullOrWhiteSpace(_outputPath)
-        && FilterInEffect is not null
-        && !XgpRunBlocked;
-
-    // Busy marker for the panel root. It rides _busy — the state the panel
-    // already keeps, unchanged — so every window that flag covers gets the
-    // cursor: the pre-first-poll "Starting…" gap, the deck pathway's
-    // multi-minute atomic render, the determinate stretch between them, and
-    // any busy window added later. The class carries no cursor of its own;
-    // app.css holds the single rule (issue halheinrich/backgammon#77).
-    private string? BusyCssClass => _busy ? "is-busy" : null;
-
-    private string _outputPath = string.Empty;
-    private ProcessingProgress? _progress = null;
-    private bool _busy = false;
-
-    // The job the run in hand follows, once an answer has made it known; null
-    // before then, and while no run is in hand. Stop cancels it, and each
-    // cancel's answer is that job's run's alone (DeliverStopAsync).
-    private JobInHand? _jobInHand;
-
-    /// <summary>
-    /// The job a run follows, once known: its identity, and whether a Stop for
-    /// it has been confirmed delivered. One per run, compared by reference, so
-    /// a Stop's answer that arrives after its run has ended — or after the next
-    /// run has begun — is told apart from the run in hand's.
-    /// </summary>
-    private sealed class JobInHand(string jobId)
-    {
-        /// <summary>The job's identity, as minted for its start.</summary>
-        public string JobId { get; } = jobId;
-
-        /// <summary>
-        /// Whether a cancel for the job has been confirmed delivered. Once it
-        /// has, no cancel's failure undoes it — not even one for a request
-        /// sent later.
-        /// </summary>
-        public bool StopDelivered { get; private set; }
-
-        /// <summary>A cancel for the job was confirmed delivered.</summary>
-        public void ConfirmStopDelivered() => StopDelivered = true;
-    }
-
-    // Stop pressed for the run in hand while its start was unanswered: the
-    // start goes on being sent, and once its answer admits the job, the Stop
-    // is delivered before the job is followed. Until then nothing says it was
-    // delivered. Cleared as each run starts and ends.
-    private bool _stopPending;
-
-    // This panel's lifetime: a run it is following stops when it goes.
-    private readonly CancellationTokenSource _lifetime = new();
-
-    // The failed run standing on screen, as its message; null when none is.
-    // The run error notice's whole state — presence, text and dismissal are
-    // this one field (see the notice's comment in the markup). Distinct from
-    // _progress.ErrorMessage, which is the server's report of a job that
-    // started and then failed; this is the client's own failure to start or
-    // follow one.
-    private string? _runError;
-
-    // What the run error shows of the run in hand while it goes on is made
-    // from the two facts below (ShowInFlight): a Stop failure standing, which
-    // the persistent-failure notice never replaces, or else that notice,
-    // while it is shown.
-
-    // A Stop for the run in hand that was refused, or could not be
-    // confirmed, as its message; null while none stands. It stands until a
-    // Stop for the job is delivered, the user closes it, or the run ends,
-    // whatever contact does meanwhile.
-    private string? _stopFailure;
-
-    // The persistent-failure notice within the current failure streak.
-    private StillTryingNotice _stillTrying;
-
-    /// <summary>
-    /// The persistent-failure notice within one failure streak — the requests
-    /// that fail in a row until contact returns (SPEC-notices.md §7.5).
-    /// </summary>
-    private enum StillTryingNotice
-    {
-        /// <summary>
-        /// Not on screen and not held back: no streak has reached the
-        /// threshold, or one has and nothing has shown it yet. The next failure
-        /// at or past the threshold shows it.
-        /// </summary>
-        None,
-
-        /// <summary>
-        /// Due, but a Stop failure stands in its place. It is shown once a
-        /// Stop is confirmed delivered, while failures continue; if the user
-        /// closes the Stop failure instead, it is due again at the next failure.
-        /// </summary>
-        Suppressed,
-
-        /// <summary>On screen as the run error, until contact returns.</summary>
-        Shown,
-
-        /// <summary>
-        /// Closed by the user: it stays closed until contact returns and a new
-        /// streak begins, however many more requests fail.
-        /// </summary>
-        Dismissed,
-    }
-
-    /// <summary>
-    /// One visit to a source: the stretch of this panel's life over which it
-    /// shows one source. Replacing or removing the source ends the visit, and
-    /// a return to the same folder is a new one — a replacement is not undone
-    /// by coming back (SPEC-notices.md §7.2). Compared by reference: two
-    /// visits to one folder are different visits.
-    /// </summary>
-    private sealed class SourceVisit(FilterSourceToken? source)
-    {
-        /// <summary>The source this visit shows; <see langword="null"/> for none.</summary>
-        public FilterSourceToken? Source { get; } = source;
-    }
-
-    // The current visit. It only ever moves forward, so a run that has been
-    // superseded by a newer visit stays superseded.
-    private SourceVisit _visit = new(null);
-
-    /// <summary>
-    /// What a run was computed from: the source visit it started in, the
-    /// filter values it applied, and the output path it wrote to — plus
-    /// whether that filter restricted nothing, the zero-match box's premise.
-    /// Captured when the run starts, so the result on screen is read against
-    /// its own run, never against whatever is on screen now.
-    /// </summary>
-    private sealed record RunInputs(
-        SourceVisit Visit, FilterConfig Filter, bool FilterRestrictsNothing, string OutputPath);
-
-    // The run whose progress, result or error is on screen; null when none is.
-    // A result stands only while its run's source visit is the current one and
-    // its filter values are still the current ones (see OnParametersSet, and
-    // RunLocalAsync's judgement before it publishes a run's outcome).
-    private RunInputs? _run;
-
-    /// <summary>
-    /// A finished run's skip record, identified with its run: the source visit
-    /// it ran in — the record belongs to the run on that visit — and how it
-    /// ended, which its label states.
-    /// </summary>
-    private sealed record LastRunRecord(SourceVisit Visit, SkipRecord Skips, RunEnding Ending)
-    {
-        /// <summary>The list's label: the run it is the history of, and how that run ended.</summary>
-        public string Label => Ending switch
-        {
-            RunEnding.Cancelled => "The last run (stopped)",
-            RunEnding.Failed => "The last run (failed)",
-            _ => "The last run",
-        };
-
-        /// <summary>The record <paramref name="terminal"/> carries, for a run in <paramref name="visit"/>.</summary>
-        public static LastRunRecord Of(SourceVisit visit, ProcessingProgress terminal) =>
-            new(visit, terminal.Skipped,
-                terminal.ErrorMessage is not null ? RunEnding.Failed
-                : terminal.Cancelled ? RunEnding.Cancelled
-                : RunEnding.Completed);
-    }
-
-    /// <summary>How a run that reached its terminal snapshot ended.</summary>
-    private enum RunEnding { Completed, Cancelled, Failed }
-
-    // The last run's skip record; null while there is none. Kept apart from
-    // the result (_run, _progress, _runError) because it lives by other rules
-    // (SPEC-notices.md §7.2): a filter change keeps it, replacing or removing
-    // the source clears it, and the next run replaces it.
-    private LastRunRecord? _lastRun;
-
-    // Server-side opening-book load state, fetched once on first render so the
-    // status line can tell the user which analysis-depth stamps to expect. Null
-    // until fetched (or if the fetch fails) — the line renders only when known.
-    private OpeningBookStatus? _bookStatus;
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-        // The folder path is restored by Home (its owner since the source
-        // hoist); only the output path — not a source — is still panel-owned.
-        var read = await ReportingStorage.ReadAsync(BrowserStorageArea.Local, "xg_outputPath",
-            "the output path starts blank for this visit");
-        _outputPath = read.IsStored ? read.Value : string.Empty;
-
-        // Server-side book status (Local mode only). A failure leaves the line
-        // hidden rather than asserting a state we don't know.
-        try { _bookStatus = await Http.GetFromJsonAsync<OpeningBookStatus>("/api/openingbook/status"); }
-        catch { _bookStatus = null; }
-
-        StateHasChanged();
-    }
-
-    private async Task OnOutputPathChanged(ChangeEventArgs e)
-    {
-        _outputPath = e.Value?.ToString() ?? string.Empty;
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_outputPath", _outputPath,
-            "the output path holds for this visit only");
-    }
-
-    protected override void OnParametersSet()
-    {
-        // A different source — replaced or removed — ends the visit; a return
-        // to a folder shown before starts a new one.
-        if (Source != _visit.Source)
-            _visit = new SourceVisit(Source);
-
-        // Update output path extension when output format changes.
-        // Xgp is excluded: its output path is a folder, so no extension is
-        // forced onto (or stripped from) whatever the user typed.
-        if (!string.IsNullOrWhiteSpace(_outputPath) && OutputFormat != OutputFormat.Xgp)
-        {
-            var expectedExt = OutputFormat switch
-            {
-                OutputFormat.DiagramJson => ".json",
-                OutputFormat.Pptx        => ".pptx",
-                OutputFormat.Pdf         => ".pdf",
-                _                        => ".csv",
-            };
-            if (!_outputPath.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
-            {
-                _outputPath = Path.ChangeExtension(_outputPath, expectedExt);
-                _ = ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_outputPath", _outputPath,
-                    "the output path's new extension holds for this visit only");
-            }
-        }
-
-        // Drop the run's result the moment it stops describing the current
-        // inputs — otherwise "Done — N rows" keeps describing a folder or a
-        // filter that is no longer the one on screen. Compared, not edged: an
-        // empty filter stays in effect across a folder change, so "a filter is
-        // in effect" never falls there, while the source the result was
-        // computed from has gone. Not while busy: a running job's progress and
-        // Stop stay with their own job, and its outcome is judged before it is
-        // published (RunLocalAsync).
-        if (!_busy && _run is { } run && !DescribesCurrentInputs(run))
-            DropResult();
-
-        // The skip record belongs to the run on the source visit it ran in:
-        // replacing or removing the source clears it, and a filter change
-        // does not — it is that run's history, never a verdict on the new
-        // filter.
-        if (_lastRun is { } lastRun && !ReferenceEquals(lastRun.Visit, _visit))
-            _lastRun = null;
-    }
-
-    // Whether the run started in the current source visit and the current
-    // filter values are still the ones it was computed from. The filter by
-    // value: the host hands a new config on every render.
-    private bool DescribesCurrentInputs(RunInputs run) =>
-        ReferenceEquals(run.Visit, _visit) && FilterInEffect is { } current && current.Equals(run.Filter);
-
-    private void DropResult()
-    {
-        _run = null;
-        _progress = null;
-        _runError = null;
-    }
-
-    // The user closed the run error: the occurrence it showed ends, whatever
-    // it was. A Stop failure closed ends, and a persistent-failure notice it
-    // held back is due again at the next failure; a persistent-failure notice
-    // closed stays closed for the rest of its streak.
-    private void DismissRunError()
-    {
-        _runError = null;
-        if (_stopFailure is not null)
-        {
-            _stopFailure = null;
-            if (_stillTrying == StillTryingNotice.Suppressed)
-                _stillTrying = StillTryingNotice.None;
-        }
-        else if (_stillTrying == StillTryingNotice.Shown)
-        {
-            _stillTrying = StillTryingNotice.Dismissed;
-        }
-    }
-
-    // Stop (SPEC-notices.md §7.5): once the job is known, it cancels it;
-    // before then, it waits for the start's answer, and the run delivers it
-    // once the answer admits the job — a refused start ran nothing
-    // (RunLocalAsync).
-    private async Task StopLocalAsync()
-    {
-        if (_jobInHand is { } job)
-            await DeliverStopAsync(job);
-        else
-            _stopPending = true;
-    }
-
-    /// <summary>
-    /// Asks the server to cancel <paramref name="job"/>, the job the run in
-    /// hand follows. The answer is that run's alone: one that arrives once the
-    /// run has ended, or the next has begun, changes nothing. Delivered, the
-    /// page goes on following the job to its stopped result, which says so,
-    /// and a Stop failure standing ends; the delivery stands for the job from
-    /// then on, so no cancel's failure undoes it, whichever request it
-    /// answers. Refused, or not confirmed — any other answer, or none — with
-    /// no Stop for the job delivered, the page says so: Stop is never shown as
-    /// delivered when it was not, and that stands until a Stop is delivered or
-    /// the run ends. The page goes on following, and Stop can be pressed again.
-    /// A Stop failure holds back the persistent-failure notice; once a Stop is
-    /// delivered, a notice it held back is shown, since requests still fail.
-    /// </summary>
-    private async Task DeliverStopAsync(JobInHand job)
-    {
-        string? failure;
-        try
-        {
-            failure = await Jobs.CancelAsync(job.JobId, _lifetime.Token) ? null : StopRefusedMessage;
-        }
-        catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
-        {
-            failure = StopUnconfirmedMessage;
-        }
-
-        if (!ReferenceEquals(job, _jobInHand) || job.StopDelivered)
-            return;
-        if (failure is not null)
-        {
-            _stopFailure = failure;
-            if (_stillTrying == StillTryingNotice.Shown)
-                _stillTrying = StillTryingNotice.Suppressed;
-            ShowInFlight();
-            return;
-        }
-        job.ConfirmStopDelivered();
-        if (_stopFailure is null)
-            return;
-        _stopFailure = null;
-        if (_stillTrying == StillTryingNotice.Suppressed)
-            _stillTrying = StillTryingNotice.Shown;
-        ShowInFlight();
-    }
-
-    // Cancelled, not disposed: a run still in flight reads its token, and
-    // nothing registers on it but the linked sources each run disposes.
-    public void Dispose() => _lifetime.Cancel();
+    public void Dispose() => App.Changed -= OnAppChanged;
 
     private async Task ExitAsync()
     {
         try { await Http.PostAsync("/api/shutdown", null); }
         catch { /* server shuts down, request may not complete */ }
     }
-
-    /// <summary>
-    /// One Local run (SPEC-notices.md §7.5): its identity minted before
-    /// anything is sent, the host told when an XGP run has captured its
-    /// options, the start sent — and retried under the same identity
-    /// — until the server answers, the job followed to its terminal result,
-    /// an XGP job's commit handed to the host, and only then the job
-    /// acknowledged.
-    /// </summary>
-    private async Task RunLocalAsync()
-    {
-        // The gate's own definition: a stale click past it has nothing to
-        // run. It guarantees a filter in effect.
-        if (!RunReady || FilterInEffect is not { } filter)
-            return;
-
-        var run = new RunInputs(_visit, filter, filter.Build().IsEmpty, _outputPath);
-        _run = run;
-        _busy = true; _runError = null; _stopFailure = null; _stillTrying = StillTryingNotice.None;
-        _progress = null; _jobInHand = null; _stopPending = false;
-        // The next run replaces the last one's record: this run's is shown
-        // when it ends, never while it is still growing.
-        _lastRun = null;
-        StateHasChanged();
-
-        // What a retry repeats: the identity and the whole request, so the
-        // server can tell a repeat from a different run.
-        var jobId = Identities.Mint();
-        var start = new StartRequest(jobId, new ProcessRequest
-        {
-            FolderPath = FolderPath,
-            OutputPath = run.OutputPath,
-            Filters = run.Filter,
-            OutputFormat = OutputFormat,
-            XgpOptions = XgpOptions,
-            Anonymize = XgpAnonymize,
-        });
-
-        // The options are captured: from here an edit of the pattern or the
-        // next number is the user's choice over this run's commit.
-        if (OutputFormat == OutputFormat.Xgp)
-            await OnXgpJobStarted.InvokeAsync();
-
-        // The run's outcome, held back until it is judged: the terminal
-        // snapshot, or the client's own failure to start or follow the job.
-        ProcessingProgress? terminal = null;
-        string? failure = null;
-
-        try
-        {
-            switch (await StartAsync(start))
-            {
-                case StartAnswer.Admitted:
-                {
-                    var job = _jobInHand = new JobInHand(jobId);
-                    // A Stop pressed while the start was unanswered is
-                    // delivered now that the job is known, before it is
-                    // followed.
-                    if (_stopPending)
-                        await DeliverStopAsync(job);
-                    terminal = await FollowAsync(jobId);
-                    // The server no longer holds the job — it restarted, say:
-                    // following ends, and the page says the result is lost.
-                    if (terminal is null && !_lifetime.IsCancellationRequested)
-                        failure = UnknownJobMessage;
-                    break;
-                }
-                case StartAnswer.Refused refused:
-                    // Nothing ran, a pending Stop included.
-                    failure = RefusedMessage(refused.Reason);
-                    break;
-            }
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-            // The panel has gone, and with it everything its run would show.
-            return;
-        }
-        catch (Exception ex)
-        {
-            failure = $"Error: {ex.Message}";
-        }
-        finally
-        {
-            _stopPending = false;
-        }
-
-        // The panel has gone, and with it everything its run would show; the
-        // job's files are on disk under their names.
-        if (_lifetime.IsCancellationRequested)
-            return;
-
-        // The run has ended: its outcome replaces whatever the run error
-        // showed while it went on.
-        _busy = false;
-        _jobInHand = null;
-        _stopFailure = null;
-        _stillTrying = StillTryingNotice.None;
-
-        // Judge before publishing: the outcome is shown only while the run's
-        // source visit is the current one and the filter values on screen are
-        // still the ones it was computed from. A run that completes after its
-        // inputs were superseded — the folder changed, even and back again,
-        // or the filter, while it ran — is never shown as the new inputs'
-        // result, not even for the length of the hand-off below. Once
-        // published, OnParametersSet drops it the moment the inputs move on.
-        if (DescribesCurrentInputs(run))
-        {
-            _progress = terminal ?? _progress;
-            _runError = failure;
-        }
-        else
-        {
-            DropResult();
-        }
-
-        // The run's skip record is published by its own rule: only while the
-        // source visit it ran in is still the current one, whatever the filter
-        // now is. A run from a former visit publishes none, and cannot restore
-        // one — a return to its folder included.
-        _lastRun = terminal is not null && ReferenceEquals(run.Visit, _visit)
-            ? LastRunRecord.Of(run.Visit, terminal)
-            : null;
-        StateHasChanged();
-
-        // The job's own accounting, whatever is on screen (§7.2): an XGP
-        // job's commit — completed, cancelled and failed alike, since a failed
-        // run's files were written too — goes to the host, and the job is
-        // acknowledged only after.
-        if (terminal is not null)
-        {
-            if (terminal.XgpCommit is { } commit)
-                await OnXgpJobEnded.InvokeAsync(commit);
-            await AcknowledgeAsync(jobId);
-        }
-    }
-
-    /// <summary>
-    /// Sends <paramref name="start"/> until the server answers — admitted or
-    /// refused — retrying a request that could not be made under the same
-    /// identity, so a lost response finds the same job and a repeat never
-    /// runs twice. A failure that persists shows as the run error, saying the
-    /// result hasn't arrived yet, and the start goes on; a Stop pressed
-    /// meanwhile waits for the answer.
-    /// </summary>
-    private async Task<StartAnswer> StartAsync(StartRequest start)
-    {
-        for (var failures = 0; ; )
-        {
-            try
-            {
-                var answer = await Jobs.StartAsync(start, _lifetime.Token);
-                ContactReturned();
-                return answer;
-            }
-            catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
-            {
-                StillTryingAfter(++failures);
-            }
-            await Task.Delay(Timing.RetryDelay, _lifetime.Token);
-        }
-    }
-
-    /// <summary>
-    /// Follows the job until its terminal result, retrying any status read
-    /// that fails. A failure that persists shows as the run error, saying the
-    /// result hasn't arrived yet, and following goes on; it never ends quietly.
-    /// </summary>
-    /// <returns>The terminal snapshot; <see langword="null"/> when the server does not hold the job, or the panel has gone.</returns>
-    private async Task<ProcessingProgress?> FollowAsync(string jobId)
-    {
-        var failures = 0;
-        while (true)
-        {
-            try
-            {
-                await Task.Delay(failures == 0 ? Timing.PollInterval : Timing.RetryDelay, _lifetime.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return null;
-            }
-
-            ProcessingProgress? snapshot;
-            try
-            {
-                snapshot = await Jobs.ReadStatusAsync(jobId, _lifetime.Token);
-            }
-            catch (Exception ex) when (IsUnreachable(ex) && !_lifetime.IsCancellationRequested)
-            {
-                StillTryingAfter(++failures);
-                continue;
-            }
-            failures = 0;
-            ContactReturned();
-
-            if (snapshot is null || snapshot.Complete)
-                return snapshot;
-
-            // The running job's own progress, shown with its Stop whatever has
-            // changed on screen since it started.
-            _progress = snapshot;
-            StateHasChanged();
-        }
-    }
-
-    // The persistent-failure run error (StillTryingNotice): due at every
-    // failure at or past the threshold, and shown then unless a Stop failure
-    // stands in its place — which holds it back — or the user has closed it
-    // in this streak. A Stop not delivered stands: the persistent failure
-    // never replaces it, and contact returning never takes it down.
-    private void StillTryingAfter(int failures)
-    {
-        if (failures < Timing.FailuresBeforeError || _stillTrying != StillTryingNotice.None)
-            return;
-        _stillTrying = _stopFailure is null ? StillTryingNotice.Shown : StillTryingNotice.Suppressed;
-        ShowInFlight();
-    }
-
-    // Contact has returned: the failure streak is over. A notice shown is
-    // taken down, and one held back or closed is forgotten, so the next
-    // streak begins afresh. A Stop failure stands.
-    private void ContactReturned()
-    {
-        if (_stillTrying == StillTryingNotice.None)
-            return;
-        _stillTrying = StillTryingNotice.None;
-        ShowInFlight();
-    }
-
-    // Puts what the run error shows of the run in hand on screen: a Stop
-    // failure standing, or else the persistent-failure notice while shown.
-    private void ShowInFlight()
-    {
-        _runError = _stopFailure ?? (_stillTrying == StillTryingNotice.Shown ? StillTryingMessage : null);
-        StateHasChanged();
-    }
-
-    // The page that started the job acknowledges it once it has taken the
-    // terminal result. A lost acknowledgement is harmless: the server keeps
-    // the result until its process ends, and a replay changes nothing.
-    private async Task AcknowledgeAsync(string jobId)
-    {
-        try { await Jobs.AcknowledgeAsync(jobId, _lifetime.Token); }
-        catch (Exception ex) when (IsUnreachable(ex) || ex is OperationCanceledException) { }
-    }
-
-    // A request that could not be made or answered: retried, never a result.
-    private static bool IsUnreachable(Exception ex) =>
-        ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException;
-
-    private const string StillTryingMessage =
-        "Can't reach the server. This run's result hasn't arrived yet — still trying…";
-
-    private const string UnknownJobMessage =
-        "The server no longer has this run — it may have restarted — so its result can't be shown.";
-
-    // Stop that the server refused: it holds no running job of that identity.
-    private const string StopRefusedMessage =
-        "The server didn't stop the run: it had already ended, or the server no longer has it.";
-
-    // Stop the page cannot confirm: any answer but delivered or refused, or
-    // none (Hal's wording, 2026-10-12).
-    private const string StopUnconfirmedMessage =
-        "Couldn't confirm the Stop request. The run may still be going. Press Stop to try again.";
-
-    // The page says why a refused start started nothing.
-    private static string RefusedMessage(RefusalReason reason) => reason switch
-    {
-        RefusalReason.ChangedRequest =>
-            "The server refused the run: its identity was already used for a different run.",
-        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "A refusal the page has no words for."),
-    };
 }

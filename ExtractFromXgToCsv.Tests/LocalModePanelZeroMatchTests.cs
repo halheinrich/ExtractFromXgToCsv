@@ -1,6 +1,5 @@
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
-using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -19,7 +18,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// where it would mislead. And the set it asks is the <em>run's</em> filter,
 /// never the one on screen now: the box describes the run. Each case runs a
 /// real run against a server that writes zero rows, because the run is where
-/// the panel records which filter it ran.
+/// the coordinator records which filter it ran.
 /// </summary>
 public class LocalModePanelZeroMatchTests : BunitContext
 {
@@ -41,7 +40,7 @@ public class LocalModePanelZeroMatchTests : BunitContext
     [Fact]
     public async Task CompleteZeroRows_ActiveFilter_RendersNoticeAlongsideDone()
     {
-        var cut = await RunAsync(new FilterConfig { Players = ["Alice"] });
+        var cut = (await RunAsync(errorMin: "0.05")).Panel;
 
         // Notice renders...
         var notice = cut.Find("div.zero-match-notice");
@@ -60,7 +59,7 @@ public class LocalModePanelZeroMatchTests : BunitContext
     [Fact]
     public async Task CompleteZeroRows_EmptyFilter_RendersDoneLineOnly()
     {
-        var cut = await RunAsync(new FilterConfig());
+        var cut = (await RunAsync(errorMin: null)).Panel;
 
         Assert.Empty(cut.FindAll("div.zero-match-notice"));
 
@@ -77,19 +76,22 @@ public class LocalModePanelZeroMatchTests : BunitContext
     [Fact]
     public async Task ZeroRowsThroughTheEmptyFilter_ThenAnActiveFilter_BlamesNoFilter()
     {
-        var cut = await RunAsync(new FilterConfig());
+        var host = await RunAsync(errorMin: null);
 
-        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { Players = ["Alice"] }));
+        await host.ApplyErrorMinAsync("0.05");
 
-        Assert.Empty(cut.FindAll("div.zero-match-notice"));
+        Assert.Empty(host.Panel.FindAll("div.zero-match-notice"));
     }
 
-    // A panel over one folder with the filter in effect and an output path,
-    // whose Run has completed against the zero-row server.
-    private async Task<IRenderedComponent<LocalModePanel>> RunAsync(FilterConfig filter)
+    // A panel over one folder with the filter in effect — the error minimum
+    // applied, or the empty filter when null — and an output path, whose Run
+    // has completed against the zero-row server.
+    private async Task<LocalPanelHost> RunAsync(string? errorMin)
     {
-        var cut = this.RenderReadyLocalPanel(filter);
-        await cut.RunToCompletionAsync();
-        return cut;
+        var host = await LocalPanelHost.RenderReadyAsync(this);
+        if (errorMin is not null)
+            await host.ApplyErrorMinAsync(errorMin);
+        await host.RunToCompletionAsync();
+        return host;
     }
 }

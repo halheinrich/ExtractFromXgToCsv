@@ -1,13 +1,8 @@
 using AngleSharp.Html.Dom;
 using Bunit;
 using ExtractFromXgToCsv.Client;
-using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
-using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
-using XgFilter_Razor;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -17,10 +12,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// <para>
 /// <b>The gate.</b> The bug pattern that produced the original regression was
 /// a permanently-disabled Run button because the filter fact never became
-/// true; the theory fails closed if <c>FilterInEffect</c> stops deciding the
-/// button's <c>disabled</c> attribute. One parameter, two rows: a filter is in
+/// true; the theory fails closed if the filter in effect stops deciding the
+/// button's <c>disabled</c> attribute. One fact, two rows: a filter is in
 /// effect or it is not, and an edit that moves the selection off what is in
-/// effect reaches this panel as null.
+/// effect leaves none.
 /// </para>
 /// <para>
 /// <b>The result.</b> A result describes the inputs it was computed from — the
@@ -32,42 +27,42 @@ namespace ExtractFromXgToCsv.Tests;
 /// after its inputs were superseded must not land its result as the new
 /// inputs' (halheinrich/backgammon#374, Arc 2). Each case runs a real run
 /// through <see cref="CapturingProcessHandler"/>, because the run is where the
-/// panel records what it was computed from.
+/// coordinator records what it was computed from, and moves the inputs by the
+/// gestures that move them: a folder committed, a filter edited or applied on
+/// the surface.
 /// </para>
 /// </summary>
 public class LocalModePanelGateTests : BunitContext
 {
-    private const string FolderA = @"D:\xg\a";
     private const string FolderB = @"D:\xg\b";
 
-    private readonly CapturingProcessHandler _server = new();
+    private CapturingProcessHandler _server = new();
 
     public LocalModePanelGateTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddClientServices();
-        Services.AddSingleton(new HttpClient(_server) { BaseAddress = new Uri("http://localhost/") });
+    }
+
+    private void Serve(CapturingProcessHandler server)
+    {
+        _server = server;
+        Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
     }
 
     [Theory]
     [InlineData(false, true)]   // no filter in effect → disabled
     [InlineData(true,  false)]  // filter in effect, paths set → enabled
-    public void RunButton_DisabledGatesOnFilterInEffect(bool inEffect, bool expectDisabled)
+    public async Task RunButton_DisabledGatesOnFilterInEffect(bool inEffect, bool expectDisabled)
     {
-        // The folder path is a Home-owned parameter since the source hoist;
-        // only the output path is still panel state (normally restored from
-        // browser storage in OnAfterRenderAsync), so only it needs the
-        // reflection seed. Both are set so the filter is the deciding factor.
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
-            .Add(c => c.FilterInEffect, inEffect ? new FilterConfig() : null)
-            .Add(c => c.FolderPath, FolderA));
+        // The folder and the output path are both set, so the filter is the
+        // deciding factor; an edit not applied leaves nothing in effect.
+        Serve(new CapturingProcessHandler());
+        var host = await LocalPanelHost.RenderReadyAsync(this);
+        if (!inEffect)
+            await host.EditErrorMinAsync("0.05");
 
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", @"D:\xg\out.csv");
-        cut.Render();
-
-        Assert.Equal(expectDisabled, RunButton(cut).IsDisabled);
+        Assert.Equal(expectDisabled, RunButton(host).IsDisabled);
     }
 
     /// <summary>
@@ -79,20 +74,18 @@ public class LocalModePanelGateTests : BunitContext
     /// property or the branch is removed.
     /// </summary>
     [Fact]
-    public void Progress_WithErrorMessage_RendersErrorBranch()
+    public async Task Progress_WithErrorMessage_RendersErrorBranch()
     {
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.FilterInEffect, new FilterConfig()));
-
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", new ProcessingProgress
+        Serve(new CapturingProcessHandler(new ProcessingProgress
         {
             Complete = true,
             ErrorMessage = "boom",
-        });
-        cut.Render();
+        }));
+        var host = await LocalPanelHost.RenderReadyAsync(this);
 
-        var errorSpan = cut.Find("span.text-danger");
+        await host.RunToCompletionAsync();
+
+        var errorSpan = host.Panel.Find("span.text-danger");
         Assert.Contains("boom", errorSpan.TextContent);
     }
 
@@ -101,41 +94,40 @@ public class LocalModePanelGateTests : BunitContext
     [Fact]
     public async Task UnrelatedRerender_KeepsTheResult()
     {
-        var cut = await RenderWithCompletedRunAsync(new FilterConfig { ErrorMin = 0.05 });
+        var host = await RenderWithCompletedRunAsync(errorMin: "0.05");
 
-        // A re-render that changes neither input — what every host render is:
-        // a new config instance of the same value, and an unrelated parameter.
-        // A result compared by reference, or dropped on any re-render, would
-        // vanish here on an unrelated keystroke elsewhere on the page.
-        cut.Render(p => p
-            .Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 0.05 })
-            .Add(c => c.OutputFormat, OutputFormat.DiagramJson));
+        // A move that changes neither input, and a re-render: the format
+        // changed, and the filter in effect read again — a new config instance
+        // of the same value. A result compared by reference, or dropped on any
+        // move, would vanish here on an unrelated gesture elsewhere on the page.
+        await host.SetOutputFormatAsync(OutputFormat.DiagramJson);
+        host.Panel.Render();
 
-        Assert.Contains("Done", cut.Markup);
+        Assert.Contains("Done", host.Panel.Markup);
     }
 
     [Fact]
     public async Task FilterLeavingEffect_DropsTheResult()
     {
-        var cut = await RenderWithCompletedRunAsync(new FilterConfig { ErrorMin = 0.05 });
+        var host = await RenderWithCompletedRunAsync(errorMin: "0.05");
 
         // The shape an edit arrives in: the selection on screen no longer
-        // equals what is in effect, so the host hands down null.
-        cut.Render(p => p.Add(c => c.FilterInEffect, (FilterConfig?)null));
+        // equals what is in effect, so nothing is.
+        await host.EditErrorMinAsync("0.06");
 
-        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.DoesNotContain("Done", host.Panel.Markup);
     }
 
     [Fact]
     public async Task FilterValuesChanging_DropsTheResult()
     {
-        var cut = await RenderWithCompletedRunAsync(new FilterConfig { ErrorMin = 0.05 });
+        var host = await RenderWithCompletedRunAsync(errorMin: "0.05");
 
         // A different filter in effect for the same folder — an edit applied —
         // is not what the result was computed from.
-        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 0.10 }));
+        await host.ApplyErrorMinAsync("0.10");
 
-        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.DoesNotContain("Done", host.Panel.Markup);
     }
 
     /// <summary>
@@ -147,15 +139,12 @@ public class LocalModePanelGateTests : BunitContext
     [Fact]
     public async Task FolderChanging_WhileTheEmptyFilterStaysReady_DropsTheResult()
     {
-        var cut = await RenderWithCompletedRunAsync(new FilterConfig());
+        var host = await RenderWithCompletedRunAsync(errorMin: null);
 
-        cut.Render(p => p
-            .Add(c => c.Source, FilterSourceToken.FromPath(FolderB))
-            .Add(c => c.FilterInEffect, new FilterConfig())
-            .Add(c => c.FolderPath, FolderB));
+        await host.CommitFolderAsync(FolderB);
 
-        Assert.DoesNotContain("Done", cut.Markup);
-        Assert.False(RunButton(cut).IsDisabled);
+        Assert.DoesNotContain("Done", host.Panel.Markup);
+        Assert.False(RunButton(host).IsDisabled);
     }
 
     /// <summary>
@@ -166,18 +155,17 @@ public class LocalModePanelGateTests : BunitContext
     [Fact]
     public async Task RunCompletingAfterItsInputsWereSuperseded_DoesNotShowItsResult()
     {
-        var cut = RenderReadyPanel(new FilterConfig());
+        Serve(new CapturingProcessHandler());
+        var host = await LocalPanelHost.RenderReadyAsync(this);
+        var cut = host.Panel;
         _server.HoldStatus();
 
-        var run = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        var run = host.ClickRunAsync();
         await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         // The folder changes under the running job, the empty filter staying
         // ready for the new one.
-        cut.Render(p => p
-            .Add(c => c.Source, FilterSourceToken.FromPath(FolderB))
-            .Add(c => c.FilterInEffect, new FilterConfig())
-            .Add(c => c.FolderPath, FolderB));
+        await host.CommitFolderAsync(FolderB);
 
         // The running job keeps its own progress and its Stop.
         Assert.Single(cut.FindAll("#startingNotice"));
@@ -188,7 +176,7 @@ public class LocalModePanelGateTests : BunitContext
 
         Assert.DoesNotContain("Done", cut.Markup);
         Assert.Empty(cut.FindAll("#startingNotice"));
-        Assert.False(RunButton(cut).IsDisabled);
+        Assert.False(RunButton(host).IsDisabled);
     }
 
     /// <summary>
@@ -199,43 +187,24 @@ public class LocalModePanelGateTests : BunitContext
     [Fact]
     public async Task RunCompletingWithItsInputsUnchanged_ShowsItsResult()
     {
-        var cut = RenderReadyPanel(new FilterConfig());
+        Serve(new CapturingProcessHandler());
+        var host = await LocalPanelHost.RenderReadyAsync(this);
         _server.HoldStatus();
 
-        var run = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        var run = host.ClickRunAsync();
         await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
-        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig()));
+        host.Panel.Render();
 
         _server.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Contains("Done", cut.Markup);
-    }
-
-    // ── Helpers ─────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// A panel over folder A with <paramref name="filter"/> in effect and an
-    /// output path typed — Run is open.
-    /// </summary>
-    private IRenderedComponent<LocalModePanel> RenderReadyPanel(FilterConfig filter)
-    {
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Csv)
-            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
-            .Add(c => c.FilterInEffect, filter)
-            .Add(c => c.FolderPath, FolderA)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
-        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
-        Assert.False(RunButton(cut).IsDisabled);
-        return cut;
+        Assert.Contains("Done", host.Panel.Markup);
     }
 
     // ── A click past the gate starts nothing ────────────────────────────────
 
     /// <summary>
-    /// The Run gate is the button's and its click's one definition: a click
+    /// The Run gate is the button's and the command's one definition: a click
     /// that reaches the run past any one of the gate's conditions — the
     /// button dark — sends no start.
     /// </summary>
@@ -246,22 +215,25 @@ public class LocalModePanelGateTests : BunitContext
     [InlineData("invalid XGP options")]
     public async Task AClickPastEachGateCondition_SendsNoStart(string condition)
     {
+        Serve(new CapturingProcessHandler());
         var xgp = condition is "invalid XGP options";
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, xgp ? OutputFormat.Xgp : OutputFormat.Csv)
-            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
-            .Add(c => c.FilterInEffect, condition == "no filter" ? null : new FilterConfig())
-            .Add(c => c.FolderPath, condition == "no folder" ? string.Empty : FolderA)
-            .Add(c => c.XgpOptions, condition == "invalid XGP options" ? new XgpExportOptions { NamePattern = "a/b" } : new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
+        var host = await LocalPanelHost.RenderAsync(this);
+        if (xgp)
+            await host.SetOutputFormatAsync(OutputFormat.Xgp);
+        if (condition != "no folder")
+            await host.CommitFolderAsync(LocalPanelHost.Folder);
         if (condition != "no output path")
-            cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
-        Assert.True(RunButton(cut).IsDisabled);
+            await host.SetOutputPathAsync(@"D:\xg\out.csv");
+        if (condition == "no filter")
+            await host.EditErrorMinAsync("0.05");
+        if (xgp)
+            await host.EditPatternAsync("a/b");
+        Assert.True(RunButton(host).IsDisabled);
 
-        await RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        await host.ClickRunAsync();
 
         Assert.Equal(0, _server.Starts);
-        Assert.DoesNotContain("Starting…", cut.Markup);
+        Assert.DoesNotContain("Starting…", host.Panel.Markup);
     }
 
     /// <summary>
@@ -273,31 +245,37 @@ public class LocalModePanelGateTests : BunitContext
     [Fact]
     public async Task AClickWhileARunIsInHand_SendsNoSecondStart()
     {
-        var cut = RenderReadyPanel(new FilterConfig());
+        Serve(new CapturingProcessHandler());
+        var host = await LocalPanelHost.RenderReadyAsync(this);
         _server.HoldStatus();
-        var run = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        var run = host.ClickRunAsync();
         await _server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
-        Assert.True(RunButton(cut).IsDisabled);
+        Assert.True(RunButton(host).IsDisabled);
 
-        var second = RunButtonElement(cut).ClickAsync(new MouseEventArgs());
+        var second = host.ClickRunAsync();
         _server.ReleaseStatus();
         await Task.WhenAll(run, second).WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Equal(1, _server.Starts);
     }
 
-    /// <summary>A ready panel whose run has completed, its result on screen.</summary>
-    private async Task<IRenderedComponent<LocalModePanel>> RenderWithCompletedRunAsync(FilterConfig filter)
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A ready panel whose run has completed, its result on screen: the
+    /// filter with error minimum <paramref name="errorMin"/> applied, or the
+    /// empty filter when null.
+    /// </summary>
+    private async Task<LocalPanelHost> RenderWithCompletedRunAsync(string? errorMin)
     {
-        var cut = RenderReadyPanel(filter);
-        await RunButtonElement(cut).ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
-        Assert.Contains("Done", cut.Markup);
-        return cut;
+        Serve(new CapturingProcessHandler());
+        var host = await LocalPanelHost.RenderReadyAsync(this);
+        if (errorMin is not null)
+            await host.ApplyErrorMinAsync(errorMin);
+        await host.RunToCompletionAsync();
+        Assert.Contains("Done", host.Panel.Markup);
+        return host;
     }
 
-    private static AngleSharp.Dom.IElement RunButtonElement(IRenderedComponent<LocalModePanel> cut) =>
-        cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run");
-
-    private static IHtmlButtonElement RunButton(IRenderedComponent<LocalModePanel> cut) =>
-        (IHtmlButtonElement)RunButtonElement(cut);
+    private static IHtmlButtonElement RunButton(LocalPanelHost host) => (IHtmlButtonElement)host.RunButton;
 }

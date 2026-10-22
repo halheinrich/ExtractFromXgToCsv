@@ -35,8 +35,13 @@ public class HomeRestoreNoticeTests : BunitContext
         _storage = BrowserStoragePlan.On(JSInterop);
     }
 
+    /// <summary>
+    /// (Re-based, halheinrich/backgammon#424: the navigation back is a remount,
+    /// which reads none of the coordinator's settings — only the filter
+    /// panel's mount reads.)
+    /// </summary>
     [Fact]
-    public async Task FreshBoot_RestoredSelection_AnnouncesItself_UntilAnEditSupersedesIt()
+    public async Task FreshBoot_RestoredSelection_AnnouncesItself_UntilAnEditSupersedesIt_AndARemountRestoresNothing()
     {
         // One bUnit context is one app boot: the stored selection below is a
         // previous session's, restored once, at the panel's first render.
@@ -60,11 +65,11 @@ public class HomeRestoreNoticeTests : BunitContext
         await cut.EditMinAsync("0.75");
         Assert.Empty(cut.FindAll("#filterRestoredNotice"));
 
-        // A navigation back: a new page, the same owner. Nothing is restored
-        // again — the boot's one restoration has settled — so the user's draft
-        // is on screen, and nothing is announced.
+        // A navigation back: a new page, the same owners. Nothing is restored
+        // again — the boot's one restoration has settled, and so has the
+        // app's — so the user's draft is on screen, and nothing is announced.
         await DisposeComponentsAsync();
-        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.FolderPathKey] = Folder });
+        _storage.ExpectHomeRemount();
         var back = this.RenderHome();
 
         Assert.Equal("0.75", back.MinInputValue());

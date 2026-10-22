@@ -13,9 +13,10 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Pins the wiring between XgFilter_Razor's filter setup and
-/// <see cref="Home"/>: the source Home reports, the filter in effect it reads
-/// back from the owner (<see cref="FilterSetupSnapshot.ConfigInEffectFor"/>)
-/// and hands the panel, and the source-change rule — a folder commit ends the
+/// <see cref="Home"/> over the app's coordinator: the source the coordinator
+/// reports, the filter in effect it reads back from the owner
+/// (<see cref="FilterSetupSnapshot.ConfigInEffectFor"/>) and runs with, and
+/// the source-change rule — a folder commit ends the
 /// setup, the baseline dropped and Apply re-armed — with readiness (halheinrich/backgammon#266): the empty selection
 /// is in effect without Apply once there is a source, and stays so across a
 /// source change.
@@ -72,7 +73,7 @@ public class HomeWiringTests : BunitContext
         // No source yet: nothing can be in effect, and Apply has nothing to
         // apply against. No copy claims Apply is needed — the folder box is
         // what is missing.
-        Assert.Null(cut.FindComponent<LocalModePanel>().Instance.FilterInEffect);
+        Assert.Null(this.App().FilterInEffect);
         Assert.True(cut.ApplyButton().HasAttribute("disabled"));
         Assert.True(cut.RunButton().HasAttribute("disabled"));
         Assert.DoesNotContain("Apply filters first", cut.Markup);
@@ -81,7 +82,7 @@ public class HomeWiringTests : BunitContext
 
         // The empty selection is ready for the folder as it stands.
         Assert.Equal(new FilterConfig(), InEffectForFolder(Folder));
-        Assert.Equal(new FilterConfig(), cut.FindComponent<LocalModePanel>().Instance.FilterInEffect);
+        Assert.Equal(new FilterConfig(), this.App().FilterInEffect);
         Assert.False(cut.RunButton().HasAttribute("disabled"));
         Assert.DoesNotContain("Apply filters first", cut.Markup);
     }
@@ -98,16 +99,16 @@ public class HomeWiringTests : BunitContext
         await cut.EditMinAsync("0.01");
 
         Assert.Null(InEffectForFolder(Folder));
-        Assert.Null(cut.FindComponent<LocalModePanel>().Instance.FilterInEffect);
+        Assert.Null(this.App().FilterInEffect);
         Assert.True(cut.RunButton().HasAttribute("disabled"));
         Assert.Contains("Apply filters first", cut.Markup);
 
         await cut.ApplyFiltersAsync();
 
         // One filter, one truth: what the owner has in effect for this folder
-        // is the value the panel would POST.
+        // is the value the run would POST.
         Assert.Equal(NonEmpty, InEffectForFolder(Folder));
-        Assert.Equal(NonEmpty, cut.FindComponent<LocalModePanel>().Instance.FilterInEffect);
+        Assert.Equal(NonEmpty, this.App().FilterInEffect);
         Assert.False(cut.RunButton().HasAttribute("disabled"));
     }
 
@@ -122,10 +123,10 @@ public class HomeWiringTests : BunitContext
         Assert.False(cut.RunButton().HasAttribute("disabled"));
 
         // A keystroke moves the selection off what is in effect: the gate
-        // closes, and the panel is handed nothing.
+        // closes, and nothing is in effect.
         await cut.EditMinAsync("0.02");
         Assert.Null(InEffectForFolder(Folder));
-        Assert.Null(cut.FindComponent<LocalModePanel>().Instance.FilterInEffect);
+        Assert.Null(this.App().FilterInEffect);
         Assert.True(cut.RunButton().HasAttribute("disabled"));
 
         // Undo back to the applied values: the baseline is in effect again,
@@ -169,8 +170,8 @@ public class HomeWiringTests : BunitContext
     /// Changing folders while the empty filter stays ready: the gate never
     /// closes — the empty selection is in effect for the new folder at once —
     /// but the run on screen was computed from the old folder, so its result
-    /// goes. Through the real page: Home's report, the owner's readiness, and
-    /// the panel's result keyed by its inputs.
+    /// goes. Through the real page: the coordinator's report, the owner's readiness, and
+    /// the run's result keyed by its inputs.
     /// </summary>
     [Fact]
     public async Task FolderChange_WhileTheEmptyFilterStaysReady_DropsTheEarlierResult()
@@ -353,13 +354,11 @@ public class HomeWiringTests : BunitContext
         var cut = RenderPage();
         Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
 
-        // The run's two hand-offs (SPEC-notices.md §7.5) are bound: a
-        // silently splatted one would let the next number follow over an
-        // edit, or leave it behind every export.
-        var localPanel = cut.FindComponent<LocalModePanel>();
-        Assert.NotNull(localPanel.Instance.XgpOptions);
-        Assert.True(localPanel.Instance.OnXgpJobStarted.HasDelegate);
-        Assert.True(localPanel.Instance.OnXgpJobEnded.HasDelegate);
+        // The panel runs with the coordinator's options. The run's two
+        // hand-offs (SPEC-notices.md §7.5) are no longer bindings a page could
+        // splat: the coordinator's run hands its commit to the coordinator's
+        // own follow, pinned in HomeXgpAccountingTests.
+        Assert.NotNull(this.App().XgpOptions);
     }
 
     [Fact]
@@ -372,9 +371,8 @@ public class HomeWiringTests : BunitContext
         cut.Find("#fmtXgp").Change(true);
         Assert.Single(cut.FindAll("#xgpOptions"));
 
-        var panel = cut.FindComponent<LocalModePanel>();
-        Assert.NotNull(panel.Instance.XgpOptions);
-        Assert.True(panel.Instance.XgpOptions.TryValidate(out _));
+        Assert.NotNull(this.App().XgpOptions);
+        Assert.True(this.App().XgpOptions.TryValidate(out _));
 
         cut.Find("#fmtCsv").Change(true);
         Assert.Empty(cut.FindAll("#xgpOptions"));

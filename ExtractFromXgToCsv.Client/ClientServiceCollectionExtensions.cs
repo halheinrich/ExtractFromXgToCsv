@@ -37,10 +37,15 @@ internal static class ClientServiceCollectionExtensions
         // app under WebAssembly — with XgFilter_Razor's adapter as the sink
         // every refusal of the surface's own calls goes to. One owner of the
         // condition and its access across the apps (Hal's ruling,
-        // halheinrich/backgammon#424, 2026-10-19). Home reports the source and
-        // reads the gate from the owner; FilterSurface injects the same
-        // instance.
+        // halheinrich/backgammon#424, 2026-10-19). The coordinator reports the
+        // source and reads the gate from the owner; FilterSurface injects the
+        // same instance.
         services.AddFilterSurface();
+
+        // The app's one coordinator (halheinrich/backgammon#424): the phase,
+        // the settings, the source and the Local run, which it holds
+        // privately. Scoped — one per loaded app, and one per test context.
+        services.AddScoped<ExtractApp>();
 
         return services;
     }

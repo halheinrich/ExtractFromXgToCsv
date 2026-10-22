@@ -30,10 +30,26 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
         Services.AddClientServices();
     }
 
-    private IRenderedComponent<LocalModePanel> PanelOver(CapturingProcessHandler server, FilterConfig? filter = null)
+    /// <summary>
+    /// A ready panel whose runs <paramref name="server"/> answers, with the
+    /// filter of error minimum <paramref name="errorMin"/> applied, or the
+    /// empty filter when null.
+    /// </summary>
+    private async Task<LocalPanelHost> PanelOverAsync(CapturingProcessHandler server, string? errorMin = null)
     {
         Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
-        return this.RenderReadyLocalPanel(filter ?? new FilterConfig());
+        var host = await LocalPanelHost.RenderReadyAsync(this);
+        if (errorMin is not null)
+            await host.ApplyErrorMinAsync(errorMin);
+        return host;
+    }
+
+    /// <summary>A ready panel whose run against <paramref name="server"/> has completed.</summary>
+    private async Task<IRenderedComponent<LocalModePanel>> CompletedRunAsync(CapturingProcessHandler server, string? errorMin = null)
+    {
+        var host = await PanelOverAsync(server, errorMin);
+        await host.RunToCompletionAsync();
+        return host.Panel;
     }
 
     // Names as the processor records them: paths under the input folder.
@@ -53,7 +69,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     [Fact]
     public async Task CompletedRunWithSkips_ShowsTheCountsAndEachNameWithItsReason()
     {
-        var cut = PanelOver(new CapturingProcessHandler(new ProcessingProgress
+        var cut = await CompletedRunAsync(new CapturingProcessHandler(new ProcessingProgress
         {
             Current = 3,
             Total = 3,
@@ -61,7 +77,6 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
             TotalRows = 40,
             Skipped = TwoFilesAndADecision,
         }));
-        await cut.RunToCompletionAsync();
 
         // Beside the Done line, not in place of it: the rows that were written
         // are still the run's result.
@@ -90,7 +105,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
         // Zero rows through an active filter would normally blame the filter,
         // but that inference assumes every file was read. With skips the zero
         // may be theirs, so only the skip notice speaks.
-        var cut = PanelOver(
+        var cut = await CompletedRunAsync(
             new CapturingProcessHandler(new ProcessingProgress
             {
                 Current = 1,
@@ -99,8 +114,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
                 TotalRows = 0,
                 Skipped = OneFile,
             }),
-            new FilterConfig { Players = ["Alice"] });
-        await cut.RunToCompletionAsync();
+            errorMin: "0.05");
 
         Assert.Contains("Done", cut.Find("span.text-success").TextContent);
         Assert.Empty(cut.FindAll("div.zero-match-notice"));
@@ -110,7 +124,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     [Fact]
     public async Task CancelledRunWithSkips_ShowsTheRecordSoFar_LabelledStopped()
     {
-        var cut = PanelOver(new CapturingProcessHandler(new ProcessingProgress
+        var cut = await CompletedRunAsync(new CapturingProcessHandler(new ProcessingProgress
         {
             Current = 2,
             Total = 9,
@@ -119,7 +133,6 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
             TotalRows = 11,
             Skipped = OneFile,
         }));
-        await cut.RunToCompletionAsync();
 
         Assert.Contains("Stopped", cut.Find("span.text-warning").TextContent);
 
@@ -139,7 +152,7 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     public async Task AStoppedRunWhoseCloseFailed_IsShownStopped_WithTheCloseFailureBesideIt()
     {
         const string closeFailure = "Closing the unfinished out.csv failed: The network name is no longer available.";
-        var cut = PanelOver(new CapturingProcessHandler(new ProcessingProgress
+        var cut = await CompletedRunAsync(new CapturingProcessHandler(new ProcessingProgress
         {
             Current = 2,
             Total = 9,
@@ -148,7 +161,6 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
             CloseFailureMessage = closeFailure,
             Skipped = OneFile,
         }));
-        await cut.RunToCompletionAsync();
 
         Assert.Contains("Stopped", cut.Find("span.text-warning").TextContent);
         Assert.Equal(closeFailure, cut.Find("#closeFailure").TextContent.Trim());
@@ -159,13 +171,12 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     [Fact]
     public async Task FailedRunWithSkips_ShowsItsErrorAndItsRecord_LabelledFailed()
     {
-        var cut = PanelOver(new CapturingProcessHandler(new ProcessingProgress
+        var cut = await CompletedRunAsync(new CapturingProcessHandler(new ProcessingProgress
         {
             Complete = true,
             ErrorMessage = "Access to the path is denied.",
             Skipped = OneFile,
         }));
-        await cut.RunToCompletionAsync();
 
         Assert.Contains("Access to the path is denied.", cut.Find("span.text-danger").TextContent);
         Assert.Equal("The last run (failed)", cut.Find($"{Notice} .skip-list-label").TextContent);
@@ -174,14 +185,13 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
     [Fact]
     public async Task CompletedRunWithoutSkips_ShowsNoNotice()
     {
-        var cut = PanelOver(new CapturingProcessHandler(new ProcessingProgress
+        var cut = await CompletedRunAsync(new CapturingProcessHandler(new ProcessingProgress
         {
             Current = 3,
             Total = 3,
             Complete = true,
             TotalRows = 40,
         }));
-        await cut.RunToCompletionAsync();
 
         Assert.Contains("Done", cut.Find("span.text-success").TextContent);
         Assert.Empty(cut.FindAll(Notice));
@@ -210,10 +220,10 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
                 Skipped = OneFile,
             });
         server.HoldPoll(2);
-        var cut = PanelOver(server);
+        var host = await PanelOverAsync(server);
+        var cut = host.Panel;
 
-        var run = cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run")
-            .ClickAsync(new MouseEventArgs());
+        var run = host.ClickRunAsync();
         await server.HeldPollReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         cut.WaitForAssertion(() => Assert.Contains("File 2 of 9", cut.Markup));

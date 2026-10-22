@@ -1,21 +1,21 @@
 using Bunit;
 using ExtractFromXgToCsv.Client;
-using ExtractFromXgToCsv.Client.Components;
-using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Pins the busy-cursor discipline: the panel puts the <c>is-busy</c> marker
-/// on its root for exactly as long as its own busy flag is up, and app.css
-/// turns that one class into the cursor.
-/// Because the marker rides the flag rather than any particular busy window,
+/// on its root for exactly as long as a run is in hand, and app.css turns
+/// that one class into the cursor.
+/// Because the marker rides the fact rather than any particular busy window,
 /// a window added later inherits the cursor for free — and these tests are the
 /// only place a panel that quietly stopped marking its root would be caught.
+/// Each state is reached by a real run against a stub server: a run whose
+/// status reads are held is in hand, and a snapshot the server answers is the
+/// one on screen.
 /// </summary>
 /// <remarks>
 /// The cursor itself is the OS's to draw and is not observable from a
@@ -37,18 +37,16 @@ public class BusyCursorTests : BunitContext
     public BusyCursorTests()
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
-        Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
         Services.AddClientServices();
     }
 
     // PPTX because the deck pathway is where the missing cursor was found: a
     // multi-minute atomic render with nothing at the pointer to say so.
-    private IRenderedComponent<LocalModePanel> RenderLocal() =>
-        Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Pptx)
-            .Add(c => c.FilterInEffect, new FilterConfig())
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
+    private Task<LocalPanelHost> RenderLocalAsync(CapturingProcessHandler server)
+    {
+        Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
+        return LocalPanelHost.RenderReadyAsync(this, OutputFormat.Pptx);
+    }
 
     /// <summary>A snapshot mid-render: every file read, timings stopped early.</summary>
     private static ProcessingProgress RenderingSnapshot() => new()
@@ -63,11 +61,14 @@ public class BusyCursorTests : BunitContext
     };
 
     [Fact]
-    public void LocalPanel_MarksItsRoot_BeforeTheFirstStatusPoll()
+    public async Task LocalPanel_MarksItsRoot_BeforeTheFirstStatusPoll()
     {
-        var cut = RenderLocal();
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_busy", true);
-        cut.Render();
+        var server = new CapturingProcessHandler();
+        server.HoldStatus();
+        var host = await RenderLocalAsync(server);
+        var cut = host.Panel;
+        var run = host.ClickRunAsync();
+        await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         // One marker, and it encloses the panel rather than decorating a
         // corner of it — the Run button the pointer is still resting on has to
@@ -75,42 +76,51 @@ public class BusyCursorTests : BunitContext
         Assert.Single(cut.FindAll(BusyRoot));
         Assert.NotEmpty(cut.FindAll($"{BusyRoot} #startingNotice"));
         Assert.NotEmpty(cut.FindAll($"{BusyRoot} button.btn-primary"));
+
+        server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
     }
 
     [Fact]
-    public void LocalPanel_KeepsItsRootMarked_ThroughTheAtomicRenderPhase()
+    public async Task LocalPanel_KeepsItsRootMarked_ThroughTheAtomicRenderPhase()
     {
-        var cut = RenderLocal();
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_busy", true);
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", RenderingSnapshot());
-        cut.Render();
+        var server = new CapturingProcessHandler(RenderingSnapshot(), RenderingSnapshot() with { Complete = true });
+        server.HoldPoll(2);
+        var host = await RenderLocalAsync(server);
+        var cut = host.Panel;
+        var run = host.ClickRunAsync();
+        await server.HeldPollReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
+        cut.WaitForAssertion(() => Assert.NotEmpty(cut.FindAll($"{BusyRoot} #renderingNotice")));
         Assert.Single(cut.FindAll(BusyRoot));
-        Assert.NotEmpty(cut.FindAll($"{BusyRoot} #renderingNotice"));
+
+        server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
     }
 
     [Fact]
-    public void LocalPanel_IsUnmarked_WhenIdle()
+    public async Task LocalPanel_IsUnmarked_WhenIdle()
     {
-        var cut = RenderLocal();
+        var cut = (await RenderLocalAsync(new CapturingProcessHandler())).Panel;
 
         Assert.Empty(cut.FindAll(BusyRoot));
     }
 
     /// <summary>
     /// A finished run leaves its terminal snapshot on screen — the Done line and
-    /// the progress block around it — with the busy flag back down. The marker
-    /// rides the flag, not the presence of that block, so it must already be
-    /// gone: the failure mode here is a busy cursor stranded over an idle app,
-    /// which is worse than the one being fixed.
+    /// the progress block around it — with the run no longer in hand. The
+    /// marker rides that fact, not the presence of that block, so it must
+    /// already be gone: the failure mode here is a busy cursor stranded over an
+    /// idle app, which is worse than the one being fixed.
     /// </summary>
     [Fact]
-    public void LocalPanel_DropsTheMarkerWithTheFlag_NotWithTheProgressBlock()
+    public async Task LocalPanel_DropsTheMarkerWithTheFlag_NotWithTheProgressBlock()
     {
-        var cut = RenderLocal();
         var done = RenderingSnapshot() with { Complete = true, FileName = "Done" };
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", done);
-        cut.Render();
+        var host = await RenderLocalAsync(new CapturingProcessHandler(done));
+        var cut = host.Panel;
+
+        await host.RunToCompletionAsync();
 
         Assert.NotEmpty(cut.FindAll("span.text-success"));
         Assert.Empty(cut.FindAll(BusyRoot));

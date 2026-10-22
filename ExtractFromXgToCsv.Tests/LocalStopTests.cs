@@ -14,8 +14,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// real panel — over the real server: a lost start reply retried under its
 /// identity and run once; a status read that fails, once or persistently; the
 /// server no longer holding the job, which ends following; Stop before the
-/// start is answered, which waits for the answer and is never shown as
-/// delivered before it; and Stop's refusals and failures, which stand until a
+/// start is answered, which waits for the answer, is never shown as
+/// delivered before it, and is hinted at as waiting until the answer comes;
+/// and Stop's refusals and failures, which stand until a
 /// Stop is delivered or the run ends, with the persistent-failure notice they
 /// hold back.
 /// </summary>
@@ -89,6 +90,22 @@ public class LocalStopTests : IAsyncLifetime
     private const string StillTryingMessage = "Can't reach the server. This run's result hasn't arrived yet — still trying…";
     private const string UnknownJobMessage = "The server no longer has this run — it may have restarted — so its result can't be shown.";
     private const string StopUnconfirmedMessage = "Couldn't confirm the Stop request. The run may still be going. Press Stop to try again.";
+    private const string RefusedMessage = "The server refused the run: its identity was already used for a different run.";
+
+    /// <summary>
+    /// The pending-Stop hint, in Hal's ruled wording (2026-10-22,
+    /// halheinrich/backgammon#424) — an independent literal, because the
+    /// ruling is what the copy is held to.
+    /// </summary>
+    private const string StopPendingHint = "Stop requested; waiting for the server.";
+
+    /// <summary>The pending-Stop hint shows, and nothing says the run stopped.</summary>
+    private static void AssertTheHintAndNoStop(LocalPage page)
+    {
+        Assert.Equal(StopPendingHint, page.Home.Find("#stopPendingHint").TextContent.Trim());
+        Assert.Equal("text-muted", page.Home.Find("#stopPendingHint").ClassName);
+        Assert.DoesNotContain("Stopped", page.Home.Markup);
+    }
 
     // ── Following ───────────────────────────────────────────────────────────
 
@@ -221,9 +238,14 @@ public class LocalStopTests : IAsyncLifetime
         Assert.False(run.IsCompleted);
         Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
         Assert.Single(page.Home.FindAll("button"), b => b.TextContent.Trim() == "Stop");
+        // The Stop waits for the answer, and the page says only that.
+        AssertTheHintAndNoStop(page);
 
         heldAnswer.Release();
         await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        // Answered — admitted, the cancel sent and still held — the hint is
+        // gone; the stopped result is the run's to say.
+        page.WaitForScreen(() => Assert.Empty(page.Home.FindAll("#stopPendingHint")));
         cancel.Release();
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);
@@ -259,9 +281,11 @@ public class LocalStopTests : IAsyncLifetime
         Assert.Equal(0, Cancels);
         Assert.False(run.IsCompleted);
         Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
+        AssertTheHintAndNoStop(page);
 
         heldRetry.Release();
         await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Empty(page.Home.FindAll("#stopPendingHint")));
         cancel.Release();
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);
@@ -270,6 +294,36 @@ public class LocalStopTests : IAsyncLifetime
         page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
         Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
         Assert.Equal(_decisions, _server.XgpFiles().Count);
+    }
+
+    /// <summary>
+    /// A Stop pending when the start is refused: the hint shows while the
+    /// start is unanswered, and goes with the answer — a refusal, which ran
+    /// nothing, so the refusal shows and nothing says the run stopped. No
+    /// cancel is sent.
+    /// </summary>
+    [Fact]
+    public async Task AStopPendingWhenTheStartIsRefused_ItsHintGoesWithTheAnswer_AndTheRefusalShows()
+    {
+        RefusedStartJobs? jobs = null;
+        var page = Open(jobs: inner => jobs = new RefusedStartJobs(inner));
+        var run = page.RunAsync();
+        await jobs!.Arrived.WaitAsync(NoticeTesting.OperationBound);
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        AssertTheHintAndNoStop(page);
+
+        jobs.Release();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() =>
+        {
+            Assert.Empty(page.Home.FindAll("#stopPendingHint"));
+            Assert.Equal(RefusedMessage, RunErrorShown(page));
+        });
+        Assert.DoesNotContain("Stopped", page.Home.Markup);
+        Assert.Equal(0, Starts);
+        Assert.Equal(0, Cancels);
     }
 
     /// <summary>

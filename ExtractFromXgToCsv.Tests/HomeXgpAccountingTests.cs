@@ -13,7 +13,7 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// A run's commit reaching Home's next-number control (<c>SPEC-notices.md</c>
+/// A run's commit reaching the next-number control (<c>SPEC-notices.md</c>
 /// §7.1, §7.2 and §7.5): a Local XGP run's terminal result — completed,
 /// cancelled or failed — carries what it committed, and the control follows
 /// it to the number after the last the run used, and remembers it, unless the
@@ -40,18 +40,18 @@ public class HomeXgpAccountingTests : BunitContext
         this.AddHomeServices(processing);
         Storage = BrowserStoragePlan.On(JSInterop);
         Storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        Storage.ExpectHomeRestore(new()
+        Storage.ExpectHomeVisit(new()
         {
             [HomeStoragePlan.FolderPathKey] = Folder,
             [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.Xgp),
+            [HomeStoragePlan.OutputPathKey] = OutputFolder,
         });
-        Storage.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Stored(OutputFolder));
-        Storage.ExpectFilterPanelMount();
         return processing;
     }
 
-    private static XgpExportOptions PanelOptions(IRenderedComponent<Home> cut) =>
-        cut.FindComponent<LocalModePanel>().Instance.XgpOptions;
+    /// <summary>The options a run would capture now: the coordinator's.</summary>
+    private XgpExportOptions Options =>
+        this.App().XgpOptions;
 
     /// <summary>
     /// The accounting case: a decision written, then a destination failure
@@ -74,7 +74,7 @@ public class HomeXgpAccountingTests : BunitContext
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Contains("✗ Error", cut.Markup);
-        Assert.Equal(2, PanelOptions(cut).StartNumber);
+        Assert.Equal(2, Options.StartNumber);
         Storage.Verify();
     }
 
@@ -96,7 +96,7 @@ public class HomeXgpAccountingTests : BunitContext
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Contains("Stopped", cut.Markup);
-        Assert.Equal(4, PanelOptions(cut).StartNumber);
+        Assert.Equal(4, Options.StartNumber);
         Storage.Verify();
     }
 
@@ -124,12 +124,12 @@ public class HomeXgpAccountingTests : BunitContext
 
         Storage.ExpectNextNumberWrite(50);
         await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
-        Assert.Equal(50, PanelOptions(cut).StartNumber);
+        Assert.Equal(50, Options.StartNumber);
 
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Equal(50, PanelOptions(cut).StartNumber);
+        Assert.Equal(50, Options.StartNumber);
         Storage.Verify();
     }
 
@@ -160,7 +160,7 @@ public class HomeXgpAccountingTests : BunitContext
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Equal(DefaultOptions, PanelOptions(cut));
+        Assert.Equal(DefaultOptions, Options);
         Storage.Verify();
     }
 
@@ -187,7 +187,7 @@ public class HomeXgpAccountingTests : BunitContext
         Storage.ExpectNextNumberWrite(3);
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Equal(3, PanelOptions(cut).StartNumber);
+        Assert.Equal(3, Options.StartNumber);
         Storage.Verify();
     }
 
@@ -221,7 +221,7 @@ public class HomeXgpAccountingTests : BunitContext
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Equal(1, PanelOptions(cut).StartNumber);
+        Assert.Equal(1, Options.StartNumber);
         Storage.Verify();
     }
 
@@ -253,12 +253,12 @@ public class HomeXgpAccountingTests : BunitContext
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 4 }, PanelOptions(cut));
+        Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 4 }, Options);
 
         // Back to the run's length: the next export continues after the run.
         Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "3", BrowserStorageWriteAnswer.Succeeded);
         await cut.Find("#xgpSuffixLength").InputAsync(new ChangeEventArgs { Value = "3" });
-        Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 3 }, PanelOptions(cut));
+        Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 3 }, Options);
         Storage.Verify();
     }
 
@@ -280,7 +280,7 @@ public class HomeXgpAccountingTests : BunitContext
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Contains("✗ Error", cut.Markup);
-        Assert.Equal(DefaultOptions, PanelOptions(cut));
+        Assert.Equal(DefaultOptions, Options);
         Storage.Verify();
     }
 }

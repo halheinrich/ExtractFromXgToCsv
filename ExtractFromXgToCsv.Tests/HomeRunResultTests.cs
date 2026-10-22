@@ -15,7 +15,7 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Pins, through the real page, that a Local run's outcome is judged before it
 /// is published (halheinrich/backgammon#374, Arc 2). An XGP run ends with
-/// bookkeeping — Home advances the next number past the run's commit and
+/// bookkeeping — the coordinator advances the next number past the run's commit and
 /// remembers it — and that write can take as long as the browser does. A run
 /// whose inputs were superseded while it ran must not show "Done" for the old
 /// folder while the new one is on screen: not while the write is pending, nor
@@ -49,13 +49,12 @@ public class HomeRunResultTests : BunitContext
         this.AddHomeServices(_processing);
         _storage = BrowserStoragePlan.On(JSInterop);
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
-        _storage.ExpectHomeRestore(new()
+        _storage.ExpectHomeVisit(new()
         {
             [HomeStoragePlan.FolderPathKey] = FolderA,
             [HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.Xgp),
+            [HomeStoragePlan.OutputPathKey] = OutputFolder,
         });
-        _storage.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Stored(OutputFolder));
-        _storage.ExpectFilterPanelMount();
     }
 
     /// <summary>
@@ -94,7 +93,8 @@ public class HomeRunResultTests : BunitContext
         await cut.CommitFolderAsync(FolderB);
 
         _processing.ReleaseStatus();
-        cut.WaitForAssertion(() => Assert.True(bookkeeping.IsReached), CapturingProcessHandler.RunTimeout);
+        // Polled: the write is made after the page last rendered.
+        Assert.True(SpinWait.SpinUntil(() => bookkeeping.IsReached, CapturingProcessHandler.RunTimeout));
 
         // The job has done its accounting — the write is pending — and A's
         // result is not on screen beside folder B.
@@ -105,7 +105,7 @@ public class HomeRunResultTests : BunitContext
 
         Assert.DoesNotContain("Done", cut.Markup);
         // The counter advanced by what the job wrote, whatever is on screen.
-        Assert.Equal(3, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+        Assert.Equal(3, this.App().XgpOptions.StartNumber);
         _storage.Verify();
     }
 
@@ -120,7 +120,8 @@ public class HomeRunResultTests : BunitContext
         var (cut, run, bookkeeping) = await StartARunOverFolderAAsync();
 
         _processing.ReleaseStatus();
-        cut.WaitForAssertion(() => Assert.True(bookkeeping.IsReached), CapturingProcessHandler.RunTimeout);
+        // Polled: the write is made after the page last rendered.
+        Assert.True(SpinWait.SpinUntil(() => bookkeeping.IsReached, CapturingProcessHandler.RunTimeout));
 
         Assert.Contains("Done", cut.Markup);
 
@@ -128,7 +129,7 @@ public class HomeRunResultTests : BunitContext
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Contains("Done", cut.Markup);
-        Assert.Equal(3, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+        Assert.Equal(3, this.App().XgpOptions.StartNumber);
         _storage.Verify();
     }
 }

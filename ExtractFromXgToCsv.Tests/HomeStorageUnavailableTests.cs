@@ -18,29 +18,31 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// Pins this app's one storage condition as Home shows it
 /// (halheinrich/backgammon#374, Arc 2; SPEC-notices.md §1–§2): every refusal
-/// — Home's own settings, either mode panel's, or the filter surface's — is
-/// one occurrence, held by the app-scoped <see cref="BrowserStorageCondition"/>
-/// with its dismissal, and Home shows it however and whenever it arose. The
-/// condition and the <see cref="ReportingBrowserStorage"/> this app's own
-/// keys go through are BgUiPrimitives_Razor's (halheinrich/backgammon#424);
-/// their own contract is pinned there, and this pins Home over them.
+/// — the coordinator's settings or the filter surface's — is one occurrence,
+/// held by the app-scoped <see cref="BrowserStorageCondition"/> with its
+/// dismissal, and Home shows it however and whenever it arose. The condition
+/// and the <see cref="ReportingBrowserStorage"/> this app's own keys go
+/// through are BgUiPrimitives_Razor's (halheinrich/backgammon#424); their own
+/// contract is pinned there, and this pins Home over them.
 /// <para>
-/// <b>Observed, not polled.</b> A panel's refusal re-renders the panel, not
-/// Home, and a commit's refusal can land after the click that made it has
-/// rendered — or after Home has gone. Home attaches to the condition, so the
-/// notice appears on the refusal itself; the cases below that would pass
-/// without the attachment are said so.
+/// <b>Observed, not polled.</b> A setting's refusal lands after the gesture
+/// that made it has rendered — the coordinator moves the control before it
+/// awaits the write — and a commit's refusal can land after the click that
+/// made it has rendered, or after Home has gone. Home attaches to the
+/// condition, so the notice appears on the refusal itself; the cases below
+/// that would pass without the attachment are said so.
 /// </para>
 /// <para>
 /// <b>No latch.</b> A refusal records that something happened; it never stops
-/// a call. Every visit makes its reads, refused or not, and a write after a
-/// refusal is attempted (and may succeed) — which changes nothing about the
-/// occurrence or its dismissal.
+/// a call. The app's restore makes its reads once, each mount of the filter
+/// panel makes its own, refused or not, and a write after a refusal is
+/// attempted (and may succeed) — which changes nothing about the occurrence
+/// or its dismissal.
 /// </para>
 /// <para>
 /// Storage is the subject, so it is planned (<see cref="BrowserStoragePlan"/>),
 /// the surface's calls through <see cref="FilterSurfaceStorage"/>. Every
-/// caller is guarded now — Home, both panels, the surface — so a browser that
+/// caller is guarded now — the coordinator, the surface — so a browser that
 /// refuses <em>everything</em> can be modelled whole.
 /// </para>
 /// </summary>
@@ -162,10 +164,10 @@ public class HomeStorageUnavailableTests : BunitContext
     // ── The three reporters ─────────────────────────────────────────────────
 
     /// <summary>
-    /// A panel-only refusal after Home has settled: Home's own reads were
-    /// answered, and the Local panel's output-path write is refused. The
-    /// keystroke re-renders the panel, not Home; the notice appears because
-    /// Home observes the condition.
+    /// A setting's refusal after Home has settled: the restore's reads were
+    /// answered, and the output-path write the panel's keystroke makes is
+    /// refused. The keystroke has rendered before the browser answers; the
+    /// notice appears because Home observes the condition.
     /// </summary>
     [Fact]
     public async Task APanelOnlyRefusal_AfterHomeHasSettled_ShowsTheNotice()
@@ -207,10 +209,12 @@ public class HomeStorageUnavailableTests : BunitContext
     /// <summary>
     /// A producer refusal while Home is absent: the commit's write is answered
     /// after the page has gone. The refusal still reaches the condition, and
-    /// the next visit shows it with no further failure.
+    /// a remount shows it with no further failure — and reads none of the
+    /// coordinator's settings. (Re-based, halheinrich/backgammon#424: before,
+    /// the return re-ran the page's restore.)
     /// </summary>
     [Fact]
-    public async Task ARefusalWhileHomeIsAbsent_IsThereOnReturn()
+    public async Task ARefusalWhileHomeIsAbsent_IsThereOnARemount()
     {
         ExpectWorkingBoot();
         var (_, apply, commit) = await ApplyWithTheCommitHeldAsync();
@@ -220,7 +224,7 @@ public class HomeStorageUnavailableTests : BunitContext
         await apply.WaitAsync(DefaultWaitTimeout);
         Assert.True(Condition.HasOccurred);
 
-        _storage.ExpectHomeVisit(new() { [HomeStoragePlan.FolderPathKey] = Folder });
+        _storage.ExpectHomeRemount();
         var back = this.RenderHome();
 
         TheNotice(back);
@@ -310,30 +314,40 @@ public class HomeStorageUnavailableTests : BunitContext
     }
 
     /// <summary>
-    /// Dismissed stays dismissed across a navigate-back — the page is new, the
+    /// Dismissed stays dismissed across a remount — the page is new, the
     /// app-scoped holder is not, and the same occurrence is not shown again.
-    /// And storage is still attempted: the second visit makes every read the
-    /// first made, refused again. Nothing remembers to stop calling.
+    /// And storage is still attempted: the remount's filter panel makes its
+    /// reads, refused again, and the next settings write is made, refused
+    /// again, the notice still dismissed. Nothing remembers to stop calling.
+    /// (Re-based, halheinrich/backgammon#424: before, the second visit re-ran
+    /// every read of the restore; a remount reads none of the coordinator's
+    /// settings now, so the attempt is shown by a write.)
     /// </summary>
     [Fact]
-    public async Task Dismissed_StaysDismissedAcrossANavigateBack_AndStorageIsStillAttempted()
+    public async Task Dismissed_StaysDismissedAcrossARemount_AndTheNextSettingsWriteIsStillAttempted()
     {
         ExpectAllRefusedBoot();
         var firstVisit = this.RenderHome();
         await TheNotice(firstVisit).DismissAndSettleAsync(firstVisit, NoticeDismissGesture.CloseButton);
 
         await DisposeComponentsAsync();
-        _storage.ExpectHomeVisitRefused();
+        _storage.ExpectHomeRemountRefused();
         var secondVisit = this.RenderHome();
+        Assert.Empty(secondVisit.FindAll("#" + StorageNotice));
+
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
+            BrowserStorageWriteAnswer.Refused);
+        await secondVisit.Find("#fmtXgp").ChangeAsync(new ChangeEventArgs { Value = true });
 
         Assert.Empty(secondVisit.FindAll("#" + StorageNotice));
-        // Every read of the second visit was made — and refused — or Verify
-        // names the one that was not.
+        Assert.True(Condition.IsNoticeDismissed);
+        // Every call of the remount and the write was made — and refused — or
+        // Verify names the one that was not.
         _storage.Verify();
     }
 
     [Fact]
-    public async Task NotDismissed_IsStillShownAfterANavigateBack()
+    public async Task NotDismissed_IsStillShownAfterARemount()
     {
         // The control for the one above: the second visit's silence there is
         // the dismissal's doing, not the remount's.
@@ -341,7 +355,7 @@ public class HomeStorageUnavailableTests : BunitContext
         this.RenderHome();
 
         await DisposeComponentsAsync();
-        _storage.ExpectHomeVisitRefused();
+        _storage.ExpectHomeRemountRefused();
         var secondVisit = this.RenderHome();
 
         TheNotice(secondVisit);

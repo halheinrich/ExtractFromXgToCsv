@@ -1,16 +1,17 @@
-@using BgDataTypes_Lib
 @using XgFilter_Lib.Filtering
 @using XgFilter_Razor
-@using System.Globalization
 @using ExtractFromXgToCsv.Client.Services
 @using ExtractFromXgToCsv.Client.Shared
 @page "/"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
 @implements IDisposable
-@inject HttpClient Http
-@inject FilterSetup FilterSetup
+@inject ExtractApp App
 @inject BrowserStorageCondition StorageCondition
-@inject ReportingBrowserStorage ReportingStorage
+
+@* The page: the coordinator's settings and run, rendered, and the gestures on
+   them sent to it as commands (halheinrich/backgammon#424). Everything shown
+   here is the coordinator's, the filter setup's or the storage condition's;
+   the page holds only the token dropdown's snap-back. *@
 
 <PageTitle>ExtractFromXgToCsv</PageTitle>
 
@@ -18,17 +19,16 @@
 
 @* A condition notice, dismissible per occurrence (SPEC-notices.md §1, §2).
    The occurrence is the app's, not this page's: the browser refused a storage
-   call this visit, whoever made it — this page's settings, the panel's,
-   or the filter surface's own. Its owner is the app-scoped
-   BrowserStorageCondition, which holds the occurrence and the dismissal both;
-   this page keeps neither bit, so a remount over a dismissed notice says
-   nothing again, and a refusal made while this page was absent is shown on
-   return.
+   call this visit, whoever made it — the coordinator's settings or the filter
+   surface's own. Its owner is the app-scoped BrowserStorageCondition, which
+   holds the occurrence and the dismissal both; this page keeps neither bit,
+   so a remount over a dismissed notice says nothing again, and a refusal made
+   while this page was absent is shown on return.
 
-   Refusals arrive from calls this page never awaits — a panel's restore after
-   this page has rendered, a filter commit answered after a navigation — so
-   this block is carried by the condition's notification (see OnInitialized),
-   not by the render that follows this page's own gestures.
+   Refusals arrive from calls this page never awaits — the coordinator's
+   restore, a filter commit answered after a navigation — so this block is
+   carried by the condition's notification (see OnInitialized), not by the
+   render that follows this page's own gestures.
 
    Dismissing it hides nothing the screen needs: every control below shows
    the value it holds, restored or not, which is what makes it a condition and
@@ -45,431 +45,173 @@
     </Notice>
 }
 
-<div class="mb-3" style="max-width:800px">
-    <label class="form-label d-block">Output format</label>
-    <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
-               checked="@(_outputFormat == OutputFormat.Csv)"
-               @onchange="@(() => SetOutputFormat(OutputFormat.Csv))" />
-        <label class="form-check-label" for="fmtCsv">CSV</label>
-    </div>
-    <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
-               checked="@(_outputFormat == OutputFormat.DiagramJson)"
-               @onchange="@(() => SetOutputFormat(OutputFormat.DiagramJson))" />
-        <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
-    </div>
-    <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="outputFormat" id="fmtPptx"
-               checked="@(_outputFormat == OutputFormat.Pptx)"
-               @onchange="@(() => SetOutputFormat(OutputFormat.Pptx))" />
-        <label class="form-check-label" for="fmtPptx">PPTX</label>
-    </div>
-    <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="outputFormat" id="fmtPdf"
-               checked="@(_outputFormat == OutputFormat.Pdf)"
-               @onchange="@(() => SetOutputFormat(OutputFormat.Pdf))" />
-        <label class="form-check-label" for="fmtPdf">PDF</label>
-    </div>
-    <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="outputFormat" id="fmtXgp"
-               checked="@(_outputFormat == OutputFormat.Xgp)"
-               @onchange="@(() => SetOutputFormat(OutputFormat.Xgp))" />
-        <label class="form-check-label" for="fmtXgp">XGP positions</label>
-    </div>
-</div>
-
-@if (_outputFormat == OutputFormat.Xgp)
+@* The settings controls wait for the coordinator's restore: a control shown
+   before it would show a default the restore is about to replace, and the
+   panel is where a folder is committed — a commit made before the restored
+   folder had arrived would be a source the app could not yet place. *@
+@if (App.Phase != ExtractPhase.Restoring)
 {
-    <div class="mb-3 border rounded p-3" style="max-width:800px" id="xgpOptions">
-        <label class="form-label d-block fw-bold">XGP export options</label>
-        <div class="row g-3">
-            @* The pattern column grows to take whatever the fixed-width
-               columns leave, so the pattern — the field users actually type
-               prose-length templates into — gets the widest share of the row. *@
-            <div class="col" style="min-width:220px">
-                <label class="form-label" for="xgpPattern">Name pattern</label>
-                <input class="form-control" id="xgpPattern"
-                       value="@_xgpPattern" @oninput="OnXgpPatternChanged" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label" for="xgpInsertToken">Insert token</label>
-                <select class="form-select" id="xgpInsertToken" style="max-width:200px"
-                        value="@_xgpTokenSelection" @onchange="OnXgpInsertTokenAsync">
-                    <option value="" disabled>Insert token…</option>
-                    @foreach (var token in XgpNameTokens.All)
-                    {
-                        <option value="@token.Name">{@token.Name} — @token.Description</option>
-                    }
-                </select>
-            </div>
-            <div class="col-auto">
-                <label class="form-label" for="xgpNextNumber">Next number</label>
-                <input class="form-control" id="xgpNextNumber" type="number" min="1"
-                       style="max-width:90px"
-                       value="@_xgpNextNumber" @oninput="OnXgpNextNumberChanged" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label" for="xgpSuffixLength">Number length</label>
-                <input class="form-control" id="xgpSuffixLength" type="number" min="1" max="9"
-                       style="max-width:90px"
-                       value="@_xgpSuffixLength" @oninput="OnXgpSuffixLengthChanged" />
-            </div>
+    <div class="mb-3" style="max-width:800px">
+        <label class="form-label d-block">Output format</label>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtCsv"
+                   checked="@(App.OutputFormat == OutputFormat.Csv)"
+                   @onchange="@(() => App.SetOutputFormatAsync(OutputFormat.Csv))" />
+            <label class="form-check-label" for="fmtCsv">CSV</label>
         </div>
-        <div class="form-check mt-3">
-            <input class="form-check-input" type="checkbox" id="xgpAnonymize"
-                   checked="@_xgpAnonymize" @onchange="OnXgpAnonymizeChanged" />
-            <label class="form-check-label" for="xgpAnonymize">
-                Anonymize player names
-                <small class="text-muted ms-1">
-                    (rewrites every exported position's names to “On-roll” / “Opponent”)
-                </small>
-            </label>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtDiagram"
+                   checked="@(App.OutputFormat == OutputFormat.DiagramJson)"
+                   @onchange="@(() => App.SetOutputFormatAsync(OutputFormat.DiagramJson))" />
+            <label class="form-check-label" for="fmtDiagram">Diagram JSON</label>
         </div>
-        @if (_xgpOptions.TryValidate(out var xgpError))
-        {
-            // Throwaway allocator over a synthetic sample decision, rendered
-            // twice: shows the {n} advance for counter patterns and the
-            // " (2)" uniquifier for patterns without {n}.
-            var preview = XgpNameAllocator.Create(_xgpOptions, FilterInEffect ?? new FilterConfig());
-            <small class="text-muted" id="xgpPreview">
-                Files are named @preview.Next(XgpNamePreview.SampleRow).Name, @preview.Next(XgpNamePreview.SampleRow).Name, …
-                one per exported decision (preview values come from a sample decision).
-            </small>
-        }
-        else
-        {
-            <div class="text-danger small mt-1">@xgpError</div>
-        }
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtPptx"
+                   checked="@(App.OutputFormat == OutputFormat.Pptx)"
+                   @onchange="@(() => App.SetOutputFormatAsync(OutputFormat.Pptx))" />
+            <label class="form-check-label" for="fmtPptx">PPTX</label>
+        </div>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtPdf"
+                   checked="@(App.OutputFormat == OutputFormat.Pdf)"
+                   @onchange="@(() => App.SetOutputFormatAsync(OutputFormat.Pdf))" />
+            <label class="form-check-label" for="fmtPdf">PDF</label>
+        </div>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="outputFormat" id="fmtXgp"
+                   checked="@(App.OutputFormat == OutputFormat.Xgp)"
+                   @onchange="@(() => App.SetOutputFormatAsync(OutputFormat.Xgp))" />
+            <label class="form-check-label" for="fmtXgp">XGP positions</label>
+        </div>
     </div>
+
+    @if (App.OutputFormat == OutputFormat.Xgp)
+    {
+        var options = App.XgpOptions;
+        <div class="mb-3 border rounded p-3" style="max-width:800px" id="xgpOptions">
+            <label class="form-label d-block fw-bold">XGP export options</label>
+            <div class="row g-3">
+                @* The pattern column grows to take whatever the fixed-width
+                   columns leave, so the pattern — the field users actually type
+                   prose-length templates into — gets the widest share of the row. *@
+                <div class="col" style="min-width:220px">
+                    <label class="form-label" for="xgpPattern">Name pattern</label>
+                    <input class="form-control" id="xgpPattern"
+                           value="@options.NamePattern"
+                           @oninput="@(e => App.EditPatternAsync(e.Value?.ToString() ?? string.Empty))" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label" for="xgpInsertToken">Insert token</label>
+                    <select class="form-select" id="xgpInsertToken" style="max-width:200px"
+                            value="@_xgpTokenSelection" @onchange="OnXgpInsertTokenAsync">
+                        <option value="" disabled>Insert token…</option>
+                        @foreach (var token in XgpNameTokens.All)
+                        {
+                            <option value="@token.Name">{@token.Name} — @token.Description</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label" for="xgpNextNumber">Next number</label>
+                    <input class="form-control" id="xgpNextNumber" type="number" min="1"
+                           style="max-width:90px"
+                           value="@options.StartNumber"
+                           @oninput="@(e => App.EditNextNumberAsync(int.TryParse(e.Value?.ToString(), out var n) ? n : null))" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label" for="xgpSuffixLength">Number length</label>
+                    <input class="form-control" id="xgpSuffixLength" type="number" min="1" max="9"
+                           style="max-width:90px"
+                           value="@options.SuffixLength"
+                           @oninput="@(e => int.TryParse(e.Value?.ToString(), out var n) ? App.SetSuffixLengthAsync(n) : Task.CompletedTask)" />
+                </div>
+            </div>
+            <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" id="xgpAnonymize"
+                       checked="@App.Anonymize"
+                       @onchange="@(e => App.SetAnonymizeAsync(e.Value is bool b && b))" />
+                <label class="form-check-label" for="xgpAnonymize">
+                    Anonymize player names
+                    <small class="text-muted ms-1">
+                        (rewrites every exported position's names to “On-roll” / “Opponent”)
+                    </small>
+                </label>
+            </div>
+            @if (options.TryValidate(out var xgpError))
+            {
+                // Throwaway allocator over a synthetic sample decision, rendered
+                // twice: shows the {n} advance for counter patterns and the
+                // " (2)" uniquifier for patterns without {n}.
+                var preview = XgpNameAllocator.Create(options, App.FilterInEffect ?? new FilterConfig());
+                <small class="text-muted" id="xgpPreview">
+                    Files are named @preview.Next(XgpNamePreview.SampleRow).Name, @preview.Next(XgpNamePreview.SampleRow).Name, …
+                    one per exported decision (preview values come from a sample decision).
+                </small>
+            }
+            else
+            {
+                <div class="text-danger small mt-1">@xgpError</div>
+            }
+        </div>
+    }
 }
 
 @* The whole filter surface — the filter panel, and the saved-filters section
    with its degrade notices — is one producer composite over the app-scoped
    FilterSetup. This host binds only what is its own to say here: the
-   saved-filters storage seam (see Storage). The source is reported to the
-   owner, not bound (see ReportSource), and the filter in effect is read from
-   it (see FilterInEffect); storage refusals reach the shared
-   BrowserStorageCondition through XgFilter_Razor's adapter, the sink
+   saved-filters storage seam, the coordinator's. The source is reported to
+   the owner by the coordinator, not bound, and storage refusals reach the
+   shared BrowserStorageCondition through XgFilter_Razor's adapter, the sink
    AddFilterSurface() registers.
 
    Mounted from the first render. The owner outlives this page, so a remount
-   shows the existing setup as it stands; nothing here waits on this page's
-   restore, because nothing is told a source until this page knows it. *@
-<FilterSurface Storage="Storage" />
+   shows the existing setup as it stands; nothing here waits on the restore,
+   because nothing is told a source until the coordinator knows it. *@
+<FilterSurface Storage="App.SavedFiltersStorage" />
 
-@* No panel until the restore has resolved the source: the panel is where a
-   folder is committed, and a commit made before the restored folder had
-   arrived would be a source the page could not yet place. *@
-@if (_sourceResolved)
+@if (App.Phase != ExtractPhase.Restoring)
 {
-    <LocalModePanel OutputFormat="_outputFormat"
-                    Source="Source"
-                    FilterInEffect="FilterInEffect"
-                    FolderPath="@_folderPathText"
-                    FolderPathChanged="OnFolderPathEdited"
-                    OnFolderPathCommitted="OnFolderPathCommitted"
-                    XgpOptions="_xgpOptions"
-                    XgpAnonymize="_xgpAnonymize"
-                    OnXgpJobStarted="OnXgpJobStarted"
-                    OnXgpJobEnded="FollowAsync" />
+    <LocalModePanel />
 }
 
 @code {
-    private OutputFormat _outputFormat = OutputFormat.Csv;
+    // The token dropdown's selection, for its snap-back only (see
+    // OnXgpInsertTokenAsync): a DOM-diff trick that is this page's own.
+    private string _xgpTokenSelection = string.Empty;
 
-    // ── Source identity ─────────────────────────────────────────────────────
-    //
-    // The folder path the source is minted from arrives asynchronously, from
-    // storage, in the first-render restore below. Until it has arrived this
-    // page's answer to "what is the current source?" is not "none" — it is
-    // "not yet known". FilterSetup.ReportSource(null) is a real answer and
-    // ends an existing setup, so the source is reported only once it is
-    // known: _sourceResolved is false until the restore has resolved the
-    // folder, and ReportSource does nothing before then. No panel renders
-    // before then either, so no gesture can latch a source the page cannot
-    // yet place. A return to this page over an unchanged folder therefore
-    // reports the same token once, which ends nothing — the setup, its
-    // baseline and its generation stand.
-    private bool _sourceResolved;
-
-    // The source is the input folder path. Two fields on purpose:
-    // _folderPathText follows every keystroke (LocalModePanel is a controlled
-    // input; persistence stays per-keystroke), while _localSourcePath moves
-    // only at the @onchange boundary — the source must never change per
-    // keystroke.
-    private string _folderPathText = string.Empty;
-    private string? _localSourcePath;
-
-    // The saved-filters storage seam, created once over a delegate reading the
-    // latched folder: FilterSurface rebuilds its store when the bound Storage
-    // *reference* changes, so the live-folder fact must ride the delegate, not
-    // a fresh instance. Page-lifetime is exactly enough — the composite dies
-    // with this page.
-    private HttpDocumentStorage? _documentStorage;
-
-    private IDisposable? _filterSetupAttachment;
     private IDisposable? _storageConditionAttachment;
-
-    // ── This page's lifetime ────────────────────────────────────────────────
-    //
-    // The one fact of whether this page is still the page: cancelled in
-    // Dispose. The owners it reports to outlive it, and its restore is async —
-    // a navigation can dispose this page while it waits on storage, and a
-    // newer page can establish another source meanwhile. Work this page no
-    // longer owns stops (each restore step stops on the token), and nothing
-    // is published once it is cancelled (ReportSource). A storage call already
-    // in flight is not abandoned: it completes, and a refusal still reaches
-    // the app-scoped condition — only this page's use of the answer stops.
-    private readonly CancellationTokenSource _lifetime = new();
-
-    /// <summary>
-    /// The current source's token — the one property both the reports and the
-    /// reads use: the latched folder path's. Null while no source exists (a
-    /// blank path). The output path is not a source and never appears here.
-    ///
-    /// <para>
-    /// The path goes to <see cref="FilterSourceToken.FromPath"/> in the
-    /// spelling this page holds: what counts as the same folder is a property
-    /// of paths, so the factory owns it (halheinrich/backgammon#94). The
-    /// latched path itself keeps the user's spelling, for IO and display.
-    /// </para>
-    /// </summary>
-    private FilterSourceToken? Source =>
-        _localSourcePath is { } path ? FilterSourceToken.FromPath(path) : null;
-
-    /// <summary>
-    /// The filter in effect for the source on screen right now, or
-    /// <see langword="null"/> when none is — the one filter fact this page
-    /// hands the panel, read from the owner on each ask
-    /// (<see cref="FilterSetupSnapshot.ConfigInEffectFor"/>, a new instance
-    /// each call). Source-relative by construction: a setup whose source is not
-    /// this page's current one reads as nothing in effect. The ready empty
-    /// selection is in effect without Apply (halheinrich/backgammon#266); this
-    /// page adds no exception of its own.
-    /// </summary>
-    private FilterConfig? FilterInEffect =>
-        Source is { } source ? FilterSetup.Current.ConfigInEffectFor(source) : null;
-
-    /// <summary>
-    /// The composite's storage seam: the HTTP adapter while a folder is
-    /// latched to address, null otherwise — a blank path must render no
-    /// saved-filters section, never a load failure.
-    /// </summary>
-    private IDocumentStorage? Storage =>
-        _localSourcePath is not null ? _documentStorage : null;
 
     protected override void OnInitialized()
     {
-        _documentStorage = new HttpDocumentStorage(Http, () => _localSourcePath);
-
-        // Both owners outlive this page and change while no gesture of this
-        // page is running — a commit on the filter surface, a refusal from a
-        // panel's restore or from the surface's own storage — so this page
-        // re-renders off their notifications. It keeps no copy of either
-        // owner's state — it reads both at render — so a remount shows what
-        // happened while it was absent, a refusal included, with no further
-        // failure.
-        _filterSetupAttachment = FilterSetup.Attach(_ => StateHasChanged());
-        _storageConditionAttachment = StorageCondition.Attach(StateHasChanged);
+        // The coordinator and the storage condition outlive this page and
+        // change while no gesture of this page is running — a restore landing,
+        // a commit on the filter surface, a refusal — so this page re-renders
+        // off their notifications. It keeps no copy of either — it reads both
+        // at render — so a remount shows what happened while it was absent, a
+        // refusal included, with no further failure.
+        App.Changed += OnAppChanged;
+        _storageConditionAttachment = StorageCondition.Attach(OnAppChanged);
     }
+
+    // The restore runs once per app: the first page to render starts it, and
+    // a remount finds it done, reading nothing and reporting nothing.
+    protected override Task OnAfterRenderAsync(bool firstRender) =>
+        firstRender ? App.EnsureRestoredAsync() : Task.CompletedTask;
 
     public void Dispose()
     {
-        _lifetime.Cancel();
-        _lifetime.Dispose();
-        _filterSetupAttachment?.Dispose();
+        App.Changed -= OnAppChanged;
         _storageConditionAttachment?.Dispose();
     }
 
-    // XGP export options. Home owns the option state (and its persistence);
-    // the panel receives an immutable XgpExportOptions snapshot, and the
-    // next number follows what the panel's runs commit (§7.5).
-    private string _xgpPattern = XgpExportOptions.DefaultNamePattern;
-    private string _xgpTokenSelection = string.Empty;
-    private int _xgpNextNumber = 1;
-    private int _xgpSuffixLength = 3;
-    private bool _xgpAnonymize = false;
-    private XgpExportOptions _xgpOptions = new();
-
-    // The pattern and next number the control was last remembered under —
-    // restored, or moved to by a run's commit (FollowAsync). A pattern edit
-    // continues that number while the pattern is the one it was remembered
-    // under (ApplyPatternEditAsync). It decides nothing about whether a
-    // commit is followed: that is the edit flag's, below.
-    private (string Pattern, int NextNumber) _remembered = (XgpExportOptions.DefaultNamePattern, 1);
-
-    // Whether the user has edited the pattern or the next number since the
-    // current XGP run captured its options (SPEC-notices.md §7.5: "has changed
-    // the control"). An edit, not a value: a number changed away and back has
-    // been changed, so the run's commit does not move it. Cleared as a run
-    // starts (OnXgpJobStarted); set by the pattern and next-number inputs.
-    private bool _editedSinceRunStarted;
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-
-        // Read once, while this page is certainly live: the source is
-        // disposed with the page, and the token outlives it.
-        var lifetime = _lifetime.Token;
-        try
-        {
-            await RestoreAsync(lifetime);
-        }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
-        {
-            // Disposed mid-restore: nothing read here is this page's to use,
-            // and nothing is reported.
-        }
-    }
-
-    private async Task RestoreAsync(CancellationToken lifetime)
-    {
-        // Every read below answers the stored value, or null for "nothing
-        // stored" and for a refusal alike — ReportingBrowserStorage has
-        // reported a refusal to the condition before it returns — so each key
-        // lands on its stored value or its own documented default, and the
-        // restore runs to the end while this page lives. Each read completes
-        // whatever happens to the page (a refusal still reaches the
-        // condition); the restore stops after it if the page has gone.
-        async Task<string?> ReadSettingAsync(string key)
-        {
-            var read = await ReportingStorage.ReadAsync(BrowserStorageArea.Local, key,
-                "the setting takes its default for this visit");
-            lifetime.ThrowIfCancellationRequested();
-            return read.IsStored ? read.Value : null;
-        }
-
-        // The inverse of what persists it below (fmt.ToString()): resolve the
-        // stored token by searching the declared formats, never by parsing.
-        // Enum.TryParse would also accept a numeric ordinal, tying a durable
-        // localStorage entry to member numbering (halheinrich/backgammon#164);
-        // an unrecognized token leaves the default standing, as before.
-        var savedFormat = await ReadSettingAsync("xg_outputFormat");
-        foreach (var candidate in Enum.GetValues<OutputFormat>())
-        {
-            if (string.Equals(savedFormat, candidate.ToString(), StringComparison.Ordinal))
-            {
-                _outputFormat = candidate;
-                break;
-            }
-        }
-
-        // Restore the Local-mode folder path and latch it: a restored path is
-        // a committed value — the saved-filters context loads for it, and the
-        // source is minted from it — not a keystroke in flight.
-        _folderPathText = await ReadSettingAsync("xg_folderPath") ?? string.Empty;
-        LatchSourceFolder(_folderPathText);
-
-        // The XGP numbering is three remembered controls (SPEC-notices.md
-        // §7.5): the pattern, the next number and the number length, each
-        // under its own key, as written when it last changed. No older key is
-        // read: there is no migration.
-        if (await ReadSettingAsync("xg_xgpPattern") is { } savedPattern)
-            _xgpPattern = savedPattern;
-        if (TryParseStoredNumber(await ReadSettingAsync("xg_xgpNextNumber"), out var savedNext))
-            _xgpNextNumber = savedNext;
-        if (TryParseStoredNumber(await ReadSettingAsync("xg_xgpSuffixLength"), out var savedLength))
-            _xgpSuffixLength = savedLength;
-        _remembered = (_xgpPattern, _xgpNextNumber);
-        var savedAnonymize = await ReadSettingAsync("xg_xgpAnonymize");
-        _xgpAnonymize = bool.TryParse(savedAnonymize, out var anon) && anon;
-        RebuildXgpOptions();
-
-        // Last, after the restore's every read: the source is known now, so
-        // report it. An unchanged source — a return over the same folder —
-        // ends nothing; a different one, or none, ends the setup.
-        _sourceResolved = true;
-        ReportSource();
-
-        StateHasChanged();
-    }
-
-    // ── Source reporting ────────────────────────────────────────────────────
-
-    // Tells the owner the current source at each moment this page latches
-    // one: the restore resolving the folder, and a folder commit. Nothing
-    // before the restore has resolved the source (see _sourceResolved) — the
-    // markup already renders no panel to latch one before then — and nothing
-    // once this page's lifetime has ended: a disposed page's source is not
-    // the app's. Both rules are kept here, where the report is made.
-    private void ReportSource()
-    {
-        if (_sourceResolved && !_lifetime.IsCancellationRequested)
-            FilterSetup.ReportSource(Source);
-    }
-
-    // Per-keystroke half of the Local folder input: follow the text and
-    // persist it — never latch, never report. A half-typed path is not a
-    // source change.
-    private async Task OnFolderPathEdited(string path)
-    {
-        _folderPathText = path;
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_folderPath", path,
-            "the folder path holds for this visit only");
-    }
-
-    // Change-boundary half: latch the committed path and report it. A blur
-    // that commits the same folder reports the same token and ends nothing.
-    private void OnFolderPathCommitted(string path)
-    {
-        LatchSourceFolder(path);
-        ReportSource();
-    }
-
-    private void LatchSourceFolder(string path)
-    {
-        var trimmed = path.Trim();
-        _localSourcePath = trimmed.Length == 0 ? null : trimmed;
-    }
-
-    private async Task SetOutputFormat(OutputFormat fmt)
-    {
-        _outputFormat = fmt;
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_outputFormat", fmt.ToString(),
-            "the output format holds for this visit only");
-        StateHasChanged();
-    }
-
-    private void RebuildXgpOptions() =>
-        _xgpOptions = new XgpExportOptions
-        {
-            NamePattern = _xgpPattern,
-            StartNumber = _xgpNextNumber,
-            SuffixLength = _xgpSuffixLength,
-        };
-
-    private Task OnXgpPatternChanged(ChangeEventArgs e) =>
-        ApplyPatternEditAsync(e.Value?.ToString() ?? string.Empty);
-
-    private async Task ApplyPatternEditAsync(string pattern)
-    {
-        _editedSinceRunStarted = true;
-        // Continue the remembered numbering only while the pattern is the one
-        // it was remembered under; a different pattern starts a fresh series
-        // at 1. The user can still override the number afterwards.
-        var next = pattern == _remembered.Pattern ? _remembered.NextNumber : 1;
-        var nextChanged = next != _xgpNextNumber;
-        // Every control change before any storage await: a next number the
-        // user sets while a write is pending is never overwritten by this one.
-        _xgpPattern = pattern;
-        _xgpNextNumber = next;
-        RebuildXgpOptions();
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpPattern", pattern,
-            "the name pattern holds for this visit only");
-        if (nextChanged)
-            await WriteNextNumberAsync();
-    }
+    private void OnAppChanged() => _ = InvokeAsync(StateHasChanged);
 
     private async Task OnXgpInsertTokenAsync(ChangeEventArgs e)
     {
         var name = e.Value?.ToString();
         if (string.IsNullOrEmpty(name)) return;
 
-        // Caret-position insertion is deliberately out of scope — the token
-        // is appended to the pattern.
-        await ApplyPatternEditAsync(_xgpPattern + "{" + name + "}");
+        await App.InsertTokenAsync(name);
 
         // Snap the dropdown back to its placeholder in a second render:
         // going straight to "" would diff as no change against the previous
@@ -478,78 +220,4 @@
         await Task.Yield();
         _xgpTokenSelection = string.Empty;
     }
-
-    private async Task OnXgpNextNumberChanged(ChangeEventArgs e)
-    {
-        _editedSinceRunStarted = true;
-        if (int.TryParse(e.Value?.ToString(), out var n))
-            await SetNextNumberAsync(n);
-    }
-
-    private async Task OnXgpSuffixLengthChanged(ChangeEventArgs e)
-    {
-        if (!int.TryParse(e.Value?.ToString(), out var n))
-            return;
-        _xgpSuffixLength = n;
-        RebuildXgpOptions();
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpSuffixLength", FormatStoredNumber(n),
-            "the number length holds for this visit only");
-    }
-
-    // Anonymize is independent of the naming options (XgpExportOptions), so it
-    // isn't folded into RebuildXgpOptions — it rides to the panel as its own
-    // bool parameter and persists under its own key.
-    private async Task OnXgpAnonymizeChanged(ChangeEventArgs e)
-    {
-        _xgpAnonymize = e.Value is bool b && b;
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpAnonymize", _xgpAnonymize.ToString(),
-            "the anonymize choice holds for this visit only");
-    }
-
-    // The one place the next-number control changes, whoever changes it —
-    // the user, a pattern edit or a run's commit — and is remembered.
-    private async Task SetNextNumberAsync(int next)
-    {
-        _xgpNextNumber = next;
-        RebuildXgpOptions();
-        await WriteNextNumberAsync();
-    }
-
-    // Remembers what the next-number control holds at the write — never a
-    // value read before an await, so a newer choice is never written over.
-    private async Task WriteNextNumberAsync() =>
-        await ReportingStorage.WriteAsync(BrowserStorageArea.Local, "xg_xgpNextNumber", FormatStoredNumber(_xgpNextNumber),
-            "the next number holds for this visit only");
-
-    // An XGP run has captured its options: an edit from here on is the
-    // user's choice over its commit.
-    private void OnXgpJobStarted() => _editedSinceRunStarted = false;
-
-    /// <summary>
-    /// The next-number control follows what an XGP run committed
-    /// (SPEC-notices.md §7.5) — completed, cancelled or failed alike — to the
-    /// number after the last the run used, and remembers it, unless the user
-    /// has edited the pattern or the next number since the run captured its
-    /// options. An edit, not a value: §7.5 says "has changed the control", so
-    /// a number changed away and back to the run's start was the user's
-    /// choice and stands (the umbrella's correction, ChatGPT's review
-    /// 6331375637, accepted 6331396606). A run that committed nothing moves
-    /// nothing. The number length decides nothing here: it says nothing about
-    /// which number comes next.
-    /// </summary>
-    private async Task FollowAsync(XgpExportCommit commit)
-    {
-        if (commit.CommittedNothing || _editedSinceRunStarted)
-            return;
-        _remembered = (_xgpPattern, commit.NextNumber);
-        await SetNextNumberAsync(commit.NextNumber);
-    }
-
-    // A number as it is stored, and read back: invariant digits, so a stored
-    // value means the same whatever the browser's culture. A value that is
-    // not one leaves the control at its default.
-    private static string FormatStoredNumber(int number) => number.ToString(CultureInfo.InvariantCulture);
-
-    private static bool TryParseStoredNumber(string? stored, out int number) =>
-        int.TryParse(stored, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
 }

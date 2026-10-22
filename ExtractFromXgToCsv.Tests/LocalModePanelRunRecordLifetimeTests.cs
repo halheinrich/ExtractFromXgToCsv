@@ -1,12 +1,7 @@
 using Bunit;
 using ExtractFromXgToCsv.Client;
-using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
-using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
-using XgFilter_Razor;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -20,12 +15,12 @@ namespace ExtractFromXgToCsv.Tests;
 /// source clears it, and a run from the former source that completes later
 /// publishes none; and the next run replaces it. Before v1.12.2 the panel
 /// dropped the skip list with the result on any source or filter change.
-/// Every case is a real run against a stub server.
+/// Every case is a real run against a stub server, the inputs moved by the
+/// gestures that move them.
 /// </summary>
 public class LocalModePanelRunRecordLifetimeTests : BunitContext
 {
     private const string Notice = "div.skipped-notice";
-    private const string FolderA = @"D:\xg\a";
     private const string FolderB = @"D:\xg\b";
 
     private static readonly SkipRecord BrokenA = [new SkippedItem("broken-a.xg", null, "Not a valid XG file.")];
@@ -40,47 +35,33 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         Services.AddClientServices();
     }
 
-    private IRenderedComponent<LocalModePanel> PanelOver(
-        CapturingProcessHandler server,
-        FilterConfig filter,
-        OutputFormat format = OutputFormat.Csv,
-        Action<XgpExportCommit>? ended = null)
+    /// <summary>
+    /// A ready panel over <see cref="LocalPanelHost.Folder"/> in
+    /// <paramref name="format"/>, its runs answered by
+    /// <paramref name="server"/>, with the filter of error minimum
+    /// <paramref name="errorMin"/> applied, or the empty filter when null.
+    /// </summary>
+    private async Task<LocalPanelHost> PanelOverAsync(
+        CapturingProcessHandler server, string? errorMin = null, OutputFormat format = OutputFormat.Csv)
     {
         Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
-        var cut = Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, format)
-            .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
-            .Add(c => c.FilterInEffect, filter)
-            .Add(c => c.FolderPath, FolderA)
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.OnXgpJobEnded, (XgpExportCommit commit) => ended?.Invoke(commit)));
-        cut.Find("#outputPath").Input(new ChangeEventArgs { Value = format == OutputFormat.Xgp ? @"D:\xg\positions" : @"D:\xg\out.csv" });
-        return cut;
+        var host = await LocalPanelHost.RenderReadyAsync(this, format);
+        if (errorMin is not null)
+            await host.ApplyErrorMinAsync(errorMin);
+        return host;
     }
-
-    private static Task RunAsync(IRenderedComponent<LocalModePanel> cut) =>
-        RunButton(cut).ClickAsync(new MouseEventArgs());
-
-    private static AngleSharp.Dom.IElement RunButton(IRenderedComponent<LocalModePanel> cut) =>
-        cut.FindAll("button").Single(b => b.TextContent.Trim() == "Run");
-
-    private static void ChangeSource(IRenderedComponent<LocalModePanel> cut, string? folder) =>
-        cut.Render(p => p
-            .Add(c => c.Source, folder is null ? null : FilterSourceToken.FromPath(folder))
-            .Add(c => c.FilterInEffect, folder is null ? null : new FilterConfig())
-            .Add(c => c.FolderPath, folder ?? string.Empty));
 
     // ── A filter change keeps the record ────────────────────────────────────
 
     [Fact]
     public async Task AFilterChange_KeepsTheRecordLabelledWithItsRun_AndDropsDone()
     {
-        var cut = PanelOver(new CapturingProcessHandler(CompletedWith(BrokenA)), new FilterConfig());
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
+        var host = await PanelOverAsync(new CapturingProcessHandler(CompletedWith(BrokenA)));
+        var cut = host.Panel;
+        await host.RunToCompletionAsync();
         Assert.Contains("Done", cut.Markup);
 
-        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 0.05 }));
+        await host.ApplyErrorMinAsync("0.05");
 
         Assert.DoesNotContain("Done", cut.Markup);
         var notice = cut.Find(Notice);
@@ -88,7 +69,7 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         Assert.Equal("The last run", notice.QuerySelector(".skip-list-label")!.TextContent);
 
         // An edit not yet applied — nothing in effect — keeps it too.
-        cut.Render(p => p.Add(c => c.FilterInEffect, (FilterConfig?)null));
+        await host.EditErrorMinAsync("0.06");
         Assert.Contains("broken-a.xg", cut.Find(Notice).TextContent);
     }
 
@@ -97,13 +78,13 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     {
         // A run through an active filter that wrote nothing and skipped
         // nothing: the zero-match notice is its current-input result.
-        var cut = PanelOver(
-            new CapturingProcessHandler(CompletedWith(SkipRecord.Empty, rows: 0)),
-            new FilterConfig { Players = ["Alice"] });
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
+        var host = await PanelOverAsync(
+            new CapturingProcessHandler(CompletedWith(SkipRecord.Empty, rows: 0)), errorMin: "0.05");
+        var cut = host.Panel;
+        await host.RunToCompletionAsync();
         Assert.Single(cut.FindAll("div.zero-match-notice"));
 
-        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { Players = ["Bob"] }));
+        await host.ApplyErrorMinAsync("0.10");
 
         Assert.Empty(cut.FindAll("div.zero-match-notice"));
     }
@@ -113,51 +94,52 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     [Fact]
     public async Task ReplacingTheSource_ClearsTheRecord()
     {
-        var cut = PanelOver(new CapturingProcessHandler(CompletedWith(BrokenA)), new FilterConfig());
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
-        Assert.Single(cut.FindAll(Notice));
+        var host = await PanelOverAsync(new CapturingProcessHandler(CompletedWith(BrokenA)));
+        await host.RunToCompletionAsync();
+        Assert.Single(host.Panel.FindAll(Notice));
 
-        ChangeSource(cut, FolderB);
+        await host.CommitFolderAsync(FolderB);
 
-        Assert.Empty(cut.FindAll(Notice));
+        Assert.Empty(host.Panel.FindAll(Notice));
     }
 
     [Fact]
     public async Task RemovingTheSource_ClearsTheRecord()
     {
-        var cut = PanelOver(new CapturingProcessHandler(CompletedWith(BrokenA)), new FilterConfig());
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
-        Assert.Single(cut.FindAll(Notice));
+        var host = await PanelOverAsync(new CapturingProcessHandler(CompletedWith(BrokenA)));
+        await host.RunToCompletionAsync();
+        Assert.Single(host.Panel.FindAll(Notice));
 
-        ChangeSource(cut, null);
+        await host.CommitFolderAsync(string.Empty);
 
-        Assert.Empty(cut.FindAll(Notice));
+        Assert.Empty(host.Panel.FindAll(Notice));
     }
 
     [Fact]
     public async Task ARunCompletingAfterItsSourceWasReplaced_PublishesNoRecord()
     {
         var server = new CapturingProcessHandler(CompletedWith(BrokenA));
-        var cut = PanelOver(server, new FilterConfig());
+        var host = await PanelOverAsync(server);
         server.HoldStatus();
-        var run = RunAsync(cut);
+        var run = host.ClickRunAsync();
         await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        ChangeSource(cut, FolderB);
+        await host.CommitFolderAsync(FolderB);
         server.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Empty(cut.FindAll(Notice));
-        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.Empty(host.Panel.FindAll(Notice));
+        Assert.DoesNotContain("Done", host.Panel.Markup);
     }
 
     /// <summary>
     /// A→B→A: the held XGP run's folder is replaced and then put back before
     /// it completes. Coming back does not undo the replacement — the return is
     /// a new visit — so the run publishes neither its record nor "Done". What
-    /// it committed still reaches the host, before the job is acknowledged:
-    /// clearing a record never discards accounting. Before the correction the panel judged by the folder's
-    /// value at completion, so the old run's "Done" and record came back.
+    /// it committed is still followed — the next number moves past it — before
+    /// the job is acknowledged: clearing a record never discards accounting.
+    /// Before the correction the panel judged by the folder's value at
+    /// completion, so the old run's "Done" and record came back.
     /// </summary>
     [Fact]
     public async Task ARunWhoseSourceWasReplacedAndRestored_PublishesNothing_AndItsAccountingStillReachesTheHost()
@@ -167,24 +149,30 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         {
             Current = 2, Total = 2, Complete = true, TotalRows = 2, Skipped = BrokenA, XgpCommit = commit,
         });
-        // The commit the host was handed, and how many acknowledgements the
-        // server had then: none, since the job is acknowledged only after.
-        var handed = new List<(XgpExportCommit Commit, int Acknowledged)>();
-        var cut = PanelOver(server, new FilterConfig(), OutputFormat.Xgp, c => handed.Add((c, server.Acknowledged.Count)));
+        var host = await PanelOverAsync(server, format: OutputFormat.Xgp);
+        // The next number each time it moved, and how many acknowledgements
+        // the server had then: none, since the job is acknowledged only after.
+        var followed = new List<(int NextNumber, int Acknowledged)>();
+        var last = host.App.XgpOptions.StartNumber;
+        host.App.Changed += () =>
+        {
+            if (host.App.XgpOptions.StartNumber == last) return;
+            last = host.App.XgpOptions.StartNumber;
+            followed.Add((last, server.Acknowledged.Count));
+        };
         server.HoldStatus();
-        var run = RunAsync(cut);
+        var run = host.ClickRunAsync();
         await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        ChangeSource(cut, FolderB);
-        ChangeSource(cut, FolderA);
+        await host.CommitFolderAsync(FolderB);
+        await host.CommitFolderAsync(LocalPanelHost.Folder);
         server.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Empty(cut.FindAll(Notice));
-        Assert.DoesNotContain("Done", cut.Markup);
-        // The host is handed the run's commit, and the job is acknowledged
-        // after.
-        Assert.Equal([(commit, 0)], handed);
+        Assert.Empty(host.Panel.FindAll(Notice));
+        Assert.DoesNotContain("Done", host.Panel.Markup);
+        // The run's commit is followed, and the job is acknowledged after.
+        Assert.Equal([(commit.NextNumber, 0)], followed);
         Assert.Single(server.Acknowledged);
     }
 
@@ -198,17 +186,17 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     public async Task ARunCompletingAfterItsFilterChanged_PublishesItsRecordButNotItsResult()
     {
         var server = new CapturingProcessHandler(CompletedWith(BrokenA));
-        var cut = PanelOver(server, new FilterConfig());
+        var host = await PanelOverAsync(server);
         server.HoldStatus();
-        var run = RunAsync(cut);
+        var run = host.ClickRunAsync();
         await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        cut.Render(p => p.Add(c => c.FilterInEffect, new FilterConfig { ErrorMin = 0.05 }));
+        await host.ApplyErrorMinAsync("0.05");
         server.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
-        Assert.Contains("broken-a.xg", cut.Find(Notice).TextContent);
-        Assert.DoesNotContain("Done", cut.Markup);
+        Assert.Contains("broken-a.xg", host.Panel.Find(Notice).TextContent);
+        Assert.DoesNotContain("Done", host.Panel.Markup);
     }
 
     // ── The next run replaces it ────────────────────────────────────────────
@@ -217,14 +205,15 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     public async Task TheNextRun_ReplacesTheRecord_FromItsStart()
     {
         var server = new CapturingProcessHandler(CompletedWith(BrokenA), CompletedWith(BrokenB));
-        var cut = PanelOver(server, new FilterConfig());
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
+        var host = await PanelOverAsync(server);
+        var cut = host.Panel;
+        await host.RunToCompletionAsync();
         Assert.Contains("broken-a.xg", cut.Find(Notice).TextContent);
 
         // The second run's poll is held: from its start the first run's
         // record is gone, and its own is not yet shown.
         server.HoldPoll(2);
-        var second = RunAsync(cut);
+        var second = host.ClickRunAsync();
         await server.HeldPollReached.WaitAsync(CapturingProcessHandler.RunTimeout);
         Assert.Empty(cut.FindAll(Notice));
 
@@ -239,13 +228,13 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     public async Task ANextRunThatSkipsNothing_LeavesNoRecord()
     {
         var server = new CapturingProcessHandler(CompletedWith(BrokenA), CompletedWith(SkipRecord.Empty));
-        var cut = PanelOver(server, new FilterConfig());
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
-        Assert.Single(cut.FindAll(Notice));
+        var host = await PanelOverAsync(server);
+        await host.RunToCompletionAsync();
+        Assert.Single(host.Panel.FindAll(Notice));
 
-        await RunAsync(cut).WaitAsync(CapturingProcessHandler.RunTimeout);
+        await host.RunToCompletionAsync();
 
-        Assert.Empty(cut.FindAll(Notice));
-        Assert.Contains("Done", cut.Markup);
+        Assert.Empty(host.Panel.FindAll(Notice));
+        Assert.Contains("Done", host.Panel.Markup);
     }
 }

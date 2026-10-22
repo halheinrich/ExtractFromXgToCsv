@@ -3,7 +3,6 @@ using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.Extensions.DependencyInjection;
-using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
@@ -14,7 +13,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// lands (the block rendered empty — the click went unacknowledged), and the
 /// deck pathway's atomic render (a solid 100% bar beside elapsed/throughput
 /// figures frozen at their last per-file values — a finished-looking job for
-/// however long the render takes, measured in minutes at corpus scale).
+/// however long the render takes, measured in minutes at corpus scale). Each
+/// state is a real run's: a status read held, or a snapshot the stub server
+/// answers.
 /// </summary>
 public class LocalModePanelBusyAffordanceTests : BunitContext
 {
@@ -22,15 +23,13 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddClientServices();
-        Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
     }
 
-    private IRenderedComponent<LocalModePanel> RenderPanel() =>
-        Render<LocalModePanel>(p => p
-            .Add(c => c.OutputFormat, OutputFormat.Pptx)
-            .Add(c => c.FilterInEffect, new FilterConfig())
-            .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false));
+    private Task<LocalPanelHost> RenderPanelAsync(CapturingProcessHandler server)
+    {
+        Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
+        return LocalPanelHost.RenderReadyAsync(this, OutputFormat.Pptx);
+    }
 
     /// <summary>
     /// A snapshot mid-render: every file read (so the counter reads 100%) and
@@ -47,25 +46,45 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
         FilesPerSec = 33,
     };
 
-    [Fact]
-    public void BusyBeforeTheFirstPoll_RendersAnIndeterminateStartingState()
+    /// <summary>
+    /// A panel showing <paramref name="snapshot"/> as its running job's
+    /// progress: the server answers it to the first status read and holds the
+    /// second. Release the server to end the run.
+    /// </summary>
+    private async Task<(IRenderedComponent<LocalModePanel> Panel, Task Run, CapturingProcessHandler Server)> ShowingAsync(
+        ProcessingProgress snapshot)
     {
-        var cut = RenderPanel();
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_busy", true);
-        cut.Render();
+        var server = new CapturingProcessHandler(snapshot, snapshot with { Complete = true });
+        server.HoldPoll(2);
+        var host = await RenderPanelAsync(server);
+        var run = host.ClickRunAsync();
+        await server.HeldPollReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+        host.Panel.WaitForAssertion(() => Assert.Empty(host.Panel.FindAll("#startingNotice")));
+        return (host.Panel, run, server);
+    }
+
+    [Fact]
+    public async Task BusyBeforeTheFirstPoll_RendersAnIndeterminateStartingState()
+    {
+        var server = new CapturingProcessHandler();
+        server.HoldStatus();
+        var host = await RenderPanelAsync(server);
+        var cut = host.Panel;
+        var run = host.ClickRunAsync();
+        await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         var bar = cut.Find("div.progress-bar");
         Assert.Contains("progress-bar-animated", bar.ClassName);
         Assert.Contains("Starting…", cut.Find("#startingNotice").TextContent);
+
+        server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
     }
 
     [Fact]
-    public void RenderingPhase_RendersAnIndeterminateBarWithoutTheStaleFigures()
+    public async Task RenderingPhase_RendersAnIndeterminateBarWithoutTheStaleFigures()
     {
-        var cut = RenderPanel();
-        bUnitTestHelpers.SetPrivateField(
-            cut.Instance, "_progress", RenderingSnapshot(JobPhase.Rendering));
-        cut.Render();
+        var (cut, run, server) = await ShowingAsync(RenderingSnapshot(JobPhase.Rendering));
 
         var bar = cut.Find("div.progress-bar");
         Assert.Contains("progress-bar-animated", bar.ClassName);
@@ -77,6 +96,9 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
         Assert.DoesNotContain("files/sec", cut.Markup);
 
         Assert.Contains("Rendering PPTX", cut.Find("#renderingNotice").TextContent);
+
+        server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
     }
 
     /// <summary>
@@ -87,17 +109,17 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
     /// would put the fact in two places.
     /// </summary>
     [Fact]
-    public void ProcessingPhase_KeepsTheDeterminateBarEvenWithARenderingFileName()
+    public async Task ProcessingPhase_KeepsTheDeterminateBarEvenWithARenderingFileName()
     {
-        var cut = RenderPanel();
-        bUnitTestHelpers.SetPrivateField(
-            cut.Instance, "_progress", RenderingSnapshot(JobPhase.Processing));
-        cut.Render();
+        var (cut, run, server) = await ShowingAsync(RenderingSnapshot(JobPhase.Processing));
 
         var bar = cut.Find("div.progress-bar");
         Assert.DoesNotContain("progress-bar-animated", bar.ClassName);
         Assert.Contains("100%", bar.TextContent);
         Assert.Contains("files/sec", cut.Markup);
+
+        server.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
     }
 
     /// <summary>
@@ -105,12 +127,13 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
     /// indeterminate branch must not swallow the completion state.
     /// </summary>
     [Fact]
-    public void TerminalSnapshot_StillRendersDone()
+    public async Task TerminalSnapshot_StillRendersDone()
     {
-        var cut = RenderPanel();
         var done = RenderingSnapshot(JobPhase.Rendering) with { Complete = true, FileName = "Done" };
-        bUnitTestHelpers.SetPrivateField(cut.Instance, "_progress", done);
-        cut.Render();
+        var host = await RenderPanelAsync(new CapturingProcessHandler(done));
+        var cut = host.Panel;
+
+        await host.RunToCompletionAsync();
 
         Assert.Contains("Done", cut.Find("span.text-success").TextContent);
         Assert.Empty(cut.FindAll("#renderingNotice"));
