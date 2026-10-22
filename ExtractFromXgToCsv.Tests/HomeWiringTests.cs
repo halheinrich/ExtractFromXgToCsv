@@ -353,13 +353,11 @@ public class HomeWiringTests : BunitContext
         var cut = RenderPage();
         Assert.False(cut.Find("#fmtXgp").HasAttribute("disabled"));
 
-        // The recovery protocol's three hand-offs (SPEC-notices.md §7.5) are
-        // bound: a silently splatted one would lose a job or its accounting.
+        // The commit's hand-off (SPEC-notices.md §7.5) is bound: a silently
+        // splatted one would leave the next number behind every export.
         var localPanel = cut.FindComponent<LocalModePanel>();
         Assert.NotNull(localPanel.Instance.XgpOptions);
-        Assert.NotNull(localPanel.Instance.OnXgpJobStarting);
         Assert.True(localPanel.Instance.OnXgpJobEnded.HasDelegate);
-        Assert.True(localPanel.Instance.OnReconcileNeeded.HasDelegate);
     }
 
     [Fact]

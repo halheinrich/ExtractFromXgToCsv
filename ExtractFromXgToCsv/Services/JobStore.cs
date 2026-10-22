@@ -3,30 +3,22 @@ using ExtractFromXgToCsv.Client.Shared;
 namespace ExtractFromXgToCsv.Services;
 
 /// <summary>
-/// One server instance's Local-mode jobs (the umbrella's
-/// <c>SPEC-notices.md</c> §7.5): the jobs and their terminal results, the
-/// start dispositions, and the XGP ledger, all under one lock, so every
-/// judgement and every change of them is one step.
+/// The server's Local-mode jobs (the umbrella's <c>SPEC-notices.md</c> §7.5):
+/// the jobs and their terminal results, and the starts admitted, all under
+/// one lock, so every judgement and every change of them is one step.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>The job</b> is one Local run, in any format, and its terminal result.
 /// Its identity is the one the browser minted for its start. It is kept until
 /// the page that started it acknowledges it (<see cref="Acknowledge"/>), or the
-/// instance ends; a status read never removes it.
+/// process ends; a status read never removes it.
 /// </para>
 /// <para>
-/// <b>The start dispositions</b>, one for every identity the instance has
-/// admitted, settled or refused at admission, are kept for its lifetime:
-/// <i>admitted</i>, holding the request a repeat is compared against, or
-/// <i>retired</i>, meaning no start under that identity may ever run. No
-/// acknowledgement removes one, and no refusal changes one.
-/// </para>
-/// <para>
-/// <b>The XGP ledger</b> holds one entry per admitted XGP job, numbered in
-/// admission order: running, or ended with the accounting it committed. An
-/// entry ends in the same step as its job's terminal result, and is kept for
-/// the instance's lifetime.
+/// <b>The admitted starts</b>, one request for every identity the store has
+/// admitted, are kept for the process's lifetime, so a repeated start finds
+/// its job's admission after the job is acknowledged too. No acknowledgement
+/// removes one, and no refusal changes one.
 /// </para>
 /// <para>
 /// <b>Snapshots are immutable</b> (<see cref="ProcessingProgress"/>), so the
@@ -35,32 +27,21 @@ namespace ExtractFromXgToCsv.Services;
 /// change one another holds, inside the lock or out of it.
 /// </para>
 /// </remarks>
-public sealed class JobStore(ServerInstance instance)
+public sealed class JobStore
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, HeldJob> _jobs = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Disposition> _dispositions = new(StringComparer.Ordinal);
-    private readonly List<LedgerEntry> _ledger = [];
-
-    /// <summary>The instance this store belongs to.</summary>
-    public string Instance { get; } = instance.Id;
+    private readonly Dictionary<string, StartRequest> _admitted = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Judges a start and, for an unseen identity it admits, registers the job
-    /// — and for an XGP job its ledger entry — in the same step, then hands the
-    /// job to <paramref name="launch"/> to run.
+    /// Judges a start by its identity and, for an unseen identity, registers
+    /// the job in the same step, then hands the job to
+    /// <paramref name="launch"/> to run.
     /// </summary>
     /// <remarks>
-    /// In order, under the lock: a start naming another instance is refused,
-    /// and changes nothing in this one. Then its identity: an admitted one
-    /// returns its disposition and starts nothing, unless the request differs,
-    /// which is refused; a retired one is refused. No refusal changes a
-    /// disposition an identity already has. Only an unseen identity goes on to
-    /// admission, which for XGP is the ledger's: refused while any entry runs,
-    /// and unless the start's mark names the latest entry or the instance has
-    /// admitted none. A start refused at admission starts nothing, and its
-    /// identity is retired: no start under it may ever run, and settling it
-    /// answers retired.
+    /// Under the lock: an admitted identity returns its admission and starts
+    /// nothing, unless the request differs, which is refused and changes
+    /// nothing. An unseen identity is admitted.
     /// </remarks>
     public StartJudgement Start(StartRequest request, Action<JobEntry> launch)
     {
@@ -70,51 +51,22 @@ public sealed class JobStore(ServerInstance instance)
         JobEntry job;
         lock (_gate)
         {
-            if (request.Instance != Instance)
-                return new StartJudgement.Refused(RefusalReason.OtherInstance);
-
-            if (_dispositions.TryGetValue(request.JobId, out var seen))
+            if (_admitted.TryGetValue(request.JobId, out var admitted))
             {
-                return seen switch
-                {
-                    Disposition.Admitted admitted when admitted.Request == request =>
-                        new StartJudgement.Admitted(admitted.LedgerNumber, Started: false),
-                    Disposition.Admitted => new StartJudgement.Refused(RefusalReason.ChangedRequest),
-                    _ => new StartJudgement.Refused(RefusalReason.Retired),
-                };
+                return admitted == request
+                    ? new StartJudgement.Admitted(Started: false)
+                    : new StartJudgement.Refused(RefusalReason.ChangedRequest);
             }
 
-            if (AdmissionRefusal(request) is { } refusal)
-            {
-                _dispositions.Add(request.JobId, Disposition.Retired.Value);
-                return new StartJudgement.Refused(refusal);
-            }
-
-            int? ledgerNumber = null;
-            if (request.Run.OutputFormat == OutputFormat.Xgp)
-            {
-                ledgerNumber = _ledger.Count + 1;
-                _ledger.Add(new LedgerEntry(ledgerNumber.Value, request.JobId, Running: true, Commit: null));
-            }
-
-            var held = new HeldJob(request.JobId, ledgerNumber);
+            var held = new HeldJob(request.JobId);
             _jobs.Add(request.JobId, held);
-            _dispositions.Add(request.JobId, new Disposition.Admitted(request, ledgerNumber));
+            _admitted.Add(request.JobId, request);
             job = held.Entry;
         }
 
         launch(job);
-        return new StartJudgement.Admitted(job.LedgerNumber, Started: true);
+        return new StartJudgement.Admitted(Started: true);
     }
-
-    // Why admission refuses an unseen identity's start; null when it admits
-    // it. Other formats are not admitted by the ledger: they consume no
-    // numbers. Called under the lock.
-    private RefusalReason? AdmissionRefusal(StartRequest request) =>
-        request.Run.OutputFormat != OutputFormat.Xgp ? null
-        : _ledger.Any(entry => entry.Running) ? RefusalReason.XgpRunning
-        : _ledger.Count > 0 && request.Mark != new LedgerMark(Instance, _ledger.Count) ? RefusalReason.StaleMark
-        : null;
 
     /// <summary>Records a running job's progress; a job that has reached its terminal result keeps it.</summary>
     public void Report(JobEntry job, ProcessingProgress snapshot)
@@ -128,11 +80,7 @@ public sealed class JobStore(ServerInstance instance)
         }
     }
 
-    /// <summary>
-    /// Records a job's terminal result and, for an XGP job, ends its ledger
-    /// entry with the accounting the result carries — in one step. The first
-    /// terminal result stands.
-    /// </summary>
+    /// <summary>Records a job's terminal result. The first terminal result stands.</summary>
     public void Complete(JobEntry job, ProcessingProgress terminal)
     {
         ArgumentNullException.ThrowIfNull(terminal);
@@ -154,11 +102,8 @@ public sealed class JobStore(ServerInstance instance)
         {
             if (Held(job) is not { IsTerminal: false } held)
                 return;
-            var terminal = terminalFrom(held.Progress);
-            held.Progress = terminal;
+            held.Progress = terminalFrom(held.Progress);
             held.IsTerminal = true;
-            if (job.LedgerNumber is { } number)
-                _ledger[number - 1] = _ledger[number - 1] with { Running = false, Commit = terminal.XgpCommit };
         }
     }
 
@@ -204,10 +149,10 @@ public sealed class JobStore(ServerInstance instance)
 
     /// <summary>
     /// The page that started a job acknowledges it once it has taken the
-    /// terminal result: the job's result is released. It never touches a
-    /// disposition or the ledger. Acknowledging a job the store no longer
-    /// holds — or one still running, which has no result to release yet —
-    /// changes nothing, so a retried acknowledgement is harmless.
+    /// terminal result: the job's result is released. It never touches an
+    /// admission. Acknowledging a job the store no longer holds — or one still
+    /// running, which has no result to release yet — changes nothing, so a
+    /// retried acknowledgement is harmless.
     /// </summary>
     public void Acknowledge(string jobId)
     {
@@ -223,33 +168,6 @@ public sealed class JobStore(ServerInstance instance)
         released?.Cts.Dispose();
     }
 
-    /// <summary>The instance and its whole XGP ledger, as they stand.</summary>
-    public LedgerSnapshot Ledger()
-    {
-        lock (_gate)
-            return new LedgerSnapshot(Instance, [.. _ledger]);
-    }
-
-    /// <summary>
-    /// Settles an owed identity, in one step under the start lock: an identity
-    /// never admitted is retired — it can never run, and the owed job is
-    /// resolved — while one admitted, possibly after the page's last ledger
-    /// read, stays the page's to follow. A settle naming another instance is
-    /// refused.
-    /// </summary>
-    public SettleJudgement Settle(string jobId, string forInstance)
-    {
-        lock (_gate)
-        {
-            if (forInstance != Instance)
-                return new SettleJudgement.Refused(RefusalReason.OtherInstance);
-            if (_dispositions.TryGetValue(jobId, out var seen))
-                return new SettleJudgement.Settled(seen is Disposition.Admitted ? SettleOutcome.Admitted : SettleOutcome.Retired);
-            _dispositions.Add(jobId, Disposition.Retired.Value);
-            return new SettleJudgement.Settled(SettleOutcome.Retired);
-        }
-    }
-
     // The store's own record of a job it registered; null once the job's
     // result is released. Called under the lock.
     private HeldJob? Held(JobEntry job) =>
@@ -263,7 +181,7 @@ public sealed class JobStore(ServerInstance instance)
     /// </summary>
     private sealed class HeldJob
     {
-        public HeldJob(string jobId, int? ledgerNumber) => Entry = new JobEntry(jobId, ledgerNumber, Cts.Token);
+        public HeldJob(string jobId) => Entry = new JobEntry(jobId, Cts.Token);
 
         public CancellationTokenSource Cts { get; } = new();
 
@@ -273,63 +191,35 @@ public sealed class JobStore(ServerInstance instance)
 
         public bool IsTerminal { get; set; }
     }
-
-    /// <summary>A start disposition: the instance's judgement of one identity, kept for its lifetime.</summary>
-    private abstract record Disposition
-    {
-        /// <summary>Admitted: the request a repeat is compared against, and its ledger entry for XGP.</summary>
-        public sealed record Admitted(StartRequest Request, int? LedgerNumber) : Disposition;
-
-        /// <summary>Retired: no start under the identity may ever run.</summary>
-        public sealed record Retired : Disposition
-        {
-            public static Retired Value { get; } = new();
-        }
-    }
 }
 
 /// <summary>What <see cref="JobStore.Start"/> judged.</summary>
 public abstract record StartJudgement
 {
     /// <summary>Admitted: a new job (<paramref name="Started"/>), or a repeat of one, which started nothing.</summary>
-    /// <param name="LedgerNumber">For an XGP job, its ledger entry's number.</param>
     /// <param name="Started">Whether this start registered the job, rather than repeating one already admitted.</param>
-    public sealed record Admitted(int? LedgerNumber, bool Started) : StartJudgement;
+    public sealed record Admitted(bool Started) : StartJudgement;
 
     /// <summary>Refused, for <paramref name="Reason"/>; nothing started.</summary>
     public sealed record Refused(RefusalReason Reason) : StartJudgement;
 }
 
-/// <summary>What <see cref="JobStore.Settle"/> judged.</summary>
-public abstract record SettleJudgement
-{
-    /// <summary>Settled, with <paramref name="Outcome"/>.</summary>
-    public sealed record Settled(SettleOutcome Outcome) : SettleJudgement;
-
-    /// <summary>Refused, for <paramref name="Reason"/>.</summary>
-    public sealed record Refused(RefusalReason Reason) : SettleJudgement;
-}
-
 /// <summary>
-/// One registered job, as its runner holds it: its identity, its XGP ledger
-/// entry's number, and the token its work runs under. Its progress, its
-/// terminal result and its cancellation belong to the <see cref="JobStore"/>,
-/// which changes them under its lock. This handle changes nothing.
+/// One registered job, as its runner holds it: its identity and the token its
+/// work runs under. Its progress, its terminal result and its cancellation
+/// belong to the <see cref="JobStore"/>, which changes them under its lock.
+/// This handle changes nothing.
 /// </summary>
 public sealed class JobEntry
 {
-    internal JobEntry(string jobId, int? ledgerNumber, CancellationToken cancellation)
+    internal JobEntry(string jobId, CancellationToken cancellation)
     {
         JobId = jobId;
-        LedgerNumber = ledgerNumber;
         Cancellation = cancellation;
     }
 
     /// <summary>The identity the browser minted for the job's start.</summary>
     public string JobId { get; }
-
-    /// <summary>For an XGP job, its ledger entry's number; <see langword="null"/> for any other.</summary>
-    public int? LedgerNumber { get; }
 
     /// <summary>The token the job's work runs under.</summary>
     public CancellationToken Cancellation { get; }

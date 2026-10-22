@@ -62,8 +62,7 @@ public class LocalModePanelGateTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Csv)
             .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
             .Add(c => c.FilterInEffect, inEffect ? new FilterConfig() : null)
-            .Add(c => c.FolderPath, FolderA)
-            .Add(c => c.StartState, LocalPanelRuns.Ready));
+            .Add(c => c.FolderPath, FolderA));
 
         bUnitTestHelpers.SetPrivateField(cut.Instance, "_outputPath", @"D:\xg\out.csv");
         cut.Render();
@@ -227,7 +226,6 @@ public class LocalModePanelGateTests : BunitContext
             .Add(c => c.FilterInEffect, filter)
             .Add(c => c.FolderPath, FolderA)
             .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false));
         cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
         Assert.False(RunButton(cut).IsDisabled);
@@ -246,25 +244,16 @@ public class LocalModePanelGateTests : BunitContext
     [InlineData("no output path")]
     [InlineData("no filter")]
     [InlineData("invalid XGP options")]
-    [InlineData("the server not checked")]
-    [InlineData("an XGP start blocked")]
     public async Task AClickPastEachGateCondition_SendsNoStart(string condition)
     {
-        var xgp = condition is "invalid XGP options" or "an XGP start blocked";
+        var xgp = condition is "invalid XGP options";
         var cut = Render<LocalModePanel>(p => p
             .Add(c => c.OutputFormat, xgp ? OutputFormat.Xgp : OutputFormat.Csv)
             .Add(c => c.Source, FilterSourceToken.FromPath(FolderA))
             .Add(c => c.FilterInEffect, condition == "no filter" ? null : new FilterConfig())
             .Add(c => c.FolderPath, condition == "no folder" ? string.Empty : FolderA)
             .Add(c => c.XgpOptions, condition == "invalid XGP options" ? new XgpExportOptions { NamePattern = "a/b" } : new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.OnXgpJobStarting, LocalPanelRuns.MaySend)
-            .Add(c => c.StartState, condition switch
-            {
-                "the server not checked" => LocalStartState.Checking,
-                "an XGP start blocked" => LocalPanelRuns.Ready with { XgpBlock = XgpStartBlock.Running },
-                _ => LocalPanelRuns.Ready,
-            }));
+            .Add(c => c.XgpAnonymize, false));
         if (condition != "no output path")
             cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
         Assert.True(RunButton(cut).IsDisabled);

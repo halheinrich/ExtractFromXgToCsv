@@ -1,43 +1,34 @@
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
-using XgFilter_Lib.Filtering;
 using Xunit;
 
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// One server instance's job store (the umbrella's <c>SPEC-notices.md</c>
-/// §7.5), directly: a start is judged by its identity first — a repeat returns
-/// its disposition and starts nothing, a changed request and a retired
-/// identity are refused, and so is a start naming another instance, which
-/// changes nothing here — and only then, for XGP, by the ledger: refused while
-/// any entry runs, and unless its mark names the latest entry, a refusal that
-/// retires the identity. No refusal changes a disposition an identity already
-/// has. A status read never removes a job; the acknowledgement releases only
-/// its result. Settling retires an identity never admitted and answers
-/// admitted for one that was. Deterministic: the launched work is the test's.
+/// The server's job store (the umbrella's <c>SPEC-notices.md</c> §7.5),
+/// directly: a start is judged by its identity — a repeat returns its
+/// admission and starts nothing, a changed request is refused, and no refusal
+/// changes an admission — and two different identities both run. A status
+/// read never removes a job; the acknowledgement releases only its result.
+/// Deterministic: the launched work is the test's.
 /// </summary>
 public class JobStoreTests
 {
-    private const string Here = "instance-here";
-
-    private readonly JobStore _store = new(new ServerInstance(Here));
+    private readonly JobStore _store = new();
     private readonly List<JobEntry> _launched = [];
 
     private StartJudgement Start(StartRequest request) => _store.Start(request, _launched.Add);
 
-    private static StartRequest Csv(string jobId, string instance = Here) =>
-        new(jobId, instance, Mark: null, new ProcessRequest { FolderPath = @"D:\xg", OutputPath = @"D:\out.csv" });
+    private static StartRequest Csv(string jobId) =>
+        new(jobId, new ProcessRequest { FolderPath = @"D:\xg", OutputPath = @"D:\out.csv" });
 
-    private static StartRequest Xgp(string jobId, LedgerMark? mark = null, string instance = Here) =>
-        new(jobId, instance, mark, new ProcessRequest
+    private static StartRequest Xgp(string jobId) =>
+        new(jobId, new ProcessRequest
         {
             FolderPath = @"D:\xg",
             OutputPath = @"D:\positions",
             OutputFormat = OutputFormat.Xgp,
         });
-
-    private static LedgerMark Mark(int number) => new(Here, number);
 
     private static ProcessingProgress Ended(int committed) => new()
     {
@@ -85,7 +76,7 @@ public class JobStoreTests
     }
 
     [Fact]
-    public void TheAcknowledgement_ReleasesOnlyTheResult_TheDispositionAndTheLedgerStand()
+    public void TheAcknowledgement_ReleasesOnlyTheResult_TheAdmissionStands()
     {
         Start(Xgp("a"));
         _store.Complete(_launched[0], Ended(2));
@@ -93,10 +84,8 @@ public class JobStoreTests
         _store.Acknowledge("a");
 
         Assert.Null(_store.ReadStatus("a"));
-        Assert.Equal(new LedgerEntry(1, "a", Running: false, new XgpExportCommit(new XgpExportOptions(), 2)),
-            Assert.Single(_store.Ledger().Entries));
-        // A duplicate start after the acknowledgement: the disposition stands.
-        Assert.Equal(new StartJudgement.Admitted(1, Started: false), Start(Xgp("a")));
+        // A duplicate start after the acknowledgement: the admission stands.
+        Assert.Equal(new StartJudgement.Admitted(Started: false), Start(Xgp("a")));
         Assert.Single(_launched);
     }
 
@@ -123,7 +112,6 @@ public class JobStoreTests
         _store.Report(job, new ProcessingProgress { Current = 3, Total = 9 });
 
         Assert.Same(first, _store.ReadStatus("a"));
-        Assert.Equal(1, _store.Ledger().Entries[0].Commit!.Count);
     }
 
     [Fact]
@@ -140,22 +128,21 @@ public class JobStoreTests
         Assert.False(_store.Cancel("nope"));
     }
 
-    // ── A start is judged by its identity first ─────────────────────────────
+    // ── A start is judged by its identity ───────────────────────────────────
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ARepeatedStart_ReturnsItsDisposition_AndStartsNothing(bool xgp)
+    public void ARepeatedStart_ReturnsItsAdmission_AndStartsNothing(bool xgp)
     {
         var request = xgp ? Xgp("a") : Csv("a");
         var first = Start(request);
 
         var repeat = Start(request);
 
-        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: true), first);
-        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: false), repeat);
+        Assert.Equal(new StartJudgement.Admitted(Started: true), first);
+        Assert.Equal(new StartJudgement.Admitted(Started: false), repeat);
         Assert.Single(_launched);
-        Assert.Equal(xgp ? 1 : 0, _store.Ledger().Entries.Count);
     }
 
     [Theory]
@@ -170,57 +157,15 @@ public class JobStoreTests
         Assert.Single(_launched);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void AStartNamingAnotherInstance_IsRefused_BeforeItsIdentityIsJudged_AndChangesNothingHere(bool xgp)
-    {
-        var elsewhere = xgp ? Xgp("a", instance: "instance-before") : Csv("a", instance: "instance-before");
-
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.OtherInstance), Start(elsewhere));
-        Assert.Empty(_launched);
-        Assert.Empty(_store.Ledger().Entries);
-
-        // The identity is still unseen here: a start naming this instance is
-        // admitted, and settling it would not have retired it.
-        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: true), Start(xgp ? Xgp("a") : Csv("a")));
-    }
-
     /// <summary>
-    /// An unseen identity refused at XGP admission — an entry running, or a
-    /// mark that does not name the latest entry — is retired: no start under it
-    /// may ever run, a repeat is refused as retired, and settling answers
-    /// retired.
-    /// </summary>
-    [Theory]
-    [InlineData(RefusalReason.XgpRunning)]
-    [InlineData(RefusalReason.StaleMark)]
-    public void AnUnseenIdentityRefusedAtAdmission_IsRetired(RefusalReason reason)
-    {
-        Start(Xgp("a"));
-        if (reason == RefusalReason.StaleMark)
-            _store.Complete(_launched[0], Ended(1));
-
-        Assert.Equal(new StartJudgement.Refused(reason), Start(Xgp("b", mark: null)));
-
-        if (reason == RefusalReason.XgpRunning)
-            _store.Complete(_launched[0], Ended(1));
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.Retired), Start(Xgp("b", Mark(1))));
-        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Retired), _store.Settle("b", Here));
-        Assert.Single(_launched);
-        Assert.Single(_store.Ledger().Entries);
-    }
-
-    /// <summary>
-    /// No refusal changes a disposition an identity already has: an admitted
-    /// identity whose conflicting retry is refused stays admitted, so the
-    /// original's retry is still answered with its job, and settling it still
-    /// answers admitted.
+    /// No refusal changes an admission: an admitted identity whose
+    /// conflicting retry is refused stays admitted, so the original's retry is
+    /// still answered with its job.
     /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void AConflictingRetryRefused_LeavesTheAdmittedDisposition_SoTheOriginalRetryIsStillAdmitted(bool xgp)
+    public void AConflictingRetryRefused_LeavesTheAdmission_SoTheOriginalRetryIsStillAdmitted(bool xgp)
     {
         var original = xgp ? Xgp("a") : Csv("a");
         Start(original);
@@ -228,105 +173,22 @@ public class JobStoreTests
 
         Assert.Equal(new StartJudgement.Refused(RefusalReason.ChangedRequest), Start(conflicting));
 
-        Assert.Equal(new StartJudgement.Admitted(xgp ? 1 : null, Started: false), Start(original));
-        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Admitted), _store.Settle("a", Here));
+        Assert.Equal(new StartJudgement.Admitted(Started: false), Start(original));
         Assert.Single(_launched);
     }
 
-    // ── Settling ────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void SettlingAnIdentityNeverAdmitted_RetiresIt_AndItsStartIsRefusedForever()
-    {
-        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Retired), _store.Settle("a", Here));
-
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.Retired), Start(Xgp("a")));
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.Retired), Start(Csv("a")));
-        Assert.Empty(_launched);
-        Assert.Empty(_store.Ledger().Entries);
-        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Retired), _store.Settle("a", Here));
-    }
-
-    [Fact]
-    public void SettlingAnAdmittedIdentity_AnswersAdmitted_AndChangesNothing()
-    {
-        Start(Xgp("a"));
-
-        Assert.Equal(new SettleJudgement.Settled(SettleOutcome.Admitted), _store.Settle("a", Here));
-        Assert.True(_store.Ledger().Entries[0].Running);
-        Assert.NotNull(_store.ReadStatus("a"));
-    }
-
-    [Fact]
-    public void ASettleNamingAnotherInstance_IsRefused()
-    {
-        Assert.Equal(new SettleJudgement.Refused(RefusalReason.OtherInstance), _store.Settle("a", "instance-before"));
-        // And it retired nothing here.
-        Assert.IsType<StartJudgement.Admitted>(Start(Csv("a")));
-    }
-
-    // ── XGP admission is the ledger's ───────────────────────────────────────
-
-    [Fact]
-    public void AnInstanceThatHasAdmittedNone_AdmitsAnyMark_AndNumbersItsEntriesInOrder()
-    {
-        Assert.Equal(new StartJudgement.Admitted(1, Started: true), Start(Xgp("a", new LedgerMark("instance-before", 9))));
-        _store.Complete(_launched[0], Ended(3));
-
-        Assert.Equal(new StartJudgement.Admitted(2, Started: true), Start(Xgp("b", Mark(1))));
-        Assert.Equal([1, 2], _store.Ledger().Entries.Select(entry => entry.Number));
-    }
-
-    [Fact]
-    public void AStartWhoseMarkIsNotTheLatestEntry_IsRefused_AndStartsNothing()
-    {
-        Start(Xgp("a"));
-        _store.Complete(_launched[0], Ended(3));
-        Start(Xgp("b", Mark(1)));
-        _store.Complete(_launched[1], Ended(1));
-
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.StaleMark), Start(Xgp("stale", Mark(1))));
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.StaleMark), Start(Xgp("none", mark: null)));
-        Assert.Equal(2, _launched.Count);
-        Assert.Equal(2, _store.Ledger().Entries.Count);
-    }
-
     /// <summary>
-    /// A start whose mark names the latest entry is still refused while that
-    /// entry runs: admission checks the running entry itself, not the mark
-    /// alone.
+    /// Two XGP starts at once, under different identities: both are admitted,
+    /// each registering its own job. Nothing admits one XGP job over another
+    /// any more (§7.5): two exports into one folder write incremented names,
+    /// which is the ruled cost.
     /// </summary>
     [Fact]
-    public void AStartNamingTheLatestEntry_IsStillRefused_WhileAnyEntryRuns()
-    {
-        Start(Xgp("a"));
-        _store.Complete(_launched[0], Ended(1));
-        Start(Xgp("b", Mark(1)));
-
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.XgpRunning), Start(Xgp("c", Mark(2))));
-        Assert.Equal(new StartJudgement.Refused(RefusalReason.XgpRunning), Start(Xgp("d", Mark(1))));
-        Assert.Equal(2, _store.Ledger().Entries.Count);
-    }
-
-    [Fact]
-    public void OtherFormats_AreNotAdmittedByTheLedger()
-    {
-        Start(Xgp("a"));
-
-        Assert.IsType<StartJudgement.Admitted>(Start(Csv("b")));
-        Assert.Single(_store.Ledger().Entries);
-    }
-
-    /// <summary>
-    /// Two XGP starts at once, each naming the same latest entry: exactly one
-    /// is admitted, under the lock, and the other is refused.
-    /// </summary>
-    [Fact]
-    public async Task OfTwoSimultaneousStarts_ExactlyOneIsAdmitted()
+    public async Task TwoSimultaneousStarts_AreBothAdmitted()
     {
         for (var round = 0; round < 50; round++)
         {
-            var store = new JobStore(new ServerInstance(Here));
+            var store = new JobStore();
             using var go = new ManualResetEventSlim();
             var starts = Enumerable.Range(0, 2).Select(n => Task.Run(() =>
             {
@@ -336,8 +198,8 @@ public class JobStoreTests
             go.Set();
             var judgements = await Task.WhenAll(starts);
 
-            Assert.Single(judgements, judgement => judgement is StartJudgement.Admitted);
-            Assert.Single(store.Ledger().Entries);
+            Assert.All(judgements, judgement => Assert.Equal(new StartJudgement.Admitted(Started: true), judgement));
+            Assert.All(Enumerable.Range(0, 2), n => Assert.NotNull(store.ReadStatus($"r{round}-{n}")));
         }
     }
 }

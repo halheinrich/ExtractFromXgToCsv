@@ -44,7 +44,7 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         CapturingProcessHandler server,
         FilterConfig filter,
         OutputFormat format = OutputFormat.Csv,
-        Action? ended = null)
+        Action<XgpExportCommit>? ended = null)
     {
         Services.AddSingleton(new HttpClient(server) { BaseAddress = new Uri("http://localhost/") });
         var cut = Render<LocalModePanel>(p => p
@@ -53,10 +53,8 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
             .Add(c => c.FilterInEffect, filter)
             .Add(c => c.FolderPath, FolderA)
             .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.OnXgpJobStarting, LocalPanelRuns.MaySend)
-            .Add(c => c.OnXgpJobEnded, () => ended?.Invoke()));
+            .Add(c => c.OnXgpJobEnded, (XgpExportCommit commit) => ended?.Invoke(commit)));
         cut.Find("#outputPath").Input(new ChangeEventArgs { Value = format == OutputFormat.Xgp ? @"D:\xg\positions" : @"D:\xg\out.csv" });
         return cut;
     }
@@ -157,8 +155,8 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     /// A→B→A: the held XGP run's folder is replaced and then put back before
     /// it completes. Coming back does not undo the replacement — the return is
     /// a new visit — so the run publishes neither its record nor "Done". What
-    /// it committed still reaches the host: clearing a record never discards
-    /// accounting. Before the correction the panel judged by the folder's
+    /// it committed still reaches the host, before the job is acknowledged:
+    /// clearing a record never discards accounting. Before the correction the panel judged by the folder's
     /// value at completion, so the old run's "Done" and record came back.
     /// </summary>
     [Fact]
@@ -169,10 +167,10 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
         {
             Current = 2, Total = 2, Complete = true, TotalRows = 2, Skipped = BrokenA, XgpCommit = commit,
         });
-        // How many acknowledgements the server had when the host was told
-        // the job ended: none, since the job is acknowledged only after.
-        var acknowledgedWhenEnded = new List<int>();
-        var cut = PanelOver(server, new FilterConfig(), OutputFormat.Xgp, () => acknowledgedWhenEnded.Add(server.Acknowledged.Count));
+        // The commit the host was handed, and how many acknowledgements the
+        // server had then: none, since the job is acknowledged only after.
+        var handed = new List<(XgpExportCommit Commit, int Acknowledged)>();
+        var cut = PanelOver(server, new FilterConfig(), OutputFormat.Xgp, c => handed.Add((c, server.Acknowledged.Count)));
         server.HoldStatus();
         var run = RunAsync(cut);
         await server.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
@@ -184,9 +182,9 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
 
         Assert.Empty(cut.FindAll(Notice));
         Assert.DoesNotContain("Done", cut.Markup);
-        // The host is told the job ended, to apply its entry from the
-        // ledger, and the job is acknowledged after.
-        Assert.Equal([0], acknowledgedWhenEnded);
+        // The host is handed the run's commit, and the job is acknowledged
+        // after.
+        Assert.Equal([(commit, 0)], handed);
         Assert.Single(server.Acknowledged);
     }
 

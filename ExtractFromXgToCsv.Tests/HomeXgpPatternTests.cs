@@ -14,13 +14,13 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// bUnit tests for the Home-owned XGP name-pattern UI: the pattern textbox
 /// binding, the registry-driven insert-token dropdown, the live preview /
-/// inline error branch, and the one-time migration of the keys the numbering
-/// record replaced (the legacy prefix included) into that record (the
-/// umbrella's <c>SPEC-notices.md</c> §7.5). Naming mechanics themselves are
-/// owned by the engine suites — here only the wiring is pinned.
+/// inline error branch, and the numbering as remembered controls — the
+/// pattern, the next number and the number length, each under its own key
+/// (the umbrella's <c>SPEC-notices.md</c> §7.5). Naming mechanics themselves
+/// are owned by the engine suites — here only the wiring is pinned.
 /// <para>
-/// Storage is planned (<see cref="BrowserStoragePlan"/>): the migration's
-/// reads and write are the subject, and every other call the page makes is
+/// Storage is planned (<see cref="BrowserStoragePlan"/>): the numbering's
+/// reads and writes are the subject, and every other call the page makes is
 /// declared beside them — switching to XGP persists the format.
 /// </para>
 /// </summary>
@@ -35,10 +35,9 @@ public class HomeXgpPatternTests : BunitContext
         _storage.ExpectFilterRestore(FilterRestoration.NothingStored);
     }
 
-    private IRenderedComponent<Home> RenderHomeWithXgpSelected(
-        Dictionary<string, string>? stored = null, string? migratedDocument = null)
+    private IRenderedComponent<Home> RenderHomeWithXgpSelected(Dictionary<string, string>? stored = null)
     {
-        _storage.ExpectHomeVisit(stored, migratedDocument);
+        _storage.ExpectHomeVisit(stored);
         _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.OutputFormatKey, nameof(OutputFormat.Xgp),
             BrowserStorageWriteAnswer.Succeeded);
 
@@ -52,6 +51,7 @@ public class HomeXgpPatternTests : BunitContext
     {
         var cut = RenderHomeWithXgpSelected();
 
+        ExpectPatternWrite("Move{dice}");
         cut.Find("#xgpPattern").Input("Move{dice}");
 
         var panel = cut.FindComponent<LocalModePanel>();
@@ -73,6 +73,7 @@ public class HomeXgpPatternTests : BunitContext
             new[] { "" }.Concat(XgpNameTokens.All.Select(t => t.Name)),
             optionValues);
 
+        ExpectPatternWrite("pos{n}{dice}");
         cut.Find("#xgpInsertToken").Change("dice");
 
         Assert.Equal("pos{n}{dice}",
@@ -99,6 +100,7 @@ public class HomeXgpPatternTests : BunitContext
     {
         var cut = RenderHomeWithXgpSelected();
 
+        ExpectPatternWrite("quiz");
         cut.Find("#xgpPattern").Input("quiz");
 
         var preview = cut.Find("#xgpPreview").TextContent;
@@ -112,6 +114,7 @@ public class HomeXgpPatternTests : BunitContext
     {
         var cut = RenderHomeWithXgpSelected();
 
+        ExpectPatternWrite("pos{bogus}");
         cut.Find("#xgpPattern").Input("pos{bogus}");
 
         Assert.Empty(cut.FindAll("#xgpPreview"));
@@ -119,75 +122,96 @@ public class HomeXgpPatternTests : BunitContext
         _storage.Verify();
     }
 
+
+    /// <summary>
+    /// A reload shows the remembered numbering (the umbrella's
+    /// <c>SPEC-notices.md</c> §7.5): the pattern, the next number and the
+    /// number length, each from its own key. The plan declares every read the
+    /// restore makes, so no older key — the numbering document, the last
+    /// number, the prefix — is read: there is no migration.
+    /// </summary>
     [Fact]
-    public void LegacyPrefix_MigratesToPattern_AndContinuesTheCounter()
+    public void AReload_ShowsTheRememberedNumbering()
     {
-        // Pre-pattern persistence: prefix "quiz", last exported number 42,
-        // no xg_xgpPattern key. The migrated pattern must be "quiz{n}" AND
-        // count as the recorded pattern, so the counter continues at 43. The
-        // migration writes the numbering record and removes the keys it read.
         var cut = RenderHomeWithXgpSelected(new()
         {
-            [HomeStoragePlan.XgpPrefixKey] = "quiz",
-            [HomeStoragePlan.XgpLastNumberKey] = "42",
-        }, HomeStoragePlan.NumberingDocument("quiz{n}", 42, 3));
+            [HomeStoragePlan.XgpPatternKey] = "quiz{n}",
+            [HomeStoragePlan.XgpNextNumberKey] = "43",
+            [HomeStoragePlan.XgpSuffixLengthKey] = "2",
+        });
 
         Assert.Equal("quiz{n}", cut.Find("#xgpPattern").GetAttribute("value"));
-        var options = cut.FindComponent<LocalModePanel>().Instance.XgpOptions;
-        Assert.Equal("quiz{n}", options.NamePattern);
-        Assert.Equal(43, options.StartNumber);
-        _storage.Verify();
-    }
-
-    [Fact]
-    public void LegacyPrefixTheGrammarRejects_FallsBackToTheDefaultPattern()
-    {
-        // Legacy prefixes could contain braces, which the pattern grammar
-        // reserves — the migration must fall back rather than produce a
-        // permanently invalid pattern.
-        var cut = RenderHomeWithXgpSelected(new()
-        {
-            [HomeStoragePlan.XgpPrefixKey] = "qu{iz",
-            [HomeStoragePlan.XgpLastNumberKey] = "42",
-        }, HomeStoragePlan.NumberingDocument("pos{n}", 42, 3));
-
-        var options = cut.FindComponent<LocalModePanel>().Instance.XgpOptions;
-        Assert.Equal(XgpExportOptions.DefaultNamePattern, options.NamePattern);
-        // The fallback counts as the recorded pattern too — the counter
-        // still continues rather than resetting underneath the user.
-        Assert.Equal(43, options.StartNumber);
-        _storage.Verify();
-    }
-
-    [Fact]
-    public void TheThreeKeys_MigrateToTheRecord_AndAreRemovedOnceItIsStored()
-    {
-        var cut = RenderHomeWithXgpSelected(new()
-        {
-            [HomeStoragePlan.XgpPatternKey] = "m{n}",
-            [HomeStoragePlan.XgpLastNumberKey] = "7",
-            [HomeStoragePlan.XgpSuffixLengthKey] = "2",
-        }, HomeStoragePlan.NumberingDocument("m{n}", 7, 2));
-
-        var options = cut.FindComponent<LocalModePanel>().Instance.XgpOptions;
-        Assert.Equal(new XgpExportOptions { NamePattern = "m{n}", StartNumber = 8, SuffixLength = 2 }, options);
+        Assert.Equal("43", cut.Find("#xgpNextNumber").GetAttribute("value"));
+        Assert.Equal(new XgpExportOptions { NamePattern = "quiz{n}", StartNumber = 43, SuffixLength = 2 },
+            cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
         _storage.Verify();
     }
 
     /// <summary>
-    /// A stored record is what the page starts from: the keys it replaced are
-    /// not read again, whatever they still hold.
+    /// A stored number that is not one leaves its control at the default, as
+    /// an absent key does.
     /// </summary>
     [Fact]
-    public void AStoredRecord_IsReadAlone()
+    public void AStoredNumberThatIsNotANumber_LeavesTheDefault()
     {
         var cut = RenderHomeWithXgpSelected(new()
         {
-            [HomeStoragePlan.NumberingKey] = HomeStoragePlan.NumberingDocument("r{n}", 12, 4),
+            [HomeStoragePlan.XgpNextNumberKey] = "forty",
+            [HomeStoragePlan.XgpSuffixLengthKey] = "",
         });
 
-        var options = cut.FindComponent<LocalModePanel>().Instance.XgpOptions;
-        Assert.Equal(new XgpExportOptions { NamePattern = "r{n}", StartNumber = 13, SuffixLength = 4 }, options);
+        Assert.Equal(new XgpExportOptions(), cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
         _storage.Verify();
     }
+
+    /// <summary>
+    /// A pattern edit continues the remembered next number while the pattern
+    /// is the one it was remembered under, and starts a fresh series at 1
+    /// otherwise; every change is remembered as it is made.
+    /// </summary>
+    [Fact]
+    public void APatternEdit_ContinuesTheRememberedNumber_OnlyUnderItsPattern()
+    {
+        var cut = RenderHomeWithXgpSelected(new()
+        {
+            [HomeStoragePlan.XgpPatternKey] = "quiz{n}",
+            [HomeStoragePlan.XgpNextNumberKey] = "43",
+        });
+
+        ExpectPatternWrite("other{n}");
+        ExpectNextNumberWrite("1");
+        cut.Find("#xgpPattern").Input("other{n}");
+        Assert.Equal(1, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+
+        ExpectPatternWrite("quiz{n}");
+        ExpectNextNumberWrite("43");
+        cut.Find("#xgpPattern").Input("quiz{n}");
+        Assert.Equal(43, cut.FindComponent<LocalModePanel>().Instance.XgpOptions.StartNumber);
+        _storage.Verify();
+    }
+
+    /// <summary>The user's own next number and length are remembered as typed.</summary>
+    [Fact]
+    public void TheNextNumberAndTheLength_AreRememberedAsTheyChange()
+    {
+        var cut = RenderHomeWithXgpSelected();
+
+        ExpectNextNumberWrite("12");
+        cut.Find("#xgpNextNumber").Input("12");
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "5",
+            BrowserStorageWriteAnswer.Succeeded);
+        cut.Find("#xgpSuffixLength").Input("5");
+
+        Assert.Equal(new XgpExportOptions { StartNumber = 12, SuffixLength = 5 },
+            cut.FindComponent<LocalModePanel>().Instance.XgpOptions);
+        _storage.Verify();
+    }
+
+    private void ExpectPatternWrite(string pattern) =>
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpPatternKey, pattern,
+            BrowserStorageWriteAnswer.Succeeded);
+
+    private void ExpectNextNumberWrite(string number) =>
+        _storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpNextNumberKey, number,
+            BrowserStorageWriteAnswer.Succeeded);
 }

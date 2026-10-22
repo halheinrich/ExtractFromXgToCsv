@@ -130,19 +130,17 @@ public class ProcessEndpointTests : IDisposable
     }
 
     /// <summary>
-    /// Starts a job under an identity of its own, naming the instance the
-    /// ledger read answers, and polls its status, as the panel does, until the
-    /// terminal snapshot arrives.
+    /// Starts a job under an identity of its own and polls its status, as the
+    /// panel does, until the terminal snapshot arrives.
     /// </summary>
     private static async Task<ProcessingProgress> RunToTerminalAsync(ProcessRequest request)
     {
         using var factory = new LocalFactory();
         using var client = factory.CreateClient();
 
-        var ledger = await client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger");
         const string jobId = "run-1";
         var start = await client.PostAsJsonAsync(
-            "/api/process/start", new StartRequest(jobId, ledger!.Instance, Mark: null, request));
+            "/api/process/start", new StartRequest(jobId, request));
         start.EnsureSuccessStatusCode();
 
         var deadline = DateTime.UtcNow.AddSeconds(60);

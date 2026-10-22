@@ -1,12 +1,12 @@
 namespace ExtractFromXgToCsv.Client.Services;
 
 /// <summary>
-/// How often, and how patiently, a page follows its Local jobs and reconciles
-/// with the server (the umbrella's <c>SPEC-notices.md</c> §7.5). A service, so
-/// a test can shorten the waits; the application uses <see cref="Default"/>.
+/// How often, and how patiently, a page starts and follows its Local jobs
+/// (the umbrella's <c>SPEC-notices.md</c> §7.5). A service, so a test can
+/// shorten the waits; the application uses <see cref="Default"/>.
 /// </summary>
-/// <param name="PollInterval">The wait before each status read of a running job, and between reconciliations while an XGP job runs.</param>
-/// <param name="RetryDelay">The wait before retrying a request that failed: a start, a status read, a reconciliation.</param>
+/// <param name="PollInterval">The wait before each status read of a running job.</param>
+/// <param name="RetryDelay">The wait before retrying a request that failed: a start, or a status read.</param>
 /// <param name="FailuresBeforeError">The failures in a row after which a start or a status read shows as the run error; following goes on.</param>
 internal sealed record LocalJobTiming(TimeSpan PollInterval, TimeSpan RetryDelay, int FailuresBeforeError)
 {

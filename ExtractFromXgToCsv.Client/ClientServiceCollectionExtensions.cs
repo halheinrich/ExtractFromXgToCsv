@@ -22,7 +22,7 @@ internal static class ClientServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         // Local mode's job protocol (SPEC-notices.md §7.5): its wire, how
-        // patiently a page follows and reconciles, and the identities the
+        // patiently a page starts and follows a job, and the identities the
         // browser mints for its starts. All three are services: a test can
         // hold an answer at the point the page takes it, shorten the timing,
         // and name the identities.

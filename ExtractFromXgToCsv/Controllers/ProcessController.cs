@@ -6,15 +6,13 @@ using Microsoft.AspNetCore.Mvc;
 namespace ExtractFromXgToCsv.Controllers;
 
 /// <summary>
-/// HTTP surface for Local-mode jobs and the recovery protocol that keeps an
-/// XGP run's accounting whatever happens to the page following it (the
-/// umbrella's <c>SPEC-notices.md</c> §7.5): start a job under the identity the
-/// browser minted, read its status, cancel it, acknowledge it, read the
-/// instance's XGP ledger, and settle an owed identity. The judgements are the
+/// HTTP surface for Local-mode jobs (the umbrella's <c>SPEC-notices.md</c>
+/// §7.5): start a job under the identity the browser minted, read its status,
+/// cancel it, and acknowledge it. The judgements are the
 /// <see cref="JobStore"/>'s; this surface carries them.
 /// </summary>
 /// <param name="processor">The pipeline that runs a job's work.</param>
-/// <param name="jobs">This instance's jobs, start dispositions and XGP ledger.</param>
+/// <param name="jobs">The jobs and the starts admitted.</param>
 /// <param name="logger">Logs job-level failures.</param>
 [ApiController]
 [Route("api/[controller]")]
@@ -25,11 +23,10 @@ public partial class ProcessController(
 {
     /// <summary>
     /// POST /api/process/start — a <see cref="StartRequest"/>. Admitted, new
-    /// or repeated: 200 with a <see cref="StartResponse"/>. Refused — another
-    /// instance, a changed request, a retired identity, or for XGP a running
-    /// job or a stale mark — 409 with a <see cref="ProtocolRefusal"/>; nothing
-    /// starts. An identity that is not at most 64 letters, digits and hyphens
-    /// is 400.
+    /// or repeated: 200 with a <see cref="StartResponse"/>. Refused — the
+    /// identity admitted for a different request — 409 with a
+    /// <see cref="ProtocolRefusal"/>; nothing starts. An identity that is not
+    /// at most 64 letters, digits and hyphens is 400.
     /// </summary>
     [HttpPost("start")]
     public IActionResult Start([FromBody] StartRequest request)
@@ -39,7 +36,7 @@ public partial class ProcessController(
 
         return jobs.Start(request, job => Launch(job, request.Run)) switch
         {
-            StartJudgement.Admitted admitted => Ok(new StartResponse(request.JobId, admitted.LedgerNumber)),
+            StartJudgement.Admitted => Ok(new StartResponse(request.JobId)),
             StartJudgement.Refused refused => Conflict(new ProtocolRefusal(refused.Reason)),
             _ => throw new InvalidOperationException("A start is admitted or refused."),
         };
@@ -48,8 +45,9 @@ public partial class ProcessController(
     /// <summary>
     /// GET /api/process/{jobId}/status — the job's current snapshot, its
     /// terminal result once it has one: 200, as often as asked, removing
-    /// nothing. 404 when this instance does not hold the job — never started
-    /// here, or released by its acknowledgement.
+    /// nothing. 404 when the server does not hold the job — never started
+    /// here, released by its acknowledgement, or lost with a restart — which
+    /// ends the page's following.
     /// </summary>
     [HttpGet("{jobId}/status")]
     public IActionResult Status(string jobId)
@@ -60,8 +58,8 @@ public partial class ProcessController(
 
     /// <summary>
     /// POST /api/process/{jobId}/cancel — cancels the running job: 200. A
-    /// cancel for a job that has ended, or that this instance does not hold,
-    /// is a no-op 404.
+    /// cancel for a job that has ended, or that the server does not hold, is
+    /// a no-op 404.
     /// </summary>
     [HttpPost("{jobId}/cancel")]
     public IActionResult Cancel(string jobId)
@@ -69,38 +67,15 @@ public partial class ProcessController(
 
     /// <summary>
     /// POST /api/process/{jobId}/acknowledge — the page that started the job
-    /// has taken its terminal result (and for XGP applied its entry): the
-    /// result is released. Always 204: acknowledging a job the instance no
-    /// longer holds succeeds, so a retry is harmless.
+    /// has taken its terminal result: the result is released. Always 204:
+    /// acknowledging a job the server no longer holds succeeds, so a retry is
+    /// harmless.
     /// </summary>
     [HttpPost("{jobId}/acknowledge")]
     public IActionResult Acknowledge(string jobId)
     {
         jobs.Acknowledge(jobId);
         return NoContent();
-    }
-
-    /// <summary>GET /api/process/ledger — this instance and its whole XGP ledger: 200 with a <see cref="LedgerSnapshot"/>.</summary>
-    [HttpGet("ledger")]
-    public ActionResult<LedgerSnapshot> Ledger() => jobs.Ledger();
-
-    /// <summary>
-    /// POST /api/process/{jobId}/settle — a <see cref="SettleRequest"/>: 200
-    /// with a <see cref="SettleResponse"/>, retired or admitted. A settle
-    /// naming another instance is 409 with a <see cref="ProtocolRefusal"/>.
-    /// </summary>
-    [HttpPost("{jobId}/settle")]
-    public IActionResult Settle(string jobId, [FromBody] SettleRequest request)
-    {
-        if (!IsJobId(jobId))
-            return BadRequest();
-
-        return jobs.Settle(jobId, request.Instance) switch
-        {
-            SettleJudgement.Settled settled => Ok(new SettleResponse(settled.Outcome)),
-            SettleJudgement.Refused refused => Conflict(new ProtocolRefusal(refused.Reason)),
-            _ => throw new InvalidOperationException("A settle is settled or refused."),
-        };
     }
 
     // The browser mints identities as GUIDs; anything else is not one. \z,
@@ -175,8 +150,8 @@ public partial class ProcessController(
         }
         catch (Exception ex)
         {
-            // The terminal result first: the job ends, and its ledger entry
-            // with it, whatever logging then does.
+            // The terminal result first: the job ends whatever logging then
+            // does.
             jobs.Complete(job, record.FailedSnapshot(ex.Message));
             logger.LogError(ex, "Job {JobId} failed", job.JobId);
         }

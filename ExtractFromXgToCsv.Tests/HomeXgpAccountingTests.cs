@@ -1,15 +1,11 @@
-using BgDataTypes_Lib;
-using BgDataTypes_Lib.TestSupport;
 using BgUiPrimitives_Razor;
 using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Components.Pages;
-using ExtractFromXgToCsv.Client.Services;
 using ExtractFromXgToCsv.Client.Shared;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
-using Microsoft.Extensions.DependencyInjection;
 using XgFilter_Razor;
 using XgFilter_Razor.TestSupport;
 using Xunit;
@@ -17,25 +13,22 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Committed accounting reaching Home's numbering record
-/// (halheinrich/backgammon#374 and halheinrich/backgammon#397, <c>SPEC-notices.md</c> §7.1, §7.2
-/// and §7.5): a Local XGP run's ended ledger entry — completed, cancelled or
-/// failed — is applied in one checkpoint, from the options the run captured,
-/// and the controls follow it control by control, so a newer choice in them
-/// stands.
+/// A run's commit reaching Home's next-number control (<c>SPEC-notices.md</c>
+/// §7.1, §7.2 and §7.5): a Local XGP run's terminal result — completed,
+/// cancelled or failed — carries what it committed, and the control follows
+/// it to the number after the last the run used, and remembers it, unless the
+/// user has changed the pattern or the next number since the run started. A
+/// run that committed nothing moves nothing.
 /// <para>
-/// Storage is planned: what Home records is the subject. Each run goes
+/// Storage is planned: what Home remembers is the subject. Each run goes
 /// through the real page, the real panel and a stub server answering the
-/// terminal snapshot the job runner would build; the job's identity is the
-/// test's (<see cref="SequentialJobIdentities"/>), so the owed job's place in
-/// the record can be stated.
+/// terminal snapshot the job runner would build.
 /// </para>
 /// </summary>
 public class HomeXgpAccountingTests : BunitContext
 {
     private const string Folder = @"D:\xg\matches";
     private const string OutputFolder = @"D:\xg\positions";
-    private const string Instance = CapturingProcessHandler.Instance;
 
     private static readonly XgpExportOptions DefaultOptions = new();
 
@@ -54,25 +47,7 @@ public class HomeXgpAccountingTests : BunitContext
         });
         Storage.ExpectLocalPanelRestore(BrowserStorageReadAnswer.Stored(OutputFolder));
         Storage.ExpectFilterPanelMount();
-        Storage.ExpectLocalReconcile();
         return processing;
-    }
-
-    /// <summary>
-    /// The record's part in the page's first Local XGP run, <c>job-1</c>,
-    /// started under the default options: owed before its start, then its
-    /// entry applied — the numbering ending at <paramref name="lastNumber"/>,
-    /// or none for an export that committed nothing, and the mark at the
-    /// instance's first entry.
-    /// </summary>
-    private void ExpectTheRunsBookkeeping(int? lastNumber)
-    {
-        var owing = "{\"version\":1,\"owed\":["
-            + HomeStoragePlan.OwedJob("job-1", Instance, "pos{n}", 1, 3, OutputFolder) + "]}";
-        var applied = lastNumber is { } last
-            ? HomeStoragePlan.NumberingDocument("pos{n}", last, 3, (Instance, 1))
-            : $"{{\"version\":1,\"mark\":{{\"instance\":\"{Instance}\",\"number\":1}},\"owed\":[]}}";
-        Storage.ExpectXgpRunBookkeeping(before: null, owing, applied);
     }
 
     private static XgpExportOptions PanelOptions(IRenderedComponent<Home> cut) =>
@@ -81,11 +56,10 @@ public class HomeXgpAccountingTests : BunitContext
     /// <summary>
     /// The accounting case: a decision written, then a destination failure
     /// in the same file. The run failed — the panel shows its error — and the
-    /// one file it wrote still advances the numbering. Before this leg the
-    /// panel accounted only for a run without an error.
+    /// one file it wrote still advances the next number.
     /// </summary>
     [Fact]
-    public async Task AFailedRun_AccountsForTheFileItWroteBeforeTheFailure()
+    public async Task AFailedRun_AdvancesTheNextNumberPastTheFileItWroteBeforeTheFailure()
     {
         ServerAnswering(new ProcessingProgress
         {
@@ -95,7 +69,7 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 1),
         });
         var cut = this.RenderHome();
-        ExpectTheRunsBookkeeping(lastNumber: 1);
+        Storage.ExpectNextNumberWrite(2);
 
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
@@ -105,7 +79,7 @@ public class HomeXgpAccountingTests : BunitContext
     }
 
     [Fact]
-    public async Task ACancelledRun_AccountsForTheFilesItWrote()
+    public async Task ACancelledRun_AdvancesTheNextNumberPastTheFilesItWrote()
     {
         ServerAnswering(new ProcessingProgress
         {
@@ -117,7 +91,7 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 3),
         });
         var cut = this.RenderHome();
-        ExpectTheRunsBookkeeping(lastNumber: 3);
+        Storage.ExpectNextNumberWrite(4);
 
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 
@@ -127,14 +101,15 @@ public class HomeXgpAccountingTests : BunitContext
     }
 
     /// <summary>
-    /// A control changed while the run ran: the user types a new next number.
-    /// What the run committed is persisted from the options it captured — its
-    /// pattern and its numbers — and the newer choice in the control stands.
-    /// Before this leg Home computed the persisted number from whatever the
-    /// controls showed when the run ended, and then overwrote them.
+    /// A control changed while the run ran: the user types a new next number,
+    /// which is remembered. The run's commit was made under the options it
+    /// captured, which the control no longer holds, so the newer choice
+    /// stands and nothing more is written. Before the commit path, Home
+    /// computed the number from whatever the controls showed when the run
+    /// ended, and overwrote them.
     /// </summary>
     [Fact]
-    public async Task AControlChangedWhileTheRunRan_StandsAndTheRunsNumberingIsPersisted()
+    public async Task AControlChangedWhileTheRunRan_Stands()
     {
         var processing = ServerAnswering(new ProcessingProgress
         {
@@ -143,11 +118,11 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 2),
         });
         var cut = this.RenderHome();
-        ExpectTheRunsBookkeeping(lastNumber: 2);
         processing.HoldStatus();
         var run = cut.RunButton().ClickAsync(new MouseEventArgs());
         await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
+        Storage.ExpectNextNumberWrite(50);
         await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
         Assert.Equal(50, PanelOptions(cut).StartNumber);
 
@@ -155,23 +130,49 @@ public class HomeXgpAccountingTests : BunitContext
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Equal(50, PanelOptions(cut).StartNumber);
+        Storage.Verify();
+    }
 
-        // And what was persisted is the run's: returning to its pattern
-        // continues after the run's last number, not after the control's.
-        await cut.Find("#xgpPattern").InputAsync(new ChangeEventArgs { Value = "other{n}" });
-        await cut.Find("#xgpPattern").InputAsync(new ChangeEventArgs { Value = "pos{n}" });
+    /// <summary>
+    /// "Changed since the run started" is the controls' value against the
+    /// options the run captured: a next number changed away and back again
+    /// while the run ran holds the run's start once more, so the control
+    /// follows the run. (The edit clock this replaced kept such a control as
+    /// the user's choice; the value rule is the simpler one, said once.)
+    /// </summary>
+    [Fact]
+    public async Task AControlChangedAwayAndBackWhileTheRunRan_Follows()
+    {
+        var processing = ServerAnswering(new ProcessingProgress
+        {
+            Complete = true,
+            TotalRows = 2,
+            XgpCommit = new XgpExportCommit(DefaultOptions, 2),
+        });
+        var cut = this.RenderHome();
+        processing.HoldStatus();
+        var run = cut.RunButton().ClickAsync(new MouseEventArgs());
+        await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
+
+        Storage.ExpectNextNumberWrite(50);
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "50" });
+        Storage.ExpectNextNumberWrite(1);
+        await cut.Find("#xgpNextNumber").InputAsync(new ChangeEventArgs { Value = "1" });
+
+        Storage.ExpectNextNumberWrite(3);
+        processing.ReleaseStatus();
+        await run.WaitAsync(CapturingProcessHandler.RunTimeout);
+
         Assert.Equal(3, PanelOptions(cut).StartNumber);
         Storage.Verify();
     }
 
     /// <summary>
-    /// The control-by-control rule's other half: the user changes only the
-    /// number length while the run runs. That says nothing about which number
-    /// comes next, so the next number still follows the run. Before the
-    /// correction Home advanced it only while all three controls equalled the
-    /// run's options, so a length change left "next number" on 1 — a number
-    /// the run had used — and setting the length back made the next export
-    /// reuse pos001.
+    /// The user changes only the number length while the run runs. That says
+    /// nothing about which number comes next, so the next number still
+    /// follows the run. Before the correction Home advanced it only while all
+    /// three controls equalled the run's options, so a length change left
+    /// "next number" on 1 — a number the run had used.
     /// </summary>
     [Fact]
     public async Task ALengthChangeWhileTheRunRan_StillAdvancesTheNextNumber()
@@ -183,19 +184,21 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 2),
         });
         var cut = this.RenderHome();
-        ExpectTheRunsBookkeeping(lastNumber: 2);
         processing.HoldStatus();
         var run = cut.RunButton().ClickAsync(new MouseEventArgs());
         await processing.StatusReached.WaitAsync(CapturingProcessHandler.RunTimeout);
 
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "4", BrowserStorageWriteAnswer.Succeeded);
         await cut.Find("#xgpSuffixLength").InputAsync(new ChangeEventArgs { Value = "4" });
 
+        Storage.ExpectNextNumberWrite(3);
         processing.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);
 
         Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 4 }, PanelOptions(cut));
 
         // Back to the run's length: the next export continues after the run.
+        Storage.ExpectWrite(BrowserStorageArea.Local, HomeStoragePlan.XgpSuffixLengthKey, "3", BrowserStorageWriteAnswer.Succeeded);
         await cut.Find("#xgpSuffixLength").InputAsync(new ChangeEventArgs { Value = "3" });
         Assert.Equal(new XgpExportOptions { StartNumber = 3, SuffixLength = 3 }, PanelOptions(cut));
         Storage.Verify();
@@ -203,9 +206,7 @@ public class HomeXgpAccountingTests : BunitContext
 
     /// <summary>
     /// The zero-count guard: an export that committed nothing changes no
-    /// number. Its entry is still applied — the mark moves to it and the job
-    /// is no longer owed, in the one checkpoint — but the record holds no
-    /// numbering, and the controls stand.
+    /// number, and writes nothing.
     /// </summary>
     [Fact]
     public async Task ARunThatCommittedNothing_ChangesNoNumber()
@@ -217,7 +218,6 @@ public class HomeXgpAccountingTests : BunitContext
             XgpCommit = new XgpExportCommit(DefaultOptions, 0),
         });
         var cut = this.RenderHome();
-        ExpectTheRunsBookkeeping(lastNumber: null);
 
         await cut.RunButton().ClickAsync(new MouseEventArgs()).WaitAsync(CapturingProcessHandler.RunTimeout);
 

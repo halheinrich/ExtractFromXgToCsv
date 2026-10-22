@@ -31,10 +31,8 @@ builder.Services.AddScoped(sp => new LocalFolderProcessor(
     sp.GetRequiredService<ILogger<FilteredDecisionIterator>>(),
     AppRanking.Ranking,
     sp.GetRequiredService<OpeningBookProvider>()));
-// The server instance is minted here, as the process starts, and every
-// job, start disposition and XGP ledger entry is this instance's
-// (SPEC-notices.md §7.5): Exit, a crash or a restart ends them all.
-builder.Services.AddSingleton(new ServerInstance());
+// The jobs live as long as the process (SPEC-notices.md §7.5): Exit, a crash
+// or a restart ends them all.
 builder.Services.AddSingleton<JobStore>();
 
 // The saved-filters file relay.

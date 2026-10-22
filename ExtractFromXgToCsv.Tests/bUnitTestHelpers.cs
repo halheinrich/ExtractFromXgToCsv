@@ -43,17 +43,15 @@ internal static class bUnitTestHelpers
 /// 200/204 contract) — Home hosts a <c>FilterSurface</c> whose store reads
 /// the document at mount and on every source change, so a Home test without
 /// these routes would degrade to LoadFailed. Anything else goes
-/// to <see cref="Processing"/> when a test supplies one; without one, the XGP
-/// ledger a Local page reconciles against is answered empty, and everything
-/// else 404s so a stray request fails loudly rather than hanging.
+/// to <see cref="Processing"/> when a test supplies one; without one, it
+/// 404s so a stray request fails loudly rather than hanging.
 /// </summary>
 internal sealed class StubServerHandler : HttpMessageHandler
 {
     /// <summary>
     /// The Local processing endpoints, for a test that runs a job through
     /// Home — a <see cref="CapturingProcessHandler"/>, or the real server over
-    /// a <see cref="ProtocolWire"/>; <see langword="null"/> answers an empty
-    /// ledger and leaves the rest 404.
+    /// a <see cref="ProtocolWire"/>; <see langword="null"/> leaves them 404.
     /// </summary>
     public HttpMessageHandler? Processing { get; init; }
 
@@ -106,16 +104,6 @@ internal sealed class StubServerHandler : HttpMessageHandler
             return await invoker.SendAsync(request, cancellationToken);
         }
 
-        if (request.Method == HttpMethod.Get && path == "/api/process/ledger")
-        {
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(new LedgerSnapshot(CapturingProcessHandler.Instance, []), JsonOptions.Web),
-                    Encoding.UTF8, "application/json"),
-            };
-        }
-
         return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
 
@@ -149,17 +137,14 @@ internal static class JsonOptions
 /// <summary>
 /// Fakes the Local-mode processing endpoints so <c>LocalModePanel.RunLocalAsync</c>
 /// runs its real request-building, start and polling loop against an in-memory
-/// server speaking the recovery protocol (the umbrella's <c>SPEC-notices.md</c>
+/// server speaking the job protocol (the umbrella's <c>SPEC-notices.md</c>
 /// §7.5) in its simplest form: it captures the <see cref="StartRequest"/>
-/// POSTed to <c>/api/process/start</c> and admits it — an XGP start with the
-/// next ledger entry — and answers each status poll, whatever the job's
-/// identity, with the next of its snapshots: by default one terminal snapshot
-/// (three rows written), so the click resolves in one iteration. When it
-/// serves an XGP job's terminal snapshot its ledger entry ends with that
-/// snapshot's commit. The ledger, acknowledgements, settles (always retired)
-/// and cancels are answered; everything else 404s, so a stray request fails
-/// loudly rather than hanging. The real server's judgements are pinned
-/// against the real server, not here.
+/// POSTed to <c>/api/process/start</c> and admits it, and answers each status
+/// poll, whatever the job's identity, with the next of its snapshots: by
+/// default one terminal snapshot (three rows written), so the click resolves
+/// in one iteration. Acknowledgements and cancels are answered; everything
+/// else 404s, so a stray request fails loudly rather than hanging. The real
+/// server's judgements are pinned against the real server, not here.
 /// </summary>
 /// <remarks>
 /// Binds with <see cref="JsonSerializerDefaults.Web"/> — what a bare
@@ -172,13 +157,9 @@ internal static class JsonOptions
 /// </remarks>
 internal sealed class CapturingProcessHandler : HttpMessageHandler
 {
-    /// <summary>The server instance this stand-in is.</summary>
-    public const string Instance = "test-instance";
-
     private static readonly JsonSerializerOptions _opts = JsonOptions.Web;
 
     private readonly object _gate = new();
-    private readonly List<LedgerEntry> _ledger = [];
 
     private readonly IReadOnlyList<string> _statusBodies;
     private int _polls;
@@ -297,22 +278,7 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
             var start = JsonSerializer.Deserialize<StartRequest>(json, _opts)!;
             CapturedStart = start;
             Interlocked.Increment(ref _starts);
-            int? number = null;
-            if (start.Run.OutputFormat == OutputFormat.Xgp)
-            {
-                lock (_gate)
-                {
-                    number = _ledger.Count + 1;
-                    _ledger.Add(new LedgerEntry(number.Value, start.JobId, Running: true, Commit: null));
-                }
-            }
-            return Json(JsonSerializer.Serialize(new StartResponse(start.JobId, number), _opts));
-        }
-
-        if (request.Method == HttpMethod.Get && path == "/api/process/ledger")
-        {
-            lock (_gate)
-                return Json(JsonSerializer.Serialize(new LedgerSnapshot(Instance, [.. _ledger]), _opts));
+            return Json(JsonSerializer.Serialize(new StartResponse(start.JobId), _opts));
         }
 
         if (path.StartsWith("/api/process/", StringComparison.Ordinal))
@@ -328,9 +294,7 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
                     _heldPollReached.TrySetResult();
                     await gate.Task.WaitAsync(cancellationToken);
                 }
-                var body = _statusBodies[Math.Min(poll, _statusBodies.Count) - 1];
-                EndTheEntryIfTerminal(jobId, body);
-                return Json(body);
+                return Json(_statusBodies[Math.Min(poll, _statusBodies.Count) - 1]);
             }
 
             if (request.Method == HttpMethod.Post && path.EndsWith("/acknowledge", StringComparison.Ordinal))
@@ -340,29 +304,11 @@ internal sealed class CapturingProcessHandler : HttpMessageHandler
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             }
 
-            if (request.Method == HttpMethod.Post && path.EndsWith("/settle", StringComparison.Ordinal))
-                return Json(JsonSerializer.Serialize(new SettleResponse(SettleOutcome.Retired), _opts));
-
             if (request.Method == HttpMethod.Post && path.EndsWith("/cancel", StringComparison.Ordinal))
                 return new HttpResponseMessage(HttpStatusCode.OK);
         }
 
         return new HttpResponseMessage(HttpStatusCode.NotFound);
-    }
-
-    // An XGP job's entry ends with the terminal result's accounting, as the
-    // real store ends it in the same step.
-    private void EndTheEntryIfTerminal(string jobId, string body)
-    {
-        var snapshot = JsonSerializer.Deserialize<ProcessingProgress>(body, _opts);
-        if (snapshot is not { Complete: true })
-            return;
-        lock (_gate)
-        {
-            var index = _ledger.FindIndex(entry => entry.JobId == jobId);
-            if (index >= 0 && _ledger[index].Running)
-                _ledger[index] = _ledger[index] with { Running = false, Commit = snapshot.XgpCommit };
-        }
     }
 
     private static HttpResponseMessage Json(string body) =>
@@ -384,19 +330,6 @@ internal static class LocalPanelRuns
     public const string Folder = @"D:\xg\matches";
 
     /// <summary>
-    /// A page reconciled with <see cref="CapturingProcessHandler"/>'s
-    /// instance, owing nothing and having applied nothing: every start may be
-    /// sent.
-    /// </summary>
-    public static LocalStartState Ready { get; } = new(CapturingProcessHandler.Instance, Mark: null, XgpBlock: null);
-
-    /// <summary>
-    /// A host's owe step for a panel with no host: every XGP start may be sent,
-    /// as a host whose record is readable and owes nothing else answers.
-    /// </summary>
-    public static Func<OwedXgpJob, Task<bool>> MaySend { get; } = _ => Task.FromResult(true);
-
-    /// <summary>
     /// Renders the panel over <see cref="Folder"/> with
     /// <paramref name="filter"/> in effect, and types an output path.
     /// </summary>
@@ -409,8 +342,7 @@ internal static class LocalPanelRuns
             .Add(c => c.FilterInEffect, filter)
             .Add(c => c.FolderPath, Folder)
             .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.XgpAnonymize, false)
-            .Add(c => c.StartState, Ready));
+            .Add(c => c.XgpAnonymize, false));
         cut.Find("#outputPath").Input(new ChangeEventArgs { Value = @"D:\xg\out.csv" });
         return cut;
     }

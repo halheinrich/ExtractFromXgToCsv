@@ -9,16 +9,15 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// The recovery protocol on the server's side (the umbrella's
+/// The Local job protocol on the server's side (the umbrella's
 /// <c>SPEC-notices.md</c> §7.5), through the real wire: the real controller,
 /// job store and processor in memory, reached over a <see cref="ProtocolWire"/>
 /// that can lose a response, hold a request or fail one. A lost start
-/// response is found again by its retry, and no second job runs; a delayed
-/// start loses to settling — retired, refused — or wins it — admitted; a
-/// duplicate start after the acknowledgement runs nothing; the ledger admits
-/// one XGP job at a time; a collision's run error names the file; and a job
-/// ends — its ledger entry with it — when it is cancelled, and when it fails
-/// even if logging the failure throws.
+/// response is found again by its retry, and no second job runs; a duplicate
+/// start after the acknowledgement runs nothing; two starts under different
+/// identities both run; a collision's run error names the file; and a job
+/// ends when it is cancelled, and when it fails even if logging the failure
+/// throws.
 /// </summary>
 public class LocalJobEndpointTests : IDisposable
 {
@@ -33,11 +32,6 @@ public class LocalJobEndpointTests : IDisposable
         _server.Dispose();
         GC.SuppressFinalize(this);
     }
-
-    private async Task<string> InstanceAsync() =>
-        (await _client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger"))!.Instance;
-
-    private Task<LedgerSnapshot?> LedgerAsync() => _client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger");
 
     private ProcessRequest XgpRun() => new()
     {
@@ -54,9 +48,6 @@ public class LocalJobEndpointTests : IDisposable
 
     private Task<HttpResponseMessage> StartAsync(StartRequest start) =>
         _client.PostAsJsonAsync("/api/process/start", start);
-
-    private Task<HttpResponseMessage> SettleAsync(string jobId, string instance) =>
-        _client.PostAsJsonAsync($"/api/process/{jobId}/settle", new SettleRequest(instance));
 
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response, HttpStatusCode expected)
     {
@@ -84,80 +75,36 @@ public class LocalJobEndpointTests : IDisposable
     [Fact]
     public async Task ALostStartResponse_ItsRetryFindsTheSameJob_AndNoSecondJobRuns()
     {
-        var start = new StartRequest("job-1", await InstanceAsync(), Mark: null, XgpRun());
+        var start = new StartRequest("job-1", XgpRun());
         var lost = _server.Wire.Drop(ProtocolWire.Start);
 
         await Assert.ThrowsAsync<HttpRequestException>(() => StartAsync(start));
         await lost.Forwarded;
         var retried = await ReadAsync<StartResponse>(await StartAsync(start), HttpStatusCode.OK);
 
-        Assert.Equal(new StartResponse("job-1", 1), retried);
+        Assert.Equal(new StartResponse("job-1"), retried);
         var terminal = await TerminalAsync("job-1");
-        var entry = Assert.Single((await LedgerAsync())!.Entries);
-        Assert.Equal(terminal.XgpCommit, entry.Commit);
-        // One run's files, once: a second run would have stopped at pos001.
+        // One run's files, once: a second run would have written incremented
+        // names beside them.
         Assert.Equal(
             Enumerable.Range(1, terminal.XgpCommit!.Count).Select(n => $"pos{n:D3}.xgp"),
             _server.XgpFiles());
         Assert.Null(terminal.ErrorMessage);
     }
 
-    // ── A delayed start, in both orders ─────────────────────────────────────
-
-    [Fact]
-    public async Task ADelayedStart_SettledFirst_IsRetired_AndRefusedWhenItArrives()
-    {
-        var instance = await InstanceAsync();
-        var held = _server.Wire.Hold(ProtocolWire.Start);
-        var delayed = StartAsync(new StartRequest("job-1", instance, Mark: null, XgpRun()));
-        await held.Reached.WaitAsync(NoticeTesting.OperationBound);
-
-        var settled = await ReadAsync<SettleResponse>(await SettleAsync("job-1", instance), HttpStatusCode.OK);
-        held.Release();
-
-        Assert.Equal(SettleOutcome.Retired, settled.Outcome);
-        Assert.Equal(RefusalReason.Retired, (await ReadAsync<ProtocolRefusal>(await delayed, HttpStatusCode.Conflict)).Reason);
-        Assert.Empty((await LedgerAsync())!.Entries);
-        Assert.Empty(_server.XgpFiles());
-    }
-
-    [Fact]
-    public async Task ADelayedStart_ArrivingFirst_IsAdmitted_AndSettlingAnswersAdmitted()
-    {
-        var instance = await InstanceAsync();
-        // The page's ledger read finds no entry; then the delayed start
-        // arrives; then the page settles.
-        Assert.Empty((await LedgerAsync())!.Entries);
-        await ReadAsync<StartResponse>(await StartAsync(new StartRequest("job-1", instance, Mark: null, XgpRun())), HttpStatusCode.OK);
-
-        var settled = await ReadAsync<SettleResponse>(await SettleAsync("job-1", instance), HttpStatusCode.OK);
-
-        Assert.Equal(SettleOutcome.Admitted, settled.Outcome);
-        await TerminalAsync("job-1");
-        Assert.Equal("job-1", Assert.Single((await LedgerAsync())!.Entries).JobId);
-    }
-
-    [Fact]
-    public async Task ASettleNamingAnotherInstance_IsRefused()
-    {
-        var refused = await ReadAsync<ProtocolRefusal>(await SettleAsync("job-1", "instance-before"), HttpStatusCode.Conflict);
-
-        Assert.Equal(RefusalReason.OtherInstance, refused.Reason);
-    }
-
-    // ── Duplicates, changes and other instances ─────────────────────────────
+    // ── Duplicates and changes ──────────────────────────────────────────────
 
     /// <summary>
-    /// A duplicate start after the job was acknowledged: the disposition
-    /// stands, so it answers as before and runs nothing — the released job is
-    /// not registered again, which a new run would be.
+    /// A duplicate start after the job was acknowledged: the admission stands,
+    /// so it answers as before and runs nothing — the released job is not
+    /// registered again, which a new run would be.
     /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ADuplicateStartAfterTheAcknowledgement_ReturnsTheDisposition_AndRunsNothing(bool xgp)
+    public async Task ADuplicateStartAfterTheAcknowledgement_IsAnsweredAsAdmitted_AndRunsNothing(bool xgp)
     {
-        var start = new StartRequest("job-1", await InstanceAsync(), Mark: null, xgp ? XgpRun() : CsvRun());
+        var start = new StartRequest("job-1", xgp ? XgpRun() : CsvRun());
         var first = await ReadAsync<StartResponse>(await StartAsync(start), HttpStatusCode.OK);
         await TerminalAsync("job-1");
         Assert.Equal(HttpStatusCode.NoContent, (await _client.PostAsync("/api/process/job-1/acknowledge", null)).StatusCode);
@@ -166,7 +113,6 @@ public class LocalJobEndpointTests : IDisposable
 
         Assert.Equal(first, repeat);
         Assert.Equal(HttpStatusCode.NotFound, (await _client.GetAsync("/api/process/job-1/status")).StatusCode);
-        Assert.Equal(xgp ? 1 : 0, (await LedgerAsync())!.Entries.Count);
     }
 
     [Theory]
@@ -174,7 +120,7 @@ public class LocalJobEndpointTests : IDisposable
     [InlineData(true)]
     public async Task TheSameIdentityWithAChangedRequest_IsRefused(bool xgp)
     {
-        var start = new StartRequest("job-1", await InstanceAsync(), Mark: null, xgp ? XgpRun() : CsvRun());
+        var start = new StartRequest("job-1", xgp ? XgpRun() : CsvRun());
         await ReadAsync<StartResponse>(await StartAsync(start), HttpStatusCode.OK);
 
         var changed = start with { Run = start.Run with { Anonymize = !start.Run.Anonymize } };
@@ -183,24 +129,11 @@ public class LocalJobEndpointTests : IDisposable
         Assert.Equal(RefusalReason.ChangedRequest, refused.Reason);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AStartNamingAnotherInstance_IsRefused_AndStartsNothing(bool xgp)
-    {
-        var start = new StartRequest("job-1", "instance-before", Mark: null, xgp ? XgpRun() : CsvRun());
-
-        var refused = await ReadAsync<ProtocolRefusal>(await StartAsync(start), HttpStatusCode.Conflict);
-
-        Assert.Equal(RefusalReason.OtherInstance, refused.Reason);
-        Assert.Equal(HttpStatusCode.NotFound, (await _client.GetAsync("/api/process/job-1/status")).StatusCode);
-    }
-
     [Fact]
     public async Task AStatusRead_NeverRemovesTheJob()
     {
         await ReadAsync<StartResponse>(
-            await StartAsync(new StartRequest("job-1", await InstanceAsync(), Mark: null, CsvRun())), HttpStatusCode.OK);
+            await StartAsync(new StartRequest("job-1", CsvRun())), HttpStatusCode.OK);
         var terminal = await TerminalAsync("job-1");
 
         var again = await _client.GetFromJsonAsync<ProcessingProgress>("/api/process/job-1/status");
@@ -209,40 +142,30 @@ public class LocalJobEndpointTests : IDisposable
         Assert.Equal(terminal.TotalRows, again.TotalRows);
     }
 
-    // ── XGP admission ───────────────────────────────────────────────────────
+    // ── Two starts at once ──────────────────────────────────────────────────
 
+    /// <summary>
+    /// Two XGP starts under different identities, at once, into one folder:
+    /// nothing admits one over the other any more, so both run — the ruled
+    /// cost (§7.5) — and create-new keeps every file: the second run's take
+    /// incremented names, and none is overwritten.
+    /// </summary>
     [Fact]
-    public async Task AStartNamingTheLatestEntry_IsRefused_WhileThatEntryRuns()
+    public async Task TwoSimultaneousStarts_BothRun_AndNoFileIsOverwritten()
     {
-        var instance = await InstanceAsync();
-        _server.Gate.Close();
-        await ReadAsync<StartResponse>(await StartAsync(new StartRequest("job-1", instance, Mark: null, XgpRun())), HttpStatusCode.OK);
-        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
-
-        var whileRunning = await StartAsync(new StartRequest("job-2", instance, new LedgerMark(instance, 1), XgpRun()));
-        Assert.Equal(RefusalReason.XgpRunning, (await ReadAsync<ProtocolRefusal>(whileRunning, HttpStatusCode.Conflict)).Reason);
-
-        _server.Gate.Open();
-        var terminal = await TerminalAsync("job-1");
-        var afterwards = await StartAsync(new StartRequest(
-            "job-3", instance, new LedgerMark(instance, 1), XgpRun() with { XgpOptions = new XgpExportOptions { StartNumber = terminal.XgpCommit!.NextNumber } }));
-        Assert.Equal(new StartResponse("job-3", 2), await ReadAsync<StartResponse>(afterwards, HttpStatusCode.OK));
-    }
-
-    [Fact]
-    public async Task OfTwoSimultaneousStarts_ExactlyOneIsAdmitted()
-    {
-        var instance = await InstanceAsync();
         _server.Gate.Close();
 
         var answers = await Task.WhenAll(
-            StartAsync(new StartRequest("job-a", instance, Mark: null, XgpRun())),
-            StartAsync(new StartRequest("job-b", instance, Mark: null, XgpRun())));
+            StartAsync(new StartRequest("job-a", XgpRun())),
+            StartAsync(new StartRequest("job-b", XgpRun())));
 
-        Assert.Single(answers, answer => answer.StatusCode == HttpStatusCode.OK);
-        Assert.Single(answers, answer => answer.StatusCode == HttpStatusCode.Conflict);
-        Assert.Single((await LedgerAsync())!.Entries);
+        Assert.All(answers, answer => Assert.Equal(HttpStatusCode.OK, answer.StatusCode));
         _server.Gate.Open();
+        var a = await TerminalAsync("job-a");
+        var b = await TerminalAsync("job-b");
+        Assert.Null(a.ErrorMessage);
+        Assert.Null(b.ErrorMessage);
+        Assert.Equal(a.XgpCommit!.Count + b.XgpCommit!.Count, _server.XgpFiles().Count);
     }
 
     // ── A collision ─────────────────────────────────────────────────────────
@@ -253,7 +176,7 @@ public class LocalJobEndpointTests : IDisposable
         Directory.CreateDirectory(_server.OutputFolder);
         File.WriteAllBytes(Path.Combine(_server.OutputFolder, "pos002.xgp"), [7]);
         await ReadAsync<StartResponse>(
-            await StartAsync(new StartRequest("job-1", await InstanceAsync(), Mark: null, XgpRun())), HttpStatusCode.OK);
+            await StartAsync(new StartRequest("job-1", XgpRun())), HttpStatusCode.OK);
 
         var terminal = await TerminalAsync("job-1");
 
@@ -261,7 +184,6 @@ public class LocalJobEndpointTests : IDisposable
         Assert.Empty(terminal.Skipped);
         Assert.Contains("pos002 (2).xgp", _server.XgpFiles());
         Assert.Equal(new XgpExportCommit(new XgpExportOptions(), _server.XgpFiles().Count - 1), terminal.XgpCommit);
-        Assert.Equal(terminal.XgpCommit, Assert.Single((await LedgerAsync())!.Entries).Commit);
         Assert.Equal([7], File.ReadAllBytes(Path.Combine(_server.OutputFolder, "pos002.xgp")));
     }
 
@@ -269,40 +191,35 @@ public class LocalJobEndpointTests : IDisposable
 
     /// <summary>
     /// An identity the browser would never mint is refused as malformed, and
-    /// starts or settles nothing — one ending in a newline included, which a
-    /// pattern anchored with <c>$</c> lets through.
+    /// starts nothing — one ending in a newline included, which a pattern
+    /// anchored with <c>$</c> lets through.
     /// </summary>
     [Theory]
     [InlineData("job-1\n")]
     [InlineData("job 1")]
     public async Task AMalformedIdentity_IsABadRequest_AndStartsNothing(string jobId)
     {
-        var instance = await InstanceAsync();
-
         Assert.Equal(HttpStatusCode.BadRequest,
-            (await StartAsync(new StartRequest(jobId, instance, Mark: null, XgpRun()))).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest,
-            (await SettleAsync(Uri.EscapeDataString(jobId), instance)).StatusCode);
-        Assert.Empty((await LedgerAsync())!.Entries);
+            (await StartAsync(new StartRequest(jobId, XgpRun()))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await _client.GetAsync($"/api/process/{Uri.EscapeDataString(jobId)}/status")).StatusCode);
     }
 
     // ── How a job ends ──────────────────────────────────────────────────────
 
     /// <summary>
     /// A cancel through the controller ends the job: its terminal result is a
-    /// stopped one, and its ledger entry ends with it, carrying what the job
-    /// committed — so the next XGP start is not refused as running.
+    /// stopped one, carrying what the job committed.
     /// </summary>
     [Fact]
-    public async Task ACancel_EndsTheJob_AndItsLedgerEntry()
+    public async Task ACancel_EndsTheJob()
     {
         // A second match: a file is the cancellation's granularity, so the
         // cancel is seen before the second is read.
         File.Copy(Path.Combine(FixtureHelper.FixtureDir, "MTCH4064.xg"), Path.Combine(_server.InputFolder, "second.xg"));
-        var instance = await InstanceAsync();
         _server.Gate.Close();
         await ReadAsync<StartResponse>(
-            await StartAsync(new StartRequest("job-1", instance, Mark: null, XgpRun())), HttpStatusCode.OK);
+            await StartAsync(new StartRequest("job-1", XgpRun())), HttpStatusCode.OK);
         await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
 
         Assert.Equal(HttpStatusCode.OK, (await _client.PostAsync("/api/process/job-1/cancel", content: null)).StatusCode);
@@ -311,25 +228,19 @@ public class LocalJobEndpointTests : IDisposable
         var terminal = await TerminalAsync("job-1");
         Assert.True(terminal.Cancelled);
         Assert.Null(terminal.ErrorMessage);
-        var entry = Assert.Single((await LedgerAsync())!.Entries);
-        Assert.False(entry.Running);
-        Assert.Equal(terminal.XgpCommit, entry.Commit);
-        await ReadAsync<StartResponse>(
-            await StartAsync(new StartRequest("job-2", instance, new LedgerMark(instance, 1), XgpRun())), HttpStatusCode.OK);
+        Assert.NotNull(terminal.XgpCommit);
     }
 
     /// <summary>
     /// A failed job records its terminal result before it logs the failure: a
-    /// logger that throws cannot keep the job from ending, nor its ledger entry
-    /// — which, left running, would refuse every later XGP start.
+    /// logger that throws cannot keep the job from ending.
     /// </summary>
     [Fact]
-    public async Task AFailedJob_EndsWithItsLedgerEntry_EvenWhenLoggingTheFailureThrows()
+    public async Task AFailedJob_Ends_EvenWhenLoggingTheFailureThrows()
     {
         using var server = new LocalServer(builder => builder.ConfigureLogging(logging =>
             logging.AddProvider(new ThrowingLoggerProvider("ExtractFromXgToCsv.Controllers.ProcessController"))));
         using var client = server.Client();
-        var instance = (await client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger"))!.Instance;
         var run = new ProcessRequest
         {
             FolderPath = Path.Combine(server.InputFolder, "missing"),
@@ -337,13 +248,12 @@ public class LocalJobEndpointTests : IDisposable
             OutputFormat = OutputFormat.Xgp,
         };
         await ReadAsync<StartResponse>(
-            await client.PostAsJsonAsync("/api/process/start", new StartRequest("job-1", instance, Mark: null, run)),
+            await client.PostAsJsonAsync("/api/process/start", new StartRequest("job-1", run)),
             HttpStatusCode.OK);
 
         var terminal = await TerminalAsync(client, "job-1");
 
         Assert.NotNull(terminal.ErrorMessage);
-        Assert.False(Assert.Single((await client.GetFromJsonAsync<LedgerSnapshot>("/api/process/ledger"))!.Entries).Running);
     }
 
     /// <summary>A logger that throws on every error logged under one category.</summary>

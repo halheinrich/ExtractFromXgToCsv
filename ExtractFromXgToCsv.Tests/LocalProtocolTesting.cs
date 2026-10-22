@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using BgUiPrimitives_Razor;
 using Bunit;
 using ExtractFromXgToCsv.Client;
@@ -19,7 +18,7 @@ using XgFilter_Lib;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// The real Local server, in memory, for the recovery protocol's tests (the
+/// The real Local server, in memory, for the job protocol's tests (the
 /// umbrella's <c>SPEC-notices.md</c> §7.5): its real controller and job store,
 /// its real processor over a real input folder, reached over a
 /// <see cref="ProtocolWire"/> a test can fault. Opening an output file — an
@@ -59,8 +58,8 @@ internal sealed class LocalServer : IDisposable
 
     /// <summary>
     /// Restarts the server, as Exit and a fresh start, or a crash, do: a new
-    /// process — a new instance, with an empty job store and ledger — over the
-    /// same folders, which the same wire now reaches.
+    /// process — with an empty job store, so it holds none of the jobs the
+    /// last one did — over the same folders, which the same wire now reaches.
     /// </summary>
     public void Restart()
     {
@@ -101,32 +100,6 @@ internal sealed class LocalServer : IDisposable
 
     /// <summary>A client over the wire, as a page has.</summary>
     public HttpClient Client() => new(Wire, disposeHandler: false) { BaseAddress = new Uri("http://localhost/") };
-
-    /// <summary>
-    /// One XGP job run straight against the server under
-    /// <paramref name="instance"/>, as a page elsewhere would, touching no
-    /// browser's storage — into its own folder, so its files never meet a
-    /// test's pages' — and awaited to its end.
-    /// </summary>
-    public async Task ExportAsync(string jobId, string instance, LedgerMark? mark, XgpExportOptions? options = null)
-    {
-        using var client = Client();
-        var run = new ProcessRequest
-        {
-            FolderPath = InputFolder,
-            OutputPath = Path.Combine(OutputFolder, jobId),
-            OutputFormat = OutputFormat.Xgp,
-            XgpOptions = options ?? new XgpExportOptions(),
-        };
-        (await client.PostAsJsonAsync("/api/process/start", new StartRequest(jobId, instance, mark, run))).EnsureSuccessStatusCode();
-        var deadline = DateTime.UtcNow + NoticeTesting.OperationBound;
-        while ((await client.GetFromJsonAsync<ProcessingProgress>($"/api/process/{jobId}/status")) is not { Complete: true })
-        {
-            if (DateTime.UtcNow >= deadline)
-                throw new TimeoutException($"{jobId} never ended.");
-            await Task.Delay(20);
-        }
-    }
 
     /// <summary>The XGP files in the output folder, by name, in order.</summary>
     public IReadOnlyList<string> XgpFiles() =>
@@ -220,12 +193,6 @@ internal sealed class ProtocolWire(HttpMessageHandler server) : HttpMessageHandl
 
     /// <summary>Status reads.</summary>
     public static bool Status(HttpRequestMessage r) => r.Method == HttpMethod.Get && r.RequestUri!.AbsolutePath.EndsWith("/status", StringComparison.Ordinal);
-
-    /// <summary>Ledger reads.</summary>
-    public static bool Ledger(HttpRequestMessage r) => r.Method == HttpMethod.Get && r.RequestUri!.AbsolutePath == "/api/process/ledger";
-
-    /// <summary>Settles.</summary>
-    public static bool Settle(HttpRequestMessage r) => r.Method == HttpMethod.Post && r.RequestUri!.AbsolutePath.EndsWith("/settle", StringComparison.Ordinal);
 
     /// <summary>Acknowledgements.</summary>
     public static bool Acknowledge(HttpRequestMessage r) => r.Method == HttpMethod.Post && r.RequestUri!.AbsolutePath.EndsWith("/acknowledge", StringComparison.Ordinal);
@@ -453,8 +420,7 @@ internal sealed class LocalPage : IAsyncDisposable
     private readonly BunitContext _context = new();
 
     private LocalPage(
-        LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, bool reconciled,
-        Func<ILocalJobs, ILocalJobs>? jobs)
+        LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, Func<ILocalJobs, ILocalJobs>? jobs)
     {
         _context.JSInterop.Mode = JSRuntimeMode.Loose;
         _context.Services.AddClientServices();
@@ -467,22 +433,18 @@ internal sealed class LocalPage : IAsyncDisposable
             _context.Services.AddScoped(services => jobs(new LocalJobsClient(services.GetRequiredService<HttpClient>())));
 
         Home = _context.Render<Home>();
-        if (reconciled)
-            Home.WaitForLocalPanel();
-        else
-            Home.WaitForState(() => Home.FindComponents<LocalModePanel>().Any(), NoticeTesting.OperationBound);
+        Home.WaitForLocalPanel();
     }
 
     /// <summary>
     /// Opens a page over <paramref name="server"/> and <paramref name="storage"/>,
-    /// and waits — unless <paramref name="reconciled"/> is false — until it
-    /// has reconciled. <paramref name="jobs"/>, when given, wraps the page's
-    /// jobs client.
+    /// and waits until its panel is up. <paramref name="jobs"/>, when given,
+    /// wraps the page's jobs client.
     /// </summary>
     public static LocalPage Open(
-        LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities, bool reconciled = true,
+        LocalServer server, MemoryBrowserStorage storage, IJobIdentities identities,
         Func<ILocalJobs, ILocalJobs>? jobs = null) =>
-        new(server, storage, identities, reconciled, jobs);
+        new(server, storage, identities, jobs);
 
     /// <summary>The page.</summary>
     public IRenderedComponent<Home> Home { get; }
@@ -492,9 +454,6 @@ internal sealed class LocalPage : IAsyncDisposable
 
     /// <summary>The options the panel would run with now.</summary>
     public XgpExportOptions Options => Panel.XgpOptions;
-
-    /// <summary>What a start may do now.</summary>
-    public LocalStartState StartState => Panel.StartState;
 
     /// <summary>The Run button.</summary>
     public AngleSharp.Dom.IElement RunButton => Home.RunButton();
@@ -566,15 +525,10 @@ internal sealed class CancelAnsweringJobs(ILocalJobs inner) : ILocalJobs
     public Task<StartAnswer> StartAsync(StartRequest request, CancellationToken cancellationToken) =>
         inner.StartAsync(request, cancellationToken);
 
-    public Task<LedgerSnapshot> ReadLedgerAsync(CancellationToken cancellationToken) => inner.ReadLedgerAsync(cancellationToken);
-
     public Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken) =>
         inner.ReadStatusAsync(jobId, cancellationToken);
 
     public Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken) => inner.AcknowledgeAsync(jobId, cancellationToken);
-
-    public Task<SettleOutcome?> SettleAsync(string jobId, string instance, CancellationToken cancellationToken) =>
-        inner.SettleAsync(jobId, instance, cancellationToken);
 }
 
 /// <summary>
@@ -608,15 +562,10 @@ internal sealed class AnswerHeldJobs(ILocalJobs inner) : ILocalJobs
         return answer;
     }
 
-    public Task<LedgerSnapshot> ReadLedgerAsync(CancellationToken cancellationToken) => inner.ReadLedgerAsync(cancellationToken);
-
     public Task<ProcessingProgress?> ReadStatusAsync(string jobId, CancellationToken cancellationToken) =>
         inner.ReadStatusAsync(jobId, cancellationToken);
 
     public Task<bool> CancelAsync(string jobId, CancellationToken cancellationToken) => inner.CancelAsync(jobId, cancellationToken);
 
     public Task AcknowledgeAsync(string jobId, CancellationToken cancellationToken) => inner.AcknowledgeAsync(jobId, cancellationToken);
-
-    public Task<SettleOutcome?> SettleAsync(string jobId, string instance, CancellationToken cancellationToken) =>
-        inner.SettleAsync(jobId, instance, cancellationToken);
 }

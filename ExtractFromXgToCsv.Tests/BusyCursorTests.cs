@@ -48,7 +48,6 @@ public class BusyCursorTests : BunitContext
             .Add(c => c.OutputFormat, OutputFormat.Pptx)
             .Add(c => c.FilterInEffect, new FilterConfig())
             .Add(c => c.XgpOptions, new XgpExportOptions())
-            .Add(c => c.StartState, LocalPanelRuns.Ready)
             .Add(c => c.XgpAnonymize, false));
 
     /// <summary>A snapshot mid-render: every file read, timings stopped early.</summary>
