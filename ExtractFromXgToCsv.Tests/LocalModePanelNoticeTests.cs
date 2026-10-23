@@ -19,7 +19,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// <list type="bullet">
 /// <item>the zero-match notice and the skipped-files notice — gate reasons:
 /// assertive, not dismissible;</item>
-/// <item>the run error — error: assertive, dismissible per failed run.</item>
+/// <item>the run error — error: assertive, dismissible per failed run. One
+/// failure is one occurrence, so the next failure shows fresh although its
+/// text may be identical: the text was never the occurrence.</item>
 /// </list>
 /// What the two gate reasons <em>say</em>, and when, is pinned by
 /// <see cref="LocalModePanelZeroMatchTests"/> and

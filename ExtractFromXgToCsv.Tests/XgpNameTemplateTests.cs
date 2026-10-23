@@ -105,8 +105,9 @@ public class XgpNameTemplateTests
     /// The score token is the row's <see cref="DecisionRow.MatchScore"/>. A
     /// money session renders <c>moneyJ</c> or <c>moneyNJ</c> by its Jacoby
     /// rule — every money session states one, so the bare <c>money</c> of an
-    /// unstated rule is gone (halheinrich/backgammon#273) — and a Crawford
-    /// game's match score carries its <c>C</c>.
+    /// unstated rule is gone (halheinrich/backgammon#273), taken as is with no
+    /// compatibility spelling (Hal, 2026-09-29) — and a Crawford game's match
+    /// score carries its <c>C</c>.
     /// </summary>
     [Fact]
     public void ScoreToken_RendersTheMatchScoreFormats()

@@ -19,7 +19,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// the source-change rule — a folder commit ends the
 /// setup, the baseline dropped and Apply re-armed — with readiness (halheinrich/backgammon#266): the empty selection
 /// is in effect without Apply once there is a source, and stays so across a
-/// source change.
+/// source change. And what is not a source change: the output path, which is
+/// no source, and the same folder committed again, its spelling's trailing
+/// separator included (halheinrich/backgammon#94's wire-layer half), since
+/// path identity is the token's.
 /// <para>
 /// All filter gestures drive <c>FilterSurface</c>'s rendered DOM — its panels
 /// are producer-internal, and <c>FindComponent</c> over them is banned, host

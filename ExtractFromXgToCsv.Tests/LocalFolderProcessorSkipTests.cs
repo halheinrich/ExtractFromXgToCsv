@@ -16,7 +16,11 @@ namespace ExtractFromXgToCsv.Tests;
 /// <b>recorded</b>, counted once, named, with the reason, on the snapshot the
 /// client reads. Before halheinrich/backgammon#223 the per-file catch only
 /// logged, so a dropped file was invisible to the user and to every test that
-/// asserted a non-zero row count.
+/// asserted a non-zero row count. The record names a file by its path under
+/// the input folder — discovery is recursive, so two same-named files in
+/// different subfolders stay distinct — while the log keeps the bare name, as
+/// rows do; and a record belongs to one run, so the processor refuses one that
+/// already holds anything.
 /// <para>
 /// Also pins that cancellation is never a skip. Each pathway checks the token
 /// at the top of its per-file loop, but a cancellation raised <i>inside</i> a

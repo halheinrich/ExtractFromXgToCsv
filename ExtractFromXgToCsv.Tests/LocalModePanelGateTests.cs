@@ -20,7 +20,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// <para>
 /// <b>The result.</b> A result describes the inputs it was computed from — the
 /// source and the filter <em>values</em> — not merely whether some filter is
-/// in effect. Watching "a filter is in effect" fall is not enough now that the
+/// in effect, so a move that changes neither — a format change, the filter
+/// read again as an equal config in a new instance — keeps it. Watching "a
+/// filter is in effect" fall is not enough now that the
 /// empty selection stays in effect across a source replacement
 /// (halheinrich/backgammon#266): a folder change never makes it fall, while the
 /// folder the result was computed from has gone. And a run that completes
