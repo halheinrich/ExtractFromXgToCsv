@@ -9,9 +9,10 @@ namespace ExtractFromXgToCsv.Tests;
 /// The Local panel's completion line names what the run wrote, as the server
 /// returned it (the umbrella's <c>SPEC-notices.md</c> §7.5): for a CSV run, the
 /// file as it was created — numbered where a file of the requested name
-/// existed — and for an XGP run, the output folder. The page runs against a
-/// real server (<see cref="LocalServer"/>), so the path on screen is the one
-/// the run's completed result carried.
+/// existed — and for an XGP run, the output folder; and a deck run with
+/// nothing to render says why. The page runs against a real server
+/// (<see cref="LocalServer"/>), so what is on screen is what the run's
+/// terminal result carried.
 /// </summary>
 public class LocalCompletionLineTests : IAsyncLifetime
 {
@@ -76,5 +77,34 @@ public class LocalCompletionLineTests : IAsyncLifetime
 
         Assert.NotEmpty(_server.XgpFiles());
         Assert.EndsWith("→ " + _server.OutputFolder, line);
+    }
+
+    /// <summary>
+    /// A deck run over a folder whose every file is unreadable has nothing to
+    /// render: its line says the file was skipped, never that the filter
+    /// matched nothing (halheinrich/backgammon#399, item 2), and the skip
+    /// record it points to is below it.
+    /// </summary>
+    [Fact]
+    public async Task ADeckRunWhoseEveryFileIsSkipped_SaysSo_AndShowsTheSkipRecordBelow()
+    {
+        foreach (var match in Directory.GetFiles(_server.InputFolder))
+            File.Delete(match);
+        MalformedXg.Write(Path.Combine(_server.InputFolder, "broken.xg"));
+        _storage[HomeStoragePlan.OutputFormatKey] = nameof(OutputFormat.Pdf);
+        _storage[HomeStoragePlan.OutputPathKey] = Path.Combine(_server.OutputFolder, "deck.pdf");
+        _page = LocalPage.Open(_server, _storage, _identities);
+
+        await _page.RunAsync().WaitAsync(NoticeTesting.OperationBound);
+
+        _page.WaitForScreen(() =>
+        {
+            Assert.Equal(
+                "✗ Error: No decisions to render — 1 file was skipped; see the list below.",
+                _page.Home.Find("span.text-danger").TextContent.Trim());
+            var record = _page.Home.Find("div.skipped-notice");
+            Assert.Equal("The last run (failed)", record.QuerySelector(".skip-list-label")!.TextContent);
+            Assert.Contains("broken.xg", Assert.Single(record.QuerySelectorAll("li")).TextContent);
+        });
     }
 }

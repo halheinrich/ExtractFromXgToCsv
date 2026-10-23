@@ -828,14 +828,27 @@ public class LocalFolderProcessor
         run.ReportRendering($"Rendering {formatLabel} ({record.Rows} decisions, {requests.Count} slides)…");
 
         if (requests.Count == 0)
-            throw new InvalidOperationException(
-                "No decisions matched the filter — nothing to render.");
+            throw new InvalidOperationException(NothingToRender(record.Skips));
 
         var deckBytes = renderer(requests, new DiagramOptions());
         var written = await WriteOutputAsync(record, outputPath, deckBytes, cancellationToken);
 
         run.ReportDone(written);
     }
+
+    /// <summary>
+    /// Why a deck run has nothing to render, in Hal's wording (chat,
+    /// 2026-10-23, halheinrich/backgammon#399). The filter is blamed only when
+    /// every file was read — the panel's own rule for its zero-match notice: a
+    /// skipped file may have held the decisions, so with skips the message
+    /// says files were skipped, and the skip record says why.
+    /// </summary>
+    private static string NothingToRender(SkipRecord skips) => skips.FileCount switch
+    {
+        0 => "No decisions matched the filter — nothing to render.",
+        1 => "No decisions to render — 1 file was skipped; see the list below.",
+        var files => $"No decisions to render — {files} files were skipped; see the list below.",
+    };
 
     /// <summary>
     /// One run's progress: the snapshots it reports, each read off the run's

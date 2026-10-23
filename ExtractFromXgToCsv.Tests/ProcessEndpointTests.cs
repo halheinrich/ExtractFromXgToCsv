@@ -68,13 +68,25 @@ public class ProcessEndpointTests : IDisposable
         AssertTheMalformedFileIsTheOneSkip(terminal);
     }
 
-    [Fact]
-    public async Task DeckRunWhoseEveryFileIsSkipped_TerminalSnapshotCarriesTheErrorAndTheSkip()
+    /// <summary>
+    /// A deck run whose every file is skipped has nothing to render, and says
+    /// the files were skipped, not that the filter matched nothing: that
+    /// conclusion holds only when every file was read
+    /// (halheinrich/backgammon#399, item 2; the wording is Hal's, chat,
+    /// 2026-10-23). Its terminal snapshot carries the skip record the message
+    /// points to. Before, it ended on "No decisions matched the filter" with
+    /// the reason invisible.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "No decisions to render — 1 file was skipped; see the list below.")]
+    [InlineData(2, "No decisions to render — 2 files were skipped; see the list below.")]
+    public async Task DeckRunWhoseEveryFileIsSkipped_SaysTheFilesWereSkipped_AndCarriesTheSkips(int files, string message)
     {
-        // The case that read worst before: every file skipped leaves nothing to
-        // render, and the run ended on "No decisions matched the filter" with
-        // the reason invisible.
-        MalformedXg.Write(Path.Combine(_folder, Malformed));
+        var malformed = Enumerable.Range(1, files)
+            .Select(n => Path.Combine("0-broken", $"{n}-malformed.xg"))
+            .ToList();
+        foreach (var name in malformed)
+            MalformedXg.Write(Path.Combine(_folder, name));
 
         var terminal = await RunToTerminalAsync(new ProcessRequest
         {
@@ -84,8 +96,32 @@ public class ProcessEndpointTests : IDisposable
             OutputFormat = OutputFormat.Pptx,
         });
 
-        Assert.False(string.IsNullOrEmpty(terminal.ErrorMessage));
-        AssertTheMalformedFileIsTheOneSkip(terminal);
+        Assert.Equal(message, terminal.ErrorMessage);
+        Assert.Equal(malformed, terminal.Skipped.Select(skip => skip.FileName));
+        Assert.Equal(files, terminal.Skipped.FileCount);
+    }
+
+    /// <summary>
+    /// The control: every file read, and a filter that matches nothing — the
+    /// filter is what left nothing to render, and the message says so.
+    /// </summary>
+    [Fact]
+    public async Task DeckRunWhoseFilterMatchesNothing_SaysSo_WithNoSkip()
+    {
+        File.Copy(
+            Path.Combine(FixtureHelper.FixtureDir, "MTCH4064.xg"),
+            Path.Combine(_folder, "MTCH4064.xg"));
+
+        var terminal = await RunToTerminalAsync(new ProcessRequest
+        {
+            FolderPath = _folder,
+            OutputPath = Path.Combine(_folder, "deck.pdf"),
+            Filters = new FilterConfig { ErrorMin = 100 },
+            OutputFormat = OutputFormat.Pdf,
+        });
+
+        Assert.Equal("No decisions matched the filter — nothing to render.", terminal.ErrorMessage);
+        Assert.Empty(terminal.Skipped);
     }
 
     /// <summary>
