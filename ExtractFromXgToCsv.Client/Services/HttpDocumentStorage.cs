@@ -44,9 +44,10 @@ internal sealed class HttpDocumentStorage : IDocumentStorage
     /// <summary>
     /// Create the adapter over the app's <paramref name="http"/> client and
     /// the host's <paramref name="sourceFolder"/> accessor. One stable
-    /// instance per page: <c>FilterSurface</c> rebuilds its store when the
-    /// bound <c>Storage</c> <em>reference</em> changes, so the live-folder
-    /// fact rides the delegate, never a new instance.
+    /// instance, the coordinator's, and the coordinator is one per app:
+    /// <c>FilterSurface</c> rebuilds its store when the bound <c>Storage</c>
+    /// <em>reference</em> changes, so the live-folder fact rides the delegate,
+    /// never a new instance.
     /// </summary>
     /// <param name="http">The client for the server's file relay.</param>
     /// <param name="sourceFolder">Reads the host's latched source folder; null/blank = none current.</param>
