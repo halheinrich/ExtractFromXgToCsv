@@ -110,6 +110,7 @@ public class LocalFolderProcessorStopTests : IDisposable
         var rowsHeld = File.ReadAllLines(created).Length - 1;
         Assert.Equal(2 * DecisionsPerFile, rowsHeld);
         Assert.Equal((2, 3), (stopped.Current, stopped.Total));
+        Assert.Equal(StopStage.DuringInput, stopped.StoppedAt);
         Assert.Equal(rowsHeld, stopped.TotalRows);
         Assert.Equal(new StoppedOutput(created, mayBeIncomplete: false), stopped.StoppedOutput);
         Assert.Equal(0.5, stopped.ElapsedSec);
@@ -133,6 +134,7 @@ public class LocalFolderProcessorStopTests : IDisposable
         var stopped = _record.CancelledSnapshot();
         Assert.Null(stopped.StoppedOutput);
         Assert.Equal((0, 3), (stopped.Current, stopped.Total));
+        Assert.Equal(StopStage.BeforeFirstInputFile, stopped.StoppedAt);
     }
 
     /// <summary>
@@ -150,6 +152,7 @@ public class LocalFolderProcessorStopTests : IDisposable
 
         var stopped = _record.CancelledSnapshot(ended.CloseFailureMessage);
         Assert.True(stopped.Cancelled);
+        Assert.Equal(StopStage.DuringInput, stopped.StoppedAt);
         Assert.Equal(new StoppedOutput(Output("out.csv"), mayBeIncomplete: true), stopped.StoppedOutput);
         Assert.Equal($"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}", stopped.CloseFailureMessage);
     }
@@ -166,6 +169,7 @@ public class LocalFolderProcessorStopTests : IDisposable
         var stopped = _record.CancelledSnapshot();
         Assert.Null(stopped.StoppedOutput);
         Assert.Equal((2, 3), (stopped.Current, stopped.Total));
+        Assert.Equal(StopStage.DuringInput, stopped.StoppedAt);
     }
 
     [Fact]
@@ -177,6 +181,7 @@ public class LocalFolderProcessorStopTests : IDisposable
 
         Assert.Empty(Directory.GetFiles(_outputFolder));
         Assert.Null(_record.CancelledSnapshot().StoppedOutput);
+        Assert.Equal(StopStage.DuringInput, _record.CancelledSnapshot().StoppedAt);
     }
 
     /// <summary>
@@ -196,6 +201,7 @@ public class LocalFolderProcessorStopTests : IDisposable
         var stopped = _record.CancelledSnapshot();
         Assert.Null(stopped.StoppedOutput);
         Assert.Equal((3, 3), (stopped.Current, stopped.Total));
+        Assert.Equal(StopStage.AfterInput, stopped.StoppedAt);
         Assert.Equal(JobPhase.Rendering, progress.Last!.Phase);
     }
 
@@ -232,5 +238,141 @@ public class LocalFolderProcessorStopTests : IDisposable
         Assert.Equal(new StoppedOutput(created, mayBeIncomplete: true), stopped.StoppedOutput);
         Assert.Equal(closeFailure, stopped.CloseFailureMessage);
         Assert.True(File.Exists(created));
+        Assert.Equal(StopStage.AfterInput, stopped.StoppedAt);
+    }
+
+    // ── Where the run stopped ───────────────────────────────────────────────
+    //
+    // The stopped line opens with where the run stood among its input files
+    // (Hal's wording, chat, 2026-10-23, halheinrich/backgammon#424
+    // 6371257599), derived from the record's two facts. One input file is
+    // enough to reach all three stages, which the file reached against the
+    // total could not tell apart: 0 of 1 inside the walk's first step and 1
+    // of 1 both inside the file and after it.
+
+    private void LeaveOneInputFile()
+    {
+        File.Delete(Path.Combine(_folder, "b.xg"));
+        File.Delete(Path.Combine(_folder, "c.xg"));
+    }
+
+    /// <summary>
+    /// One input file, the run stopped once its CSV was created and before the
+    /// file was taken up: before the first input file, the CSV holding its
+    /// header alone, 0 rows.
+    /// </summary>
+    [Fact]
+    public async Task AOneFileCsvStoppedBeforeItsFile_IsBeforeTheFirstInputFile_ItsCsvHoldingItsHeaderAlone()
+    {
+        LeaveOneInputFile();
+        var destination = new ScriptedDestination { AfterCreate = _cts.Cancel };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor(destination).ProcessAsync(
+            _folder, Output("out.csv"), new DecisionFilterSet(), new RecordingProgress(), _record, _cts.Token));
+
+        var stopped = _record.CancelledSnapshot();
+        Assert.Equal(StopStage.BeforeFirstInputFile, stopped.StoppedAt);
+        Assert.Equal((0, 1), (stopped.Current, stopped.Total));
+        Assert.Equal(new StoppedOutput(Output("out.csv"), mayBeIncomplete: false), stopped.StoppedOutput);
+        Assert.Equal(0, stopped.TotalRows);
+        Assert.Single(File.ReadAllLines(Output("out.csv")));
+    }
+
+    /// <summary>
+    /// The same run stopped inside its one file — taken up, not finished:
+    /// during the input, though the file reached is the last.
+    /// </summary>
+    [Fact]
+    public async Task AOneFileCsvStoppedInsideItsFile_IsDuringTheInput_ThoughItReachedTheLastFile()
+    {
+        LeaveOneInputFile();
+        var progress = new RecordingProgress(report =>
+        {
+            if (report.Current == 1)
+                _cts.Cancel();
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor().ProcessAsync(
+            _folder, Output("out.csv"), new DecisionFilterSet(), progress, _record, _cts.Token));
+
+        var stopped = _record.CancelledSnapshot();
+        Assert.Equal(StopStage.DuringInput, stopped.StoppedAt);
+        Assert.Equal((1, 1), (stopped.Current, stopped.Total));
+    }
+
+    /// <summary>
+    /// The same one file processed whole, the run stopped at its write: after
+    /// the input, with nothing written.
+    /// </summary>
+    [Fact]
+    public async Task AOneFileDiagramJsonStoppedAtItsWrite_IsAfterTheInput()
+    {
+        LeaveOneInputFile();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor().ProcessDiagramAsync(
+            _folder, Output("out.json"), CancelAtCall.Set(1, _cts), new RecordingProgress(), _record, _cts.Token));
+
+        var stopped = _record.CancelledSnapshot();
+        Assert.Equal(StopStage.AfterInput, stopped.StoppedAt);
+        Assert.Equal((1, 1), (stopped.Current, stopped.Total));
+        Assert.Null(stopped.StoppedOutput);
+    }
+
+    /// <summary>
+    /// Every pathway can be stopped before its first input file — here, Stop
+    /// pressed before the run began — and each reports that stage with its
+    /// own ending: nothing written, or for XGP, no files.
+    /// </summary>
+    [Theory]
+    [InlineData(OutputFormat.Csv)]
+    [InlineData(OutputFormat.DiagramJson)]
+    [InlineData(OutputFormat.Pdf)]
+    [InlineData(OutputFormat.Xgp)]
+    public async Task EveryPathway_StoppedBeforeItsFirstFile_IsBeforeTheFirstInputFile(OutputFormat format)
+    {
+        _cts.Cancel();
+        var progress = new RecordingProgress();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => format switch
+        {
+            OutputFormat.Csv => Processor().ProcessAsync(
+                _folder, Output("out.csv"), new DecisionFilterSet(), progress, _record, _cts.Token),
+            OutputFormat.DiagramJson => Processor().ProcessDiagramAsync(
+                _folder, Output("out.json"), new DecisionFilterSet(), progress, _record, _cts.Token),
+            OutputFormat.Pdf => DeckAsync(
+                Output("deck.pdf"), new DecisionFilterSet(), progress,
+                (_, _) => throw new InvalidOperationException("A stopped walk renders nothing.")),
+            _ => Processor().ProcessXgpAsync(
+                _folder, _outputFolder, new DecisionFilterSet(), new XgpExportOptions(), new FilterConfig(),
+                progress, runRecord: _record, cancellationToken: _cts.Token),
+        });
+
+        var stopped = _record.CancelledSnapshot();
+        Assert.Equal(StopStage.BeforeFirstInputFile, stopped.StoppedAt);
+        Assert.Equal(0, stopped.Current);
+        Assert.Null(stopped.StoppedOutput);
+        Assert.Equal(0, stopped.TotalRows);
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+    }
+
+    /// <summary>
+    /// A deck run with a skipped file, stopped during its render: every input
+    /// file was processed — the skipped one included, though it was never
+    /// read — so the stage is after the input, and the skip is the run's.
+    /// </summary>
+    [Fact]
+    public async Task ADeckRunWithASkip_StoppedDuringItsRender_IsAfterTheInput()
+    {
+        LeaveOneInputFile();
+        MalformedXg.Write(Path.Combine(_folder, "broken.xg"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => DeckAsync(
+            Output("deck.pdf"), new DecisionFilterSet(), new RecordingProgress(), Renderer(whileRendering: _cts.Cancel)));
+
+        var stopped = _record.CancelledSnapshot();
+        Assert.Equal(StopStage.AfterInput, stopped.StoppedAt);
+        Assert.Equal((2, 2), (stopped.Current, stopped.Total));
+        Assert.Equal("broken.xg", Assert.Single(stopped.Skipped).FileName);
+        Assert.Null(stopped.StoppedOutput);
     }
 }

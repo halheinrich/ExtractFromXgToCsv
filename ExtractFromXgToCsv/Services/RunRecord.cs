@@ -125,10 +125,25 @@ public sealed class RunRecord
     }
 
     /// <summary>
+    /// Where the run stands among its input files, from the two facts the walk
+    /// keeps, in order: no file reached is before the first; every file
+    /// finished is after the input, which only the walk's end records
+    /// (<see cref="BetweenFiles"/> with the file count); anything else is
+    /// during it. Never the file reached against the total: a stop inside the
+    /// last file has taken it up without finishing it, and no file finished
+    /// also holds inside the first.
+    /// </summary>
+    private StopStage StopStage =>
+        FileReached == 0 ? StopStage.BeforeFirstInputFile
+        : FilesDone == Total ? StopStage.AfterInput
+        : StopStage.DuringInput;
+
+    /// <summary>
     /// The terminal snapshot of a run that was stopped, from this record
-    /// alone, never from a progress report: the file it reached, the elapsed
-    /// time and throughput at the stop, what it skipped and committed, and
-    /// what it left at its output (<see cref="ProcessingProgress.StoppedOutput"/>).
+    /// alone, never from a progress report: the file it reached and where it
+    /// stood among its input files (<see cref="ProcessingProgress.StoppedAt"/>),
+    /// the elapsed time and throughput at the stop, what it skipped and
+    /// committed, and what it left at its output (<see cref="ProcessingProgress.StoppedOutput"/>).
     /// An XGP run's count is its commit's, so the line the client shows agrees
     /// with the accounting. A failure closing the output file the stop left
     /// unfinished is reported beside it (<paramref name="closeFailureMessage"/>);
@@ -147,6 +162,7 @@ public sealed class RunRecord
             Complete = true,
             Cancelled = true,
             CloseFailureMessage = closeFailureMessage,
+            StoppedAt = StopStage,
             StoppedOutput = _outputPath is null
                 ? null
                 // An appended file that closed holds every row counted: a

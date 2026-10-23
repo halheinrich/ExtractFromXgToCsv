@@ -86,6 +86,13 @@ public sealed record ProcessingProgress
     public StoppedOutput? StoppedOutput { get; init; }
 
     /// <summary>
+    /// On a cancelled terminal snapshot, where the run stood among its input
+    /// files when it stopped, from the run's record; <see langword="null"/>
+    /// on every other snapshot.
+    /// </summary>
+    public StopStage? StoppedAt { get; init; }
+
+    /// <summary>
     /// Every unit the run has skipped so far, in the order skipped — a file it
     /// could not read or convert, or a decision whose payload it could not
     /// prepare; on a terminal snapshot, the run's whole record. Empty when

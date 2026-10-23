@@ -353,9 +353,11 @@ public class LocalStopTests : IAsyncLifetime
 
         // The job was held creating its file when the server cancelled it, so
         // the file exists and closed holding its header alone: the line says
-        // the rows it holds, and where (halheinrich/backgammon#399).
+        // the rows it holds, and where (halheinrich/backgammon#399), opening
+        // before the first input file (Hal's wording, chat, 2026-10-23,
+        // halheinrich/backgammon#424 6371257599).
         page.WaitForScreen(() => Assert.StartsWith(
-            $"⏹ Stopped at file 0 of 1 — 0 rows written to {_server.CsvOutputPath} in ",
+            $"⏹ Stopped before the first input file — 0 rows written to {_server.CsvOutputPath} in ",
             StoppedLine(page)));
         Assert.Single(File.ReadAllLines(_server.CsvOutputPath));
         Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
@@ -460,7 +462,7 @@ public class LocalStopTests : IAsyncLifetime
 
         page.WaitForScreen(() =>
         {
-            Assert.Equal($"⏹ Stopped at file 0 of 1 — output may be incomplete: {server.CsvOutputPath}", StoppedLine(page));
+            Assert.Equal($"⏹ Stopped before the first input file — output may be incomplete: {server.CsvOutputPath}", StoppedLine(page));
             Assert.Equal(
                 $"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}",
                 page.Home.Find("#closeFailure").TextContent.Trim());

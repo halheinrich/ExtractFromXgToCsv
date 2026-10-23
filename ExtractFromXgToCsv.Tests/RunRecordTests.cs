@@ -63,6 +63,59 @@ public class RunRecordTests
         Assert.Null(terminal.XgpCommit);
     }
 
+    // Where a stop stood (Hal's wording, chat, 2026-10-23,
+    // halheinrich/backgammon#424 6371257599): from the file reached and the
+    // files finished, never from the file reached against the total.
+
+    /// <summary>A one-file walk stopped before its file is taken up, and once it is: before the first input file, then during the input.</summary>
+    [Fact]
+    public void AStopBeforeTheFirstFile_IsBeforeIt_AndAStopInsideIt_IsDuringTheInput()
+    {
+        var record = new RunRecord(_clock);
+        record.Begin(1);
+        record.BetweenFiles(0);
+        Assert.Equal(StopStage.BeforeFirstInputFile, record.CancelledSnapshot().StoppedAt);
+
+        record.TakeUpFile(1);
+
+        Assert.Equal(StopStage.DuringInput, record.CancelledSnapshot().StoppedAt);
+    }
+
+    /// <summary>
+    /// A stop inside the last file has reached it without finishing it:
+    /// during the input, though the file reached equals the total. Only the
+    /// walk's end, every file finished, is after the input.
+    /// </summary>
+    [Fact]
+    public void AStopInsideTheLastFile_IsDuringTheInput_AndOnlyTheWalksEnd_IsAfterIt()
+    {
+        var record = new RunRecord(_clock);
+        record.Begin(1);
+        record.BetweenFiles(0);
+        record.TakeUpFile(1);
+        var inside = record.CancelledSnapshot();
+        Assert.Equal((1, 1), (inside.Current, inside.Total));
+        Assert.Equal(StopStage.DuringInput, inside.StoppedAt);
+
+        record.BetweenFiles(1);
+
+        Assert.Equal(StopStage.AfterInput, record.CancelledSnapshot().StoppedAt);
+    }
+
+    /// <summary>A record whose walk never began has reached no file: before the first input file.</summary>
+    [Fact]
+    public void AStopBeforeTheWalkBegan_IsBeforeTheFirstInputFile()
+    {
+        Assert.Equal(StopStage.BeforeFirstInputFile, new RunRecord(_clock).CancelledSnapshot().StoppedAt);
+    }
+
+    /// <summary>Only a stopped snapshot names a stage.</summary>
+    [Fact]
+    public void AFailedSnapshot_NamesNoStage()
+    {
+        Assert.Null(RecordAtTheEighthFile().FailedSnapshot("Disk full.").StoppedAt);
+    }
+
     [Fact]
     public void AStoppedSnapshot_ReadsTheClockAtTheStop_NotAtTheLastFile()
     {

@@ -49,6 +49,22 @@ public class ProcessingProgressWireTests
         Assert.Contains("\"match.xg:g2:m14:play\"", json, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A stopped snapshot's stage crosses as a name and reads back; a
+    /// snapshot that names none reads as none.
+    /// </summary>
+    [Fact]
+    public void AStoppedSnapshotsStage_CrossesAsAName()
+    {
+        var sent = new ProcessingProgress { Complete = true, Cancelled = true, StoppedAt = StopStage.AfterInput };
+
+        var json = JsonSerializer.Serialize(sent, Web);
+
+        Assert.Contains("\"stoppedAt\":\"AfterInput\"", json, StringComparison.Ordinal);
+        Assert.Equal(StopStage.AfterInput, JsonSerializer.Deserialize<ProcessingProgress>(json, Web)!.StoppedAt);
+        Assert.Null(JsonSerializer.Deserialize<ProcessingProgress>("{\"complete\":true}", Web)!.StoppedAt);
+    }
+
     [Fact]
     public void SnapshotWithoutSkips_DeserializesToAnEmptyRecord()
     {

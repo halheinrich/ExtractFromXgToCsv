@@ -210,15 +210,26 @@
                     }
                     else if (progress.Cancelled)
                     {
-                        // What the run did when it stopped, every figure from
-                        // its record (halheinrich/backgammon#399; the lines are
-                        // Hal's wording, chat, 2026-10-23): XGP the files its
-                        // commit counts; otherwise nothing written, a CSV that
-                        // closed holding exactly its rows, or a file whose
-                        // contents are uncertain — stopped during its write, or
-                        // its close failed — which shows no count.
+                        // Two independent facts from the run's record, composed
+                        // freely (Hal's wording, chat, 2026-10-23,
+                        // halheinrich/backgammon#424 6371257599). First where it
+                        // stopped (StoppedAt): before the first input file, at a
+                        // file, or after processing every one — "processing",
+                        // since a skipped file was processed but not read. Then
+                        // what output remains: XGP the files its commit counts;
+                        // otherwise nothing written, a CSV that closed holding
+                        // exactly its rows, or a file whose contents are
+                        // uncertain — stopped during its write, or its close
+                        // failed — which shows no count. Only the record makes a
+                        // stopped snapshot, and it always names the stage; one
+                        // without it reads as stopped at a file.
                         <span class="text-warning fw-bold" id="stoppedLine">
-                            ⏹ Stopped at file @progress.Current of @progress.Total —
+                            ⏹ @(progress.StoppedAt switch
+                            {
+                                StopStage.BeforeFirstInputFile => "Stopped before the first input file",
+                                StopStage.AfterInput => $"Stopped after processing all {progress.Total} input files",
+                                _ => $"Stopped at file {progress.Current} of {progress.Total}",
+                            }) —
                             @if (progress.XgpCommit is not null)
                             {
                                 @:@progress.TotalRows files written in @progress.ElapsedSec.ToString("F1")s (@progress.FilesPerSec files/sec)

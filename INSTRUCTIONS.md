@@ -53,7 +53,7 @@ BgUiPrimitives_Razor and XgFilter_Razor.
   `Shared/`: the wire types both projects use (`ProcessRequest`, the
   protocol's `StartRequest` / `StartResponse` / `ProtocolRefusal`,
   `ProcessingProgress` with `SkipRecord`, `XgpExportCommit` and
-  `StoppedOutput`, `JobPhase`, `OutputFormat`), the XGP naming engine
+  `StoppedOutput`, `StopStage`, `JobPhase`, `OutputFormat`), the XGP naming engine
   (`XgpExportOptions`, `XgpNameAllocator` and its internal parts,
   `XgpNamePreview`), `XgpPayload`, `NumberedFileName` (the one ` (n)` rule),
   `AppRanking`.
@@ -111,12 +111,16 @@ commit has reached the controls.
 - **A run's accounting is its record's.** The pathways report every tenth
   file, so the job runner builds the stopped and failed snapshots from the
   `RunRecord` alone: the skips, the XGP commit, and for a stop the file
-  reached, the time at the stop and what it left at its output
+  reached, where it stood (`StopStage`: before the first input file, during
+  the input, after every file was processed — derived from the file reached
+  and the files finished, never from the file reached against the total), the
+  time at the stop and what it left at its output
   (`StoppedOutput`: nothing, a CSV closed holding exactly its rows, or a file
   whose contents are uncertain). The token is checked immediately before an
   output file is created, so a run stopped before its write — during a
-  deck's render, which takes no token, too — writes nothing. The lines are
-  Hal's wording (chat, 2026-10-23, halheinrich/backgammon#399).
+  deck's render, which takes no token, too — writes nothing. The stopped
+  line composes the two facts, opening then ending, in Hal's wording (chat,
+  2026-10-23, halheinrich/backgammon#424 6371257599).
 - **XGP naming.** A pattern of literals and `{token}`s (`XgpNameTokens.All`
   is the registry), parsed by `XgpNameTemplate` and issued per run by
   `XgpNameAllocator`: Peek, then Commit once the file is written, so a

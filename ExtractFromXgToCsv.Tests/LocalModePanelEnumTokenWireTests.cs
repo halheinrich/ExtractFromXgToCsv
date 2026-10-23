@@ -164,6 +164,7 @@ public class LocalModePanelEnumTokenWireTests : BunitContext
 
         AssertRoundTrips<OutputFormat>();
         AssertRoundTrips<JobPhase>();
+        AssertRoundTrips<StopStage>();
         AssertRoundTrips<DecisionTypeOption>();
         AssertRoundTrips<ContactType>();
         AssertRoundTrips<PositionType>();
