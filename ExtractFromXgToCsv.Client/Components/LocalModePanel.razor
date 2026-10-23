@@ -173,8 +173,12 @@
                     }
                     else if (progress.Complete && !progress.Cancelled)
                     {
-                        <span class="text-success fw-bold">
-                            ✓ Done — @progress.TotalRows rows written in @progress.ElapsedSec.ToString("F1")s
+                        // An XGP run writes files, not rows (Hal's wording,
+                        // chat, 2026-10-23, halheinrich/backgammon#399); it is
+                        // the run whose snapshot carries a commit.
+                        <span class="text-success fw-bold" id="doneLine">
+                            ✓ Done — @progress.TotalRows @(progress.XgpCommit is null ? "rows" : "files") written
+                            in @progress.ElapsedSec.ToString("F1")s
                             (@progress.FilesPerSec files/sec) → @progress.WrittenPath
                         </span>
                         @if (progress.TotalRows == 0 && App.RunFilterRestricted
@@ -206,10 +210,31 @@
                     }
                     else if (progress.Cancelled)
                     {
-                        <span class="text-warning fw-bold">
-                            ⏹ Stopped at file @progress.Current of @progress.Total
-                            — @progress.TotalRows rows written in @progress.ElapsedSec.ToString("F1")s
-                            (@progress.FilesPerSec files/sec)
+                        // What the run did when it stopped, every figure from
+                        // its record (halheinrich/backgammon#399; the lines are
+                        // Hal's wording, chat, 2026-10-23): XGP the files its
+                        // commit counts; otherwise nothing written, a CSV that
+                        // closed holding exactly its rows, or a file whose
+                        // contents are uncertain — stopped during its write, or
+                        // its close failed — which shows no count.
+                        <span class="text-warning fw-bold" id="stoppedLine">
+                            ⏹ Stopped at file @progress.Current of @progress.Total —
+                            @if (progress.XgpCommit is not null)
+                            {
+                                @:@progress.TotalRows files written in @progress.ElapsedSec.ToString("F1")s (@progress.FilesPerSec files/sec)
+                            }
+                            else if (progress.StoppedOutput is not { } output)
+                            {
+                                @:nothing written
+                            }
+                            else if (output.MayBeIncomplete)
+                            {
+                                @:output may be incomplete: @output.Path
+                            }
+                            else
+                            {
+                                @:@progress.TotalRows rows written to @output.Path in @progress.ElapsedSec.ToString("F1")s (@progress.FilesPerSec files/sec)
+                            }
                         </span>
                         @if (progress.CloseFailureMessage is { } closeFailure)
                         {

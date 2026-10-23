@@ -245,7 +245,7 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
             cts.Token));
 
         Assert.Equal($"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}", stopped.CloseFailureMessage);
-        var terminal = record.CancelledSnapshot(new ProcessingProgress(), stopped.CloseFailureMessage);
+        var terminal = record.CancelledSnapshot(stopped.CloseFailureMessage);
         Assert.True(terminal.Cancelled);
         Assert.Null(terminal.ErrorMessage);
         Assert.Equal(stopped.CloseFailureMessage, terminal.CloseFailureMessage);
@@ -488,21 +488,5 @@ public class LocalFolderProcessorBoundaryTests : IDisposable
 
         public bool Matches(IDecisionFilterData data) =>
             ++_calls == throwAt ? throw new InvalidOperationException(Message) : true;
-    }
-
-    /// <summary>A filter that passes everything and cancels the run at call <c>cancelAt</c>.</summary>
-    private sealed class CancelAtCall(int cancelAt, CancellationTokenSource cts) : IDecisionFilter
-    {
-        private int _calls;
-
-        public static DecisionFilterSet Set(int cancelAt, CancellationTokenSource cts) =>
-            new DecisionFilterSet().Add(new CancelAtCall(cancelAt, cts));
-
-        public bool Matches(IDecisionFilterData data)
-        {
-            if (++_calls == cancelAt)
-                cts.Cancel();
-            return true;
-        }
     }
 }

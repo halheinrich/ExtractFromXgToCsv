@@ -6,8 +6,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// The file system as a Local run's destination, scripted: the files are real
 /// (<see cref="FileSystemDestination"/>), and a test can make finishing a file
 /// (its flush), a chosen file's create, write partway through or close, or a
-/// removal fail. No real destination is known to fail there, and the run's
-/// handling of each is pinned through this.
+/// removal fail, and can act the moment a file is created — a stop landing
+/// once the output exists. No real destination is known to fail there, and
+/// the run's handling of each is pinned through this.
 /// </summary>
 internal sealed class ScriptedDestination : IOutputDestination
 {
@@ -52,6 +53,12 @@ internal sealed class ScriptedDestination : IOutputDestination
     /// <summary>Whether removing a file fails, with <see cref="RemovalFailure"/>, removing nothing.</summary>
     public bool FailRemoval { get; init; }
 
+    /// <summary>
+    /// Runs once a file has been created, before anything is written to it —
+    /// a test's stop, landing once the output exists.
+    /// </summary>
+    public Action? AfterCreate { get; init; }
+
     /// <summary>The files removed, by name, in order.</summary>
     public List<string> Removed { get; } = [];
 
@@ -69,7 +76,9 @@ internal sealed class ScriptedDestination : IOutputDestination
             throw new IOException(CreateFailure);
         if (name == ExistingCreateOf)
             throw new OutputFileExistsException(path, new IOException("The file exists."));
-        return new ScriptedStream(FileSystemDestination.Instance.CreateNew(path), this, name);
+        var created = new ScriptedStream(FileSystemDestination.Instance.CreateNew(path), this, name);
+        AfterCreate?.Invoke();
+        return created;
     }
 
     public void Delete(string path)

@@ -97,10 +97,12 @@ public partial class ProcessController(
         });
 
         // The run's record, held here so the two terminal results this
-        // runner builds itself carry its skips and its XGP commit. Neither can
-        // take them from the last snapshot the run reported: a run-ending
-        // exception reports nothing, and the pathways report only every tenth
-        // file, so the last report can trail the record.
+        // runner builds itself carry what the run did: its skips, its XGP
+        // commit, and for a stop where it stood and what it left at its
+        // output. Neither can take them from the last snapshot the run
+        // reported: a run-ending exception reports nothing, and the pathways
+        // report only every tenth file, so the last report can trail the
+        // record.
         var record = new RunRecord();
 
         try
@@ -141,12 +143,10 @@ public partial class ProcessController(
         }
         catch (OperationCanceledException ex)
         {
-            // A new snapshot, recorded whole and built from the last report
-            // in the same step: a status read never sees one half-made
-            // terminal result. The cancellation stands; a failure closing the
-            // output it left unfinished is reported beside it.
+            // The cancellation stands; a failure closing the output it left
+            // unfinished is reported beside it.
             var closeFailure = (ex as CancelledWithUnfinishedOutputException)?.CloseFailureMessage;
-            jobs.Complete(job, last => record.CancelledSnapshot(last, closeFailure));
+            jobs.Complete(job, record.CancelledSnapshot(closeFailure));
         }
         catch (Exception ex)
         {

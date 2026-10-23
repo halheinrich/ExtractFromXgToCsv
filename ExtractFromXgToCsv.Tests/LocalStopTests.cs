@@ -351,9 +351,19 @@ public class LocalStopTests : IAsyncLifetime
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);
 
-        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent));
+        // The job was held creating its file when the server cancelled it, so
+        // the file exists and closed holding its header alone: the line says
+        // the rows it holds, and where (halheinrich/backgammon#399).
+        page.WaitForScreen(() => Assert.StartsWith(
+            $"⏹ Stopped at file 0 of 1 — 0 rows written to {_server.CsvOutputPath} in ",
+            StoppedLine(page)));
+        Assert.Single(File.ReadAllLines(_server.CsvOutputPath));
         Assert.DoesNotContain(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error);
     }
+
+    /// <summary>The stopped line, its whitespace as the browser renders it.</summary>
+    private static string StoppedLine(LocalPage page) =>
+        System.Text.RegularExpressions.Regex.Replace(page.Home.Find("#stoppedLine").TextContent, @"\s+", " ").Trim();
 
     /// <summary>
     /// Stop pressed after the start's admitted answer has arrived, but before
@@ -450,7 +460,7 @@ public class LocalStopTests : IAsyncLifetime
 
         page.WaitForScreen(() =>
         {
-            Assert.Contains("Stopped", page.Home.Find("span.text-warning").TextContent);
+            Assert.Equal($"⏹ Stopped at file 0 of 1 — output may be incomplete: {server.CsvOutputPath}", StoppedLine(page));
             Assert.Equal(
                 $"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}",
                 page.Home.Find("#closeFailure").TextContent.Trim());

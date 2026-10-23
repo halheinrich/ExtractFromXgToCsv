@@ -22,9 +22,9 @@ namespace ExtractFromXgToCsv.Services;
 /// </para>
 /// <para>
 /// <b>Snapshots are immutable</b> (<see cref="ProcessingProgress"/>), so the
-/// store keeps the one a run reported, serves it to every status read, and
-/// hands it to the builder of a terminal result, as it is: no holder can
-/// change one another holds, inside the lock or out of it.
+/// store keeps the one a run reported and serves it to every status read, as
+/// it is: no holder can change one another holds, inside the lock or out of
+/// it.
 /// </para>
 /// </remarks>
 public sealed class JobStore
@@ -83,26 +83,13 @@ public sealed class JobStore
     /// <summary>Records a job's terminal result. The first terminal result stands.</summary>
     public void Complete(JobEntry job, ProcessingProgress terminal)
     {
-        ArgumentNullException.ThrowIfNull(terminal);
-        Complete(job, _ => terminal);
-    }
-
-    /// <summary>
-    /// Records a job's terminal result built from the last snapshot it
-    /// reported, as <see cref="Complete(JobEntry, ProcessingProgress)"/> does,
-    /// in the same step, so no report can land between the two.
-    /// </summary>
-    /// <param name="job">The job.</param>
-    /// <param name="terminalFrom">Builds the terminal result from the job's last reported snapshot.</param>
-    public void Complete(JobEntry job, Func<ProcessingProgress, ProcessingProgress> terminalFrom)
-    {
         ArgumentNullException.ThrowIfNull(job);
-        ArgumentNullException.ThrowIfNull(terminalFrom);
+        ArgumentNullException.ThrowIfNull(terminal);
         lock (_gate)
         {
             if (Held(job) is not { IsTerminal: false } held)
                 return;
-            held.Progress = terminalFrom(held.Progress);
+            held.Progress = terminal;
             held.IsTerminal = true;
         }
     }

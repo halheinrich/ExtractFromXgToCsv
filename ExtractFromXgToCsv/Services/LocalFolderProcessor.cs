@@ -4,7 +4,6 @@ using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
 using ExtractFromXgToCsv.Client.Shared;
-using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
@@ -244,13 +243,28 @@ public class LocalFolderProcessor
     /// <summary>
     /// Creates the one output file a CSV, Diagram JSON or deck run writes: at
     /// <paramref name="outputPath"/>, the path the user named, or under the
-    /// next free name beside it (<see cref="CreateUnderFreeName"/>).
+    /// next free name beside it (<see cref="CreateUnderFreeName"/>), recorded
+    /// on <paramref name="record"/> as soon as it exists.
     /// </summary>
+    /// <remarks>
+    /// The run's token is checked immediately before the create, so a run
+    /// stopped by then — during a deck's render, which takes no token, or a
+    /// Diagram JSON run's serialization — creates nothing. The check narrows
+    /// the window and does not close it: a stop that lands once the file
+    /// exists leaves it, recorded, as possibly incomplete.
+    /// </remarks>
     /// <returns>The created file, open for writing, and the path it was created at.</returns>
-    private (Stream File, string Path) CreateOutput(string outputPath) =>
-        CreateUnderFreeName(
+    /// <exception cref="OperationCanceledException">The run was stopped before the file was created; nothing was.</exception>
+    private (Stream File, string Path) CreateOutput(
+        RunRecord record, string outputPath, OutputFill fill, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var created = CreateUnderFreeName(
             Path.GetDirectoryName(outputPath) ?? string.Empty,
             NumberedFileName.FirstOf(Path.GetFileName(outputPath)));
+        record.OutputCreated(created.Path, fill);
+        return created;
+    }
 
     /// <summary>
     /// Writes <paramref name="bytes"/> as the one output file
@@ -259,9 +273,10 @@ public class LocalFolderProcessor
     /// failure finishing the file is the caller's, before it reports success.
     /// </summary>
     /// <returns>The path the file was written at, once it is written and closed.</returns>
-    private async Task<string> WriteOutputAsync(string outputPath, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    private async Task<string> WriteOutputAsync(
+        RunRecord record, string outputPath, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
     {
-        var (file, path) = CreateOutput(outputPath);
+        var (file, path) = CreateOutput(record, outputPath, OutputFill.Whole, cancellationToken);
         await WriteThenCloseAsync(file, path, () => file.WriteAsync(bytes, cancellationToken).AsTask());
         return path;
     }
@@ -450,7 +465,7 @@ public class LocalFolderProcessor
     /// </summary>
     /// <param name="folderPath">The run's input folder.</param>
     /// <param name="files">The discovered files, in discovery order.</param>
-    /// <param name="record">The run's record.</param>
+    /// <param name="record">The run's record, which the walk keeps where it stands.</param>
     /// <param name="run">The run's progress, reported as the walk goes.</param>
     /// <param name="retainBytes">Whether the read keeps each file's exact bytes, for a pathway that copies a source verbatim.</param>
     /// <param name="stage">
@@ -477,9 +492,13 @@ public class LocalFolderProcessor
             var file = files[i];
             var fileName = Path.GetFileName(file);
 
+            // Between files, every one before this finished: a stop seen here
+            // stopped at the last of them.
+            record.BetweenFiles(i);
             cancellationToken.ThrowIfCancellationRequested();
+            record.TakeUpFile(i + 1);
             if (i % ReportEvery == 0)
-                run.Report(i, fileName);
+                run.Report(fileName);
 
             // The one read of this file. A failed read is the file's read
             // skip; a cancellation propagates out of the read, which no catch
@@ -513,6 +532,7 @@ public class LocalFolderProcessor
             // the run.
             await commit(staged, file);
         }
+        record.BetweenFiles(files.Count);
     }
 
     /// <summary>
@@ -544,8 +564,9 @@ public class LocalFolderProcessor
         // and a failure finishing it after a cancellation or a failure is
         // reported beside that ending, never in its place.
         CreateParentFolder(outputPath);
-        var run = new RunProgress(files.Count, progress, record);
-        var (file, path) = CreateOutput(outputPath);
+        record.Begin(files.Count);
+        var run = new RunProgress(progress, record);
+        var (file, path) = CreateOutput(record, outputPath, OutputFill.Appended, cancellationToken);
         var writer = new StreamWriter(file, Encoding.UTF8);
         await WriteThenCloseAsync(writer, path, async () =>
         {
@@ -558,7 +579,7 @@ public class LocalFolderProcessor
                 {
                     foreach (var row in rows)
                         await writer.WriteLineAsync(CsvLayout.Line(row));
-                    run.Add(rows.Count);
+                    record.Add(rows.Count);
                 },
                 cancellationToken);
         });
@@ -587,7 +608,8 @@ public class LocalFolderProcessor
         CreateParentFolder(outputPath);
 
         var allItems = new List<BgDecisionData>();
-        var run = new RunProgress(files.Count, progress, record);
+        record.Begin(files.Count);
+        var run = new RunProgress(progress, record);
         await ForEachFileAsync(
             folderPath, files, record, run,
             retainBytes: false,
@@ -595,13 +617,14 @@ public class LocalFolderProcessor
             commit: (items, _) =>
             {
                 allItems.AddRange(items);
-                run.Add(items.Count);
+                record.Add(items.Count);
                 return Task.CompletedTask;
             },
             cancellationToken);
 
         // The commit to the destination.
         var written = await WriteOutputAsync(
+            record,
             outputPath,
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(allItems, new JsonSerializerOptions { WriteIndented = true })),
             cancellationToken);
@@ -665,7 +688,8 @@ public class LocalFolderProcessor
 
         Directory.CreateDirectory(outputPath);
 
-        var run = new RunProgress(files.Count, progress, record);
+        record.Begin(files.Count);
+        var run = new RunProgress(progress, record);
         await ForEachFileAsync(
             folderPath, files, record, run,
             // A source copied verbatim needs its exact bytes; an anonymized
@@ -697,7 +721,7 @@ public class LocalFolderProcessor
                     await WriteNewFileAsync(outputPath, allocator.Peek(row), payload);
                     allocator.Commit(row);
                     record.Commit(new XgpExportCommit(options, allocator.CommittedCount));
-                    run.Add(1);
+                    record.Add(1);
                 }
             },
             cancellationToken);
@@ -743,7 +767,14 @@ public class LocalFolderProcessor
             (reqs, opts) => DiagramRasterRenderer.RenderPdf(reqs, opts),
             "PDF", runRecord, cancellationToken);
 
-    private async Task ProcessDeckAsync(
+    /// <summary>
+    /// The deck pathway both deck formats share, with its
+    /// <paramref name="renderer"/> stated: the library's PPTX or PDF render in
+    /// the application, or a test's stand-in — the render takes no token and
+    /// runs for minutes at corpus scale, and a stop pressed during it is
+    /// pinned through this.
+    /// </summary>
+    internal async Task ProcessDeckAsync(
             string folderPath,
             string outputPath,
             DecisionFilterSet filterSet,
@@ -759,7 +790,8 @@ public class LocalFolderProcessor
         CreateParentFolder(outputPath);
 
         var requests = new List<DiagramRequest>();
-        var run = new RunProgress(files.Count, progress, record);
+        record.Begin(files.Count);
+        var run = new RunProgress(progress, record);
         await ForEachFileAsync(
             folderPath, files, record, run,
             retainBytes: false,
@@ -777,60 +809,53 @@ public class LocalFolderProcessor
                     requests.Add(problem);
                     requests.Add(solution);
                 }
-                run.Add(pairs.Count);
+                record.Add(pairs.Count);
                 return Task.CompletedTask;
             },
             cancellationToken);
 
         // Render and write are atomic — the renderer returns the full byte[]
-        // and mid-render cancellation isn't supported. Cancellation gating
-        // happens during the per-file walk above. Both are the commit: a
-        // failure fails the run.
+        // and mid-render cancellation isn't supported: a stop pressed during
+        // the render waits for it, and is seen at the write, before the file
+        // is created (CreateOutput). Both are the commit: a failure fails the
+        // run.
         //
         // This is the last snapshot the client sees until the run finishes, and
         // the render dominates the wall clock (minutes, at corpus scale), so it
         // is stamped JobPhase.Rendering: the counter and the elapsed/throughput
         // figures have stopped advancing, and the phase is what tells the
         // client to stop presenting them as live.
-        run.ReportRendering($"Rendering {formatLabel} ({run.Rows} decisions, {requests.Count} slides)…");
+        run.ReportRendering($"Rendering {formatLabel} ({record.Rows} decisions, {requests.Count} slides)…");
 
         if (requests.Count == 0)
             throw new InvalidOperationException(
                 "No decisions matched the filter — nothing to render.");
 
         var deckBytes = renderer(requests, new DiagramOptions());
-        var written = await WriteOutputAsync(outputPath, deckBytes, cancellationToken);
+        var written = await WriteOutputAsync(record, outputPath, deckBytes, cancellationToken);
 
         run.ReportDone(written);
     }
 
     /// <summary>
-    /// One run's progress: its clock and row count, and the snapshots it
-    /// reports, each carrying the run's record — its skips and its XGP commit
-    /// — as it stands.
+    /// One run's progress: the snapshots it reports, each read off the run's
+    /// record — where the run stands, its clock and its rows, its skips and
+    /// its XGP commit — as it stands.
     /// </summary>
-    private sealed class RunProgress(int total, IProgress<ProcessingProgress> progress, RunRecord record)
+    private sealed class RunProgress(IProgress<ProcessingProgress> progress, RunRecord record)
     {
-        private readonly Stopwatch _clock = Stopwatch.StartNew();
-
-        /// <summary>Rows or decisions the run has produced so far.</summary>
-        public int Rows { get; private set; }
-
-        /// <summary>Counts <paramref name="count"/> more rows or decisions.</summary>
-        public void Add(int count) => Rows += count;
-
-        /// <summary>Reports the run about to take file <paramref name="index"/> (0-based).</summary>
-        public void Report(int index, string fileName)
+        /// <summary>Reports the run taking up <paramref name="fileName"/>, the file it has reached.</summary>
+        public void Report(string fileName)
         {
-            var elapsed = _clock.Elapsed.TotalSeconds;
+            var elapsed = record.ElapsedSec;
             progress.Report(new ProcessingProgress
             {
-                Current = index + 1,
-                Total = total,
+                Current = record.FileReached,
+                Total = record.Total,
                 FileName = fileName,
-                TotalRows = Rows,
+                TotalRows = record.Rows,
                 ElapsedSec = elapsed,
-                FilesPerSec = elapsed > 0 ? (int)(index / elapsed) : 0,
+                FilesPerSec = elapsed > 0 ? (int)(record.FilesDone / elapsed) : 0,
                 Skipped = record.Skips,
                 XgpCommit = record.XgpCommit,
             });
@@ -850,17 +875,17 @@ public class LocalFolderProcessor
 
         private ProcessingProgress Final(JobPhase phase, string line, bool complete)
         {
-            var elapsed = _clock.Elapsed.TotalSeconds;
+            var elapsed = record.ElapsedSec;
             return new ProcessingProgress
             {
-                Current = total,
-                Total = total,
+                Current = record.Total,
+                Total = record.Total,
                 Phase = phase,
                 FileName = line,
-                TotalRows = Rows,
+                TotalRows = record.Rows,
                 Complete = complete,
                 ElapsedSec = elapsed,
-                FilesPerSec = elapsed > 0 ? (int)(total / elapsed) : 0,
+                FilesPerSec = elapsed > 0 ? (int)(record.Total / elapsed) : 0,
                 Skipped = record.Skips,
                 XgpCommit = record.XgpCommit,
             };

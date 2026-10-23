@@ -5,72 +5,145 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// The terminal snapshots the job runner builds itself — after a cancellation
-/// and after a failure — from a run's record (halheinrich/backgammon#374).
-/// Neither may take what the run skipped or committed from the last progress
-/// report: the pathways report every tenth file, and a run-ending exception
-/// reports nothing, so the last report trails the record.
+/// The terminal snapshots the job runner builds itself — after a stop and
+/// after a failure — from a run's record (halheinrich/backgammon#374,
+/// halheinrich/backgammon#399). Neither may take what the run did from the
+/// last progress report: the pathways report every tenth file, and a
+/// run-ending exception reports nothing, so the last report trails the
+/// record. A stopped snapshot comes from the record alone: the file the run
+/// reached, the elapsed time and throughput at the stop, and what it left at
+/// its output.
 /// </summary>
 public class RunRecordTests
 {
+    private const string OutputPath = @"D:\xg\out (2).csv";
+
     private static readonly XgpExportOptions Options = new() { NamePattern = "r{n}", StartNumber = 9 };
 
-    /// <summary>A record that skipped one file and committed three positions.</summary>
-    private static RunRecord RecordAfterThreeWrites()
+    private readonly SteppedClock _clock = new();
+
+    /// <summary>
+    /// A record of a run over twelve files that has finished seven and taken
+    /// up the eighth, producing <paramref name="rows"/>, two seconds after its
+    /// walk began.
+    /// </summary>
+    private RunRecord RecordAtTheEighthFile(int rows = 41)
     {
-        var record = new RunRecord();
-        record.Skip(new SkippedItem("bad.xg", null, "Not a valid XG file."));
-        record.Commit(new XgpExportCommit(Options, 3));
+        var record = new RunRecord(_clock);
+        record.Begin(12);
+        for (var done = 0; done < 7; done++)
+        {
+            record.BetweenFiles(done);
+            record.TakeUpFile(done + 1);
+        }
+        record.Add(rows);
+        record.BetweenFiles(7);
+        record.TakeUpFile(8);
+        _clock.Advance(TimeSpan.FromSeconds(2));
         return record;
     }
 
-    /// <summary>The run's last report, made before the skip and the writes.</summary>
-    private static readonly ProcessingProgress LastReport = new()
-    {
-        Current = 1,
-        Total = 12,
-        FileName = "first.xg",
-        TotalRows = 0,
-        ElapsedSec = 0.4,
-        FilesPerSec = 2,
-        Skipped = SkipRecord.Empty,
-        XgpCommit = new XgpExportCommit(Options, 0),
-    };
-
     [Fact]
-    public void CancelledSnapshot_TakesWhereTheRunStoodFromItsLastReport_AndWhatItDidFromTheRecord()
+    public void AStoppedSnapshot_TakesWhereTheRunStood_ItsTimeAndWhatItDid_FromTheRecord()
     {
-        var record = RecordAfterThreeWrites();
+        var record = RecordAtTheEighthFile();
+        record.Skip(new SkippedItem("bad.xg", null, "Not a valid XG file."));
 
-        var terminal = record.CancelledSnapshot(LastReport);
+        var terminal = record.CancelledSnapshot();
 
         Assert.True(terminal.Complete);
         Assert.True(terminal.Cancelled);
         Assert.Null(terminal.ErrorMessage);
-        Assert.Equal((1, 12, "first.xg"), (terminal.Current, terminal.Total, terminal.FileName));
+        Assert.Equal((8, 12), (terminal.Current, terminal.Total));
+        Assert.Equal(41, terminal.TotalRows);
+        Assert.Equal(2.0, terminal.ElapsedSec);
+        // Seven files finished in two seconds.
+        Assert.Equal(3, terminal.FilesPerSec);
         Assert.Equal(record.Skips, terminal.Skipped);
-        Assert.Equal(new XgpExportCommit(Options, 3), terminal.XgpCommit);
-        // The line the client shows agrees with the accounting.
-        Assert.Equal(3, terminal.TotalRows);
-        Assert.NotSame(LastReport, terminal);
+        Assert.Null(terminal.XgpCommit);
     }
 
     [Fact]
-    public void CancelledSnapshot_OfARunWithNoCommit_KeepsItsLastReportedRowCount()
+    public void AStoppedSnapshot_ReadsTheClockAtTheStop_NotAtTheLastFile()
     {
-        var record = new RunRecord();
-        var last = new ProcessingProgress { Current = 3, Total = 8, TotalRows = 41 };
+        var record = RecordAtTheEighthFile();
+        _clock.Advance(TimeSpan.FromSeconds(1.5));
 
-        var terminal = record.CancelledSnapshot(last);
+        Assert.Equal(3.5, record.CancelledSnapshot().ElapsedSec);
+    }
 
-        Assert.Null(terminal.XgpCommit);
+    [Fact]
+    public void AStoppedSnapshot_BetweenFiles_HasReachedTheLastFileFinished()
+    {
+        var record = RecordAtTheEighthFile();
+        record.BetweenFiles(8);
+
+        var terminal = record.CancelledSnapshot();
+
+        Assert.Equal(8, terminal.Current);
+        Assert.Equal(4, terminal.FilesPerSec);
+    }
+
+    [Fact]
+    public void AStoppedXgpSnapshot_CountsItsCommit()
+    {
+        var record = RecordAtTheEighthFile(rows: 3);
+        record.Commit(new XgpExportCommit(Options, 3));
+
+        var terminal = record.CancelledSnapshot();
+
+        Assert.Equal(new XgpExportCommit(Options, 3), terminal.XgpCommit);
+        Assert.Equal(3, terminal.TotalRows);
+        Assert.Null(terminal.StoppedOutput);
+    }
+
+    [Fact]
+    public void AStopBeforeTheOutputWasCreated_LeftNothing()
+    {
+        Assert.Null(RecordAtTheEighthFile().CancelledSnapshot().StoppedOutput);
+    }
+
+    [Fact]
+    public void AStoppedCsvThatClosed_HoldsExactlyItsRows_AtThePathItWasCreatedAt()
+    {
+        var record = RecordAtTheEighthFile();
+        record.OutputCreated(OutputPath, OutputFill.Appended);
+
+        var terminal = record.CancelledSnapshot();
+
+        Assert.Equal(new StoppedOutput(OutputPath, mayBeIncomplete: false), terminal.StoppedOutput);
         Assert.Equal(41, terminal.TotalRows);
+        Assert.Null(terminal.CloseFailureMessage);
+    }
+
+    [Fact]
+    public void AStoppedCsvWhoseCloseFailed_MayBeIncomplete_WithTheCloseFailureBesideIt()
+    {
+        var record = RecordAtTheEighthFile();
+        record.OutputCreated(OutputPath, OutputFill.Appended);
+
+        var terminal = record.CancelledSnapshot("Closing the unfinished out (2).csv failed: gone.");
+
+        Assert.Equal(new StoppedOutput(OutputPath, mayBeIncomplete: true), terminal.StoppedOutput);
+        Assert.Equal("Closing the unfinished out (2).csv failed: gone.", terminal.CloseFailureMessage);
+    }
+
+    [Fact]
+    public void AStopOnceAWholeOutputWasCreated_MayBeIncomplete()
+    {
+        const string deck = @"D:\xg\deck.pdf";
+        var record = RecordAtTheEighthFile();
+        record.OutputCreated(deck, OutputFill.Whole);
+
+        Assert.Equal(new StoppedOutput(deck, mayBeIncomplete: true), record.CancelledSnapshot().StoppedOutput);
     }
 
     [Fact]
     public void FailedSnapshot_CarriesTheErrorWithWhatTheRunSkippedAndCommitted()
     {
-        var record = RecordAfterThreeWrites();
+        var record = new RunRecord();
+        record.Skip(new SkippedItem("bad.xg", null, "Not a valid XG file."));
+        record.Commit(new XgpExportCommit(Options, 3));
 
         var terminal = record.FailedSnapshot("Disk full.");
 
@@ -80,5 +153,18 @@ public class RunRecordTests
         Assert.Equal(record.Skips, terminal.Skipped);
         Assert.Equal(new XgpExportCommit(Options, 3), terminal.XgpCommit);
         Assert.Equal(3, terminal.TotalRows);
+    }
+
+    /// <summary>A record belongs to one run: once its walk has begun it is not fresh, and it cannot begin again.</summary>
+    [Fact]
+    public void ARecordWhoseWalkHasBegun_IsNotFresh_AndCannotBeginAgain()
+    {
+        var record = new RunRecord(_clock);
+        Assert.True(record.IsFresh);
+
+        record.Begin(3);
+
+        Assert.False(record.IsFresh);
+        Assert.Throws<InvalidOperationException>(() => record.Begin(3));
     }
 }

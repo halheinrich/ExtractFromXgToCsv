@@ -69,9 +69,9 @@ public class ProcessingProgressWireTests
     /// <summary>
     /// A snapshot is immutable: every property is set when it is made, or
     /// computed, and none can be set afterwards. The job store keeps the
-    /// snapshot a run reported, serves it to every status read and hands it to
-    /// the builder of the terminal result, so a settable property would let
-    /// any holder change what another reads, outside the store's lock.
+    /// snapshot a run reported and serves it to every status read, so a
+    /// settable property would let any holder change what another reads,
+    /// outside the store's lock.
     /// </summary>
     [Fact]
     public void ASnapshot_HasNoPropertyThatCanBeSetAfterItIsMade()

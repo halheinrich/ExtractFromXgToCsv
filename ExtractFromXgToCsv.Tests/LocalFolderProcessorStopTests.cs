@@ -1,0 +1,236 @@
+using BackgammonDiagram_Lib;
+using BackgammonDiagram_Lib.ExportRaster;
+using ConvertXgToJson_Lib;
+using ExtractFromXgToCsv.Client.Shared;
+using ExtractFromXgToCsv.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using XgFilter_Lib;
+using XgFilter_Lib.Filtering;
+using Xunit;
+
+namespace ExtractFromXgToCsv.Tests;
+
+/// <summary>
+/// What a stopped run reports and leaves (halheinrich/backgammon#399, item 1):
+/// the stopped snapshot the job runner builds from the run's record says the
+/// file the run reached, the elapsed time at the stop and, for its one output
+/// file, whether it was created, where, and whether what it holds is known —
+/// never the last progress report's figures, which trail the run by up to ten
+/// files. No output is created once the run is stopped: the token is checked
+/// immediately before the create, so a run stopped before its write — a
+/// deck's render included, which takes no token — writes nothing; a stop that
+/// lands once the file exists leaves it, reported as possibly incomplete.
+/// </summary>
+/// <remarks>
+/// A run is stopped at a chosen decision by <see cref="CancelAtCall"/>, during
+/// a deck's render by a renderer stand-in, and once its output exists by
+/// <see cref="ScriptedDestination.AfterCreate"/>. The record's clock is a
+/// <see cref="SteppedClock"/>, moved only at the stop, so the time at the stop
+/// is exact.
+/// </remarks>
+public class LocalFolderProcessorStopTests : IDisposable
+{
+    private const string Fixture = "MTCH4064.xg";
+
+    private readonly string _folder = Directory.CreateTempSubdirectory("xg-stop-").FullName;
+    private readonly string _outputFolder;
+    private readonly SteppedClock _clock = new();
+    private readonly CancellationTokenSource _cts = new();
+    private readonly RunRecord _record;
+
+    public LocalFolderProcessorStopTests()
+    {
+        // Discovery reads only .xg and .xgp files, so the outputs can sit
+        // under the input folder.
+        _outputFolder = Directory.CreateDirectory(Path.Combine(_folder, "out")).FullName;
+        _record = new RunRecord(_clock);
+        foreach (var name in new[] { "a.xg", "b.xg", "c.xg" })
+            File.Copy(Path.Combine(FixtureHelper.FixtureDir, Fixture), Path.Combine(_folder, name));
+    }
+
+    public void Dispose()
+    {
+        _cts.Dispose();
+        try { Directory.Delete(_folder, recursive: true); } catch { /* best effort */ }
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>The fixture's decisions, as each copy of it contributes.</summary>
+    private static int DecisionsPerFile { get; } =
+        XgDecisionIterator.Iterate(XgFileReader.ReadFile(Path.Combine(FixtureHelper.FixtureDir, Fixture)), Fixture).Count();
+
+    private static LocalFolderProcessor Processor(IOutputDestination? destination = null) =>
+        new(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance,
+            AppRanking.Ranking, bookProvider: null, XgpPayload.Prepare, destination ?? FileSystemDestination.Instance);
+
+    private string Output(string name) => Path.Combine(_outputFolder, name);
+
+    /// <summary>A filter set that stops the run, half a second in, at the second file's first decision.</summary>
+    private DecisionFilterSet StopInTheSecondFile() =>
+        CancelAtCall.Set(DecisionsPerFile + 1, () =>
+        {
+            _clock.Advance(TimeSpan.FromSeconds(0.5));
+            _cts.Cancel();
+        });
+
+    /// <summary>A deck renderer stand-in: <paramref name="whileRendering"/> runs inside it, and it returns a few bytes.</summary>
+    private static Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> Renderer(Action? whileRendering = null) =>
+        (requests, _) =>
+        {
+            Assert.NotEmpty(requests);
+            whileRendering?.Invoke();
+            return [1, 2, 3, 4];
+        };
+
+    private Task DeckAsync(
+        string outputPath, DecisionFilterSet filters, RecordingProgress progress,
+        Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> renderer, IOutputDestination? destination = null) =>
+        Processor(destination).ProcessDeckAsync(
+            _folder, outputPath, filters, progress, renderer, "PDF", _record, _cts.Token);
+
+    // ── CSV ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Stopped in the second of three files: the run reached the second file,
+    /// its file — created under the next free name, as one existed — holds
+    /// exactly the rows the stop reports, and the time is the stop's. The
+    /// last progress report, made at the first file, says none of it.
+    /// </summary>
+    [Fact]
+    public async Task ACsvRunStoppedAtTheSecondFile_ReportsTheFileReached_TheRowsItsFileHolds_ItsPath_AndTheTimeAtTheStop()
+    {
+        File.WriteAllText(Output("out.csv"), "not the run's");
+        var progress = new RecordingProgress();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor().ProcessAsync(
+            _folder, Output("out.csv"), StopInTheSecondFile(), progress, _record, _cts.Token));
+
+        var stopped = _record.CancelledSnapshot();
+        var created = Output("out (2).csv");
+        var rowsHeld = File.ReadAllLines(created).Length - 1;
+        Assert.Equal(2 * DecisionsPerFile, rowsHeld);
+        Assert.Equal((2, 3), (stopped.Current, stopped.Total));
+        Assert.Equal(rowsHeld, stopped.TotalRows);
+        Assert.Equal(new StoppedOutput(created, mayBeIncomplete: false), stopped.StoppedOutput);
+        Assert.Equal(0.5, stopped.ElapsedSec);
+        // Two files finished in half a second.
+        Assert.Equal(4, stopped.FilesPerSec);
+        Assert.Equal("not the run's", File.ReadAllText(Output("out.csv")));
+
+        // What the stop line would have said from the last report.
+        Assert.Equal((1, 0, 0.0), (progress.Last!.Current, progress.Last.TotalRows, progress.Last.ElapsedSec));
+    }
+
+    [Fact]
+    public async Task ACsvRunStoppedBeforeItsCreate_WritesNoFile_AndReportsNothingWritten()
+    {
+        _cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor().ProcessAsync(
+            _folder, Output("out.csv"), new DecisionFilterSet(), new RecordingProgress(), _record, _cts.Token));
+
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+        var stopped = _record.CancelledSnapshot();
+        Assert.Null(stopped.StoppedOutput);
+        Assert.Equal((0, 3), (stopped.Current, stopped.Total));
+    }
+
+    /// <summary>
+    /// A CSV whose close fails after the stop: what it holds is uncertain, so
+    /// the stop reports its path as possibly incomplete, with the close
+    /// failure beside it; the run is still stopped.
+    /// </summary>
+    [Fact]
+    public async Task ACsvWhoseCloseFailsAfterTheStop_ReportsItsPathAsPossiblyIncomplete_TheCloseFailureBesideIt()
+    {
+        var destination = new ScriptedDestination { FailCloseOf = "out.csv" };
+
+        var ended = await Assert.ThrowsAsync<CancelledWithUnfinishedOutputException>(() => Processor(destination).ProcessAsync(
+            _folder, Output("out.csv"), StopInTheSecondFile(), new RecordingProgress(), _record, _cts.Token));
+
+        var stopped = _record.CancelledSnapshot(ended.CloseFailureMessage);
+        Assert.True(stopped.Cancelled);
+        Assert.Equal(new StoppedOutput(Output("out.csv"), mayBeIncomplete: true), stopped.StoppedOutput);
+        Assert.Equal($"Closing the unfinished out.csv failed: {ScriptedDestination.CloseFailure}", stopped.CloseFailureMessage);
+    }
+
+    // ── Diagram JSON and the decks ──────────────────────────────────────────
+
+    [Fact]
+    public async Task ADiagramJsonRunStoppedDuringTheRead_CreatesNoFile_AndReportsNothingWritten()
+    {
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Processor().ProcessDiagramAsync(
+            _folder, Output("out.json"), StopInTheSecondFile(), new RecordingProgress(), _record, _cts.Token));
+
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+        var stopped = _record.CancelledSnapshot();
+        Assert.Null(stopped.StoppedOutput);
+        Assert.Equal((2, 3), (stopped.Current, stopped.Total));
+    }
+
+    [Fact]
+    public async Task ADeckRunStoppedDuringTheRead_CreatesNoFile_AndReportsNothingWritten()
+    {
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => DeckAsync(
+            Output("deck.pdf"), StopInTheSecondFile(), new RecordingProgress(),
+            (_, _) => throw new InvalidOperationException("A stopped walk renders nothing.")));
+
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+        Assert.Null(_record.CancelledSnapshot().StoppedOutput);
+    }
+
+    /// <summary>
+    /// A Stop pressed during the render waits for it — the render takes no
+    /// token — and is seen before the file is created: nothing is written,
+    /// where before the run created the file and wrote nothing into it.
+    /// </summary>
+    [Fact]
+    public async Task ADeckRunStoppedDuringTheRender_CreatesNoFile_AndReportsNothingWritten()
+    {
+        var progress = new RecordingProgress();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => DeckAsync(
+            Output("deck.pdf"), new DecisionFilterSet(), progress, Renderer(whileRendering: _cts.Cancel)));
+
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+        var stopped = _record.CancelledSnapshot();
+        Assert.Null(stopped.StoppedOutput);
+        Assert.Equal((3, 3), (stopped.Current, stopped.Total));
+        Assert.Equal(JobPhase.Rendering, progress.Last!.Phase);
+    }
+
+    /// <summary>
+    /// A stop that lands once the one output file exists — here the moment it
+    /// is created, before its write — leaves the file, under the path it was
+    /// created at, reported as possibly incomplete; a failure then closing it
+    /// is reported beside the stop.
+    /// </summary>
+    [Theory]
+    [InlineData("json", false)]
+    [InlineData("json", true)]
+    [InlineData("pdf", false)]
+    [InlineData("pdf", true)]
+    public async Task AStopOnceTheOutputExists_ReportsTheCreatedPathAsPossiblyIncomplete(string format, bool closeFails)
+    {
+        var name = $"out.{format}";
+        File.WriteAllText(Output(name), "not the run's");
+        var created = Output($"out (2).{format}");
+        var destination = new ScriptedDestination
+        {
+            AfterCreate = _cts.Cancel,
+            FailCloseOf = closeFails ? Path.GetFileName(created) : null,
+        };
+
+        var ended = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => format == "json"
+            ? Processor(destination).ProcessDiagramAsync(
+                _folder, Output(name), new DecisionFilterSet(), new RecordingProgress(), _record, _cts.Token)
+            : DeckAsync(Output(name), new DecisionFilterSet(), new RecordingProgress(), Renderer(), destination));
+
+        var closeFailure = (ended as CancelledWithUnfinishedOutputException)?.CloseFailureMessage;
+        Assert.Equal(closeFails, closeFailure is not null);
+        var stopped = _record.CancelledSnapshot(closeFailure);
+        Assert.Equal(new StoppedOutput(created, mayBeIncomplete: true), stopped.StoppedOutput);
+        Assert.Equal(closeFailure, stopped.CloseFailureMessage);
+        Assert.True(File.Exists(created));
+    }
+}

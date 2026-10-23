@@ -8,14 +8,13 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// <remarks>
 /// Immutable: every property is set when the snapshot is made, and a changed
 /// snapshot is a new one (<c>with</c>). So the job store can keep the snapshot
-/// a run reported, serve it to every status read, and hand it to the builder
-/// of the terminal result, and no holder — the run, the store, a reader, a
-/// builder — can change what another reads, inside the store's lock or out of
-/// it.
+/// a run reported and serve it to every status read, and no holder — the run,
+/// the store, a reader — can change what another reads, inside the store's
+/// lock or out of it.
 /// </remarks>
 public sealed record ProcessingProgress
 {
-    /// <summary>1-based index of the file currently being processed.</summary>
+    /// <summary>1-based index of the file currently being processed; on a stopped snapshot, the file the run reached.</summary>
     public int Current { get; init; }
 
     /// <summary>Total number of input files discovered for the run.</summary>
@@ -76,6 +75,15 @@ public sealed record ProcessingProgress
     /// <see cref="ErrorMessage"/>.
     /// </summary>
     public string? CloseFailureMessage { get; init; }
+
+    /// <summary>
+    /// On a cancelled terminal snapshot of a CSV, Diagram JSON, PPTX or PDF
+    /// run, the output file the run had created when it stopped, from the
+    /// run's record; <see langword="null"/> when it stopped before creating
+    /// one — nothing written — and on every other snapshot. An XGP run's
+    /// files are its <see cref="XgpCommit"/>'s.
+    /// </summary>
+    public StoppedOutput? StoppedOutput { get; init; }
 
     /// <summary>
     /// Every unit the run has skipped so far, in the order skipped — a file it
