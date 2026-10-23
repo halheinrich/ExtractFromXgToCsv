@@ -12,8 +12,9 @@ namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
 /// Wiring tests for the Local-mode Xgp pathway. Slice correctness is owned
-/// by ConvertXgToJson_Lib's XgpExporter tests, the app-side batching rules
-/// by <see cref="XgpExportServiceTests"/>, and naming mechanics by
+/// by ConvertXgToJson_Lib's XgpExporter tests, the app-side file rules —
+/// never overwriting, and removing a file the run did not finish — by
+/// <see cref="LocalFolderProcessorNoOverwriteTests"/>, and naming mechanics by
 /// <see cref="XgpNameTemplateTests"/> / <see cref="XgpNameAllocatorTests"/>;
 /// these tests verify that
 /// <see cref="LocalFolderProcessor.ProcessXgpAsync"/> writes one correctly
