@@ -136,8 +136,8 @@ commit has reached the controls.
   where it agrees today (Hal, 2026-09-29, halheinrich/backgammon#273).
 - **The opening book** (`OpeningBookProvider`, loaded once): the
   `OpeningBookPath` key when non-empty, XG's default install when absent,
-  none when empty. It changes depth labels and levels, never which decisions
-  pass.
+  none when empty. It enriches depth metadata; recovered levels can change
+  which decisions pass depth filters.
 - **Browser storage.** Every call goes through BgUiPrimitives_Razor's
   `BrowserStorage` (Hal's ruling, halheinrich/backgammon#374), its owners
   shared because common code has one shared owner (Hal's ruling, 2026-10-19,
