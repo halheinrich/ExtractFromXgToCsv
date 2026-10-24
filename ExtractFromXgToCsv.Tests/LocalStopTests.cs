@@ -105,6 +105,67 @@ public class LocalStopTests : IAsyncLifetime
         Assert.Equal(StopPendingHint, page.Home.Find("#stopPendingHint").TextContent.Trim());
         Assert.Equal("text-muted", page.Home.Find("#stopPendingHint").ClassName);
         Assert.DoesNotContain("Stopped", page.Home.Markup);
+        // The pending hint and "Stopping…" never show together.
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
+    }
+
+    /// <summary>"Stopping…", in Hal's wording (chat, 2026-10-24) — an independent literal.</summary>
+    private const string StoppingNotice = "Stopping…";
+
+    /// <summary>
+    /// A delivered Stop is under way: "Stopping…" shows from the cancel's
+    /// confirmed delivery — the job still held at its next file, so the run
+    /// goes on — until the run's terminal result, which says it stopped.
+    /// </summary>
+    [Fact]
+    public async Task ADeliveredStop_ShowsStopping_UntilTheTerminalResult()
+    {
+        _server.AddASecondMatch();
+        var page = Open();
+        _server.Gate.Close();
+        var run = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
+
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+
+        page.WaitForScreen(() => Assert.Equal(StoppingNotice, page.Home.Find("#stoppingNotice").TextContent.Trim()));
+        Assert.Empty(page.Home.FindAll("#stopPendingHint"));
+        Assert.False(run.IsCompleted);
+        Assert.Single(page.Home.FindAll("div.is-busy"));
+
+        _server.Gate.Open();
+        await run.WaitAsync(NoticeTesting.OperationBound);
+
+        page.WaitForScreen(() => Assert.Contains("Stopped", page.Home.Find("#stoppedLine").TextContent));
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
+    }
+
+    /// <summary>A delivered Stop's "Stopping…" ends with its run: the next run shows none.</summary>
+    [Fact]
+    public async Task ADeliveredStop_DoesNotSurviveIntoTheNextRun()
+    {
+        _server.AddASecondMatch();
+        var page = Open();
+        _server.Gate.Close();
+        var first = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        Poll(() => StatusReads > 0);
+        await StopButton(page).ClickAsync(new MouseEventArgs());
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll("#stoppingNotice")));
+        _server.Gate.Open();
+        await first.WaitAsync(NoticeTesting.OperationBound);
+
+        _server.Gate.Close();
+        var next = page.RunAsync();
+        await _server.Gate.Reached.WaitAsync(NoticeTesting.OperationBound);
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll("div.is-busy")));
+
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
+        _server.Gate.Open();
+        await next.WaitAsync(NoticeTesting.OperationBound);
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
     }
 
     // ── Following ───────────────────────────────────────────────────────────
@@ -246,7 +307,12 @@ public class LocalStopTests : IAsyncLifetime
         // Answered — admitted, the cancel sent and still held — the hint is
         // gone; the stopped result is the run's to say.
         page.WaitForScreen(() => Assert.Empty(page.Home.FindAll("#stopPendingHint")));
+        // Nor is "Stopping…" up yet: the cancel's delivery is not confirmed.
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
         cancel.Release();
+        // Confirmed: "Stopping…" alone, the pending hint long gone.
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll("#stoppingNotice")));
+        Assert.Empty(page.Home.FindAll("#stopPendingHint"));
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);
 
@@ -286,7 +352,12 @@ public class LocalStopTests : IAsyncLifetime
         heldRetry.Release();
         await cancel.Forwarded.WaitAsync(NoticeTesting.OperationBound);
         page.WaitForScreen(() => Assert.Empty(page.Home.FindAll("#stopPendingHint")));
+        // Nor is "Stopping…" up yet: the cancel's delivery is not confirmed.
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
         cancel.Release();
+        // Confirmed: "Stopping…" alone, the pending hint long gone.
+        page.WaitForScreen(() => Assert.Single(page.Home.FindAll("#stoppingNotice")));
+        Assert.Empty(page.Home.FindAll("#stopPendingHint"));
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);
 
@@ -421,6 +492,8 @@ public class LocalStopTests : IAsyncLifetime
 
         page.WaitForScreen(() => Assert.Equal(shown,
             Assert.Single(NoticeBox.AllIn(page.Home), b => b.Kind == NoticeKind.Error).Content.TextContent.Trim()));
+        // No Stop was delivered, so nothing says one is under way.
+        Assert.Empty(page.Home.FindAll("#stoppingNotice"));
         Assert.False(run.IsCompleted);
         _server.Gate.Open();
         await run.WaitAsync(NoticeTesting.OperationBound);

@@ -101,6 +101,15 @@
             {
                 <small class="text-muted" id="stopPendingHint">Stop requested; waiting for the server.</small>
             }
+            @* A delivered Stop is under way, until the run's terminal result
+               (Hal's wording, chat, 2026-10-24). Never beside the pending
+               hint: that ends at the start's answer, and this begins at the
+               cancel's confirmed delivery; a refused or unconfirmed cancel
+               shows its run error instead. *@
+            @if (App.IsStopping)
+            {
+                <small class="text-muted" id="stoppingNotice">Stopping…</small>
+            }
         }
         @* Only with a source: without a folder nothing can be in effect, the
            empty filter included, and the blank folder box already says why

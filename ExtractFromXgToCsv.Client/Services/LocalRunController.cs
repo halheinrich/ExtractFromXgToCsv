@@ -60,6 +60,15 @@ internal sealed class LocalRunController
     /// <summary>Whether a Stop pressed while the start was unanswered still waits for the answer.</summary>
     public bool IsStopPending => _stopPending;
 
+    /// <summary>
+    /// Whether a Stop was confirmed delivered for the job the run in hand
+    /// follows: from the cancel's confirmed delivery until the run's terminal
+    /// result is published, when the job leaves hand. Never for a refused or
+    /// unconfirmed cancel, and never beside <see cref="IsStopPending"/>, which
+    /// ends at the start's answer, before any job is in hand.
+    /// </summary>
+    public bool IsStopping => _jobInHand is { StopDelivered: true };
+
     /// <summary>The last run's skip record, while it stands; null while there is none.</summary>
     public SkipRecord? LastRunSkips => _lastRun?.Skips;
 
@@ -361,7 +370,11 @@ internal sealed class LocalRunController
         }
         job.ConfirmStopDelivered();
         if (_stopFailure is null)
+        {
+            // Nothing else changes on screen but that a Stop is under way.
+            _changed();
             return;
+        }
         _stopFailure = null;
         if (_stillTrying == StillTryingNotice.Suppressed)
             _stillTrying = StillTryingNotice.Shown;

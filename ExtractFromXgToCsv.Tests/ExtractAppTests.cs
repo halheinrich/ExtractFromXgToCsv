@@ -310,9 +310,37 @@ public class ExtractAppTests : BunitContext
 
         Assert.Equal(0, Cancels);
         Assert.False(App.IsStopPending);
+        Assert.False(App.IsStopping);
 
         acknowledgement.Release();
         await run.WaitAsync(Bound);
+    }
+
+    /// <summary>
+    /// A Stop delivered for the run in hand raises the coordinator's change
+    /// notification with <see cref="ExtractApp.IsStopping"/> set — the status
+    /// reads held, so nothing else would re-render the page — and it holds
+    /// until the run's terminal result is published.
+    /// </summary>
+    [Fact]
+    public async Task ADeliveredStop_RaisesChanged_WithIsStopping_UntilTheTerminalResult()
+    {
+        Serve(new CapturingProcessHandler(new ProcessingProgress { Complete = true, Cancelled = true, StoppedAt = StopStage.DuringInput }));
+        await ReadyAsync();
+        _server.HoldStatus();
+        var run = On(App.RunAsync);
+        await _server.StatusReached.WaitAsync(Bound);
+        var seenStopping = false;
+        App.Changed += () => seenStopping |= App.IsStopping;
+
+        await On(App.StopAsync).WaitAsync(Bound);
+
+        Assert.Equal(1, Cancels);
+        Assert.True(seenStopping);
+        Assert.True(App.IsStopping);
+        _server.ReleaseStatus();
+        await run.WaitAsync(Bound);
+        Assert.False(App.IsStopping);
     }
 
     // ── The restore ─────────────────────────────────────────────────────────

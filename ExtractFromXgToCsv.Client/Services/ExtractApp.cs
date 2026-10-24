@@ -196,6 +196,9 @@ internal sealed class ExtractApp : IDisposable
     /// <summary>Whether a Stop pressed before the start was answered still waits for the answer.</summary>
     public bool IsStopPending => _run.IsStopPending;
 
+    /// <summary>Whether a delivered Stop is under way: from its confirmed delivery until the run's terminal result.</summary>
+    public bool IsStopping => _run.IsStopping;
+
     public SkipRecord? LastRunSkips => _run.LastRunSkips;
 
     public string? LastRunLabel => _run.LastRunLabel;
