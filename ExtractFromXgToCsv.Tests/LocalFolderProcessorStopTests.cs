@@ -16,10 +16,11 @@ namespace ExtractFromXgToCsv.Tests;
 /// file the run reached, the elapsed time at the stop and, for its one output
 /// file, whether it was created, where, and whether what it holds is known —
 /// never the last progress report's figures, which trail the run by up to ten
-/// files. No output is created once the run is stopped: the token is checked
-/// immediately before the create, so a run stopped before its write — a
-/// deck's render included, which takes no token — writes nothing; a stop that
-/// lands once the file exists leaves it, reported as possibly incomplete.
+/// files. No output is created once the run is stopped: a deck's render takes
+/// the run's token and ends at the stop, and the token is checked again
+/// immediately before the create, so a run stopped before its write writes
+/// nothing; a stop that lands once the file exists leaves it, reported as
+/// possibly incomplete.
 /// </summary>
 /// <remarks>
 /// A run is stopped at a chosen decision by <see cref="CancelAtCall"/>, during
@@ -73,9 +74,13 @@ public class LocalFolderProcessorStopTests : IDisposable
             _cts.Cancel();
         });
 
-    /// <summary>A deck renderer stand-in: <paramref name="whileRendering"/> runs inside it, and it returns a few bytes.</summary>
-    private static Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> Renderer(Action? whileRendering = null) =>
-        (requests, _) =>
+    /// <summary>
+    /// A deck renderer stand-in that ignores the token it is handed:
+    /// <paramref name="whileRendering"/> runs inside it, and it returns a few
+    /// bytes whatever has been stopped.
+    /// </summary>
+    private static Func<IEnumerable<DiagramRequest>, DiagramOptions, CancellationToken, byte[]> Renderer(Action? whileRendering = null) =>
+        (requests, _, _) =>
         {
             Assert.NotEmpty(requests);
             whileRendering?.Invoke();
@@ -84,7 +89,7 @@ public class LocalFolderProcessorStopTests : IDisposable
 
     private Task DeckAsync(
         string outputPath, DecisionFilterSet filters, RecordingProgress progress,
-        Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> renderer, IOutputDestination? destination = null) =>
+        Func<IEnumerable<DiagramRequest>, DiagramOptions, CancellationToken, byte[]> renderer, IOutputDestination? destination = null) =>
         Processor(destination).ProcessDeckAsync(
             _folder, outputPath, filters, progress, renderer, "PDF", _record, _cts.Token);
 
@@ -177,7 +182,7 @@ public class LocalFolderProcessorStopTests : IDisposable
     {
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => DeckAsync(
             Output("deck.pdf"), StopInTheSecondFile(), new RecordingProgress(),
-            (_, _) => throw new InvalidOperationException("A stopped walk renders nothing.")));
+            (_, _, _) => throw new InvalidOperationException("A stopped walk renders nothing.")));
 
         Assert.Empty(Directory.GetFiles(_outputFolder));
         Assert.Null(_record.CancelledSnapshot().StoppedOutput);
@@ -185,12 +190,13 @@ public class LocalFolderProcessorStopTests : IDisposable
     }
 
     /// <summary>
-    /// A Stop pressed during the render waits for it — the render takes no
-    /// token — and is seen before the file is created: nothing is written,
-    /// where before the run created the file and wrote nothing into it.
+    /// The safety net: a render that ignores its token and returns despite a
+    /// Stop pressed during it is caught at the check before the output is
+    /// created (CreateOutput) — nothing is written, where before that check
+    /// the run created the file and wrote nothing into it.
     /// </summary>
     [Fact]
-    public async Task ADeckRunStoppedDuringTheRender_CreatesNoFile_AndReportsNothingWritten()
+    public async Task ADeckRenderThatReturnsDespiteAStop_IsCaughtBeforeTheCreate_AndWritesNothing()
     {
         var progress = new RecordingProgress();
 
@@ -341,7 +347,7 @@ public class LocalFolderProcessorStopTests : IDisposable
                 _folder, Output("out.json"), new DecisionFilterSet(), progress, _record, _cts.Token),
             OutputFormat.Pdf => DeckAsync(
                 Output("deck.pdf"), new DecisionFilterSet(), progress,
-                (_, _) => throw new InvalidOperationException("A stopped walk renders nothing.")),
+                (_, _, _) => throw new InvalidOperationException("A stopped walk renders nothing.")),
             _ => Processor().ProcessXgpAsync(
                 _folder, _outputFolder, new DecisionFilterSet(), new XgpExportOptions(), new FilterConfig(),
                 progress, runRecord: _record, cancellationToken: _cts.Token),
@@ -374,5 +380,101 @@ public class LocalFolderProcessorStopTests : IDisposable
         Assert.Equal((2, 2), (stopped.Current, stopped.Total));
         Assert.Equal("broken.xg", Assert.Single(stopped.Skipped).FileName);
         Assert.Null(stopped.StoppedOutput);
+    }
+
+    // ── A Stop during the render ────────────────────────────────────────────
+    //
+    // The render takes the run's token (halheinrich/backgammon#424, Hal's
+    // word 2026-10-23): BackgammonDiagram_Lib honours it between pages, so a
+    // Stop pressed during a long render ends it there, rather than waiting
+    // for the whole document.
+
+    // The real PDF renders below go through QuestPDF, whose license must be
+    // set before any call; as the suite's other PDF tests do, this class sets
+    // its own.
+    static LocalFolderProcessorStopTests()
+    {
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+    }
+
+    /// <summary>
+    /// A render stand-in that honours the token it is handed, as the library
+    /// does: page by page, the token checked before each, the Stop pressed
+    /// once <see cref="StopAt"/> pages are built. It records how far it got.
+    /// </summary>
+    private sealed class TokenHonouringRender(Action stop)
+    {
+        /// <summary>The pages a render runs to when nothing stops it.</summary>
+        public const int Pages = 1_000;
+
+        /// <summary>The page count at which the stand-in presses Stop.</summary>
+        public const int StopAt = 3;
+
+        /// <summary>The pages built before the render ended.</summary>
+        public int Built { get; private set; }
+
+        public byte[] Render(IEnumerable<DiagramRequest> requests, DiagramOptions options, CancellationToken token)
+        {
+            Assert.NotEmpty(requests);
+            for (Built = 0; Built < Pages; Built++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (Built == StopAt)
+                    stop();
+            }
+            return [1, 2, 3, 4];
+        }
+    }
+
+    /// <summary>
+    /// A Stop pressed during the render ends it at its next page: the run ends
+    /// cancelled while the render is still running — cut short, not run out —
+    /// with nothing written, after the input.
+    /// </summary>
+    [Fact]
+    public async Task ADeckRunStoppedDuringTheRender_EndsTheRender_WritesNothing_AfterTheInput()
+    {
+        var render = new TokenHonouringRender(_cts.Cancel);
+
+        var stoppedBy = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => DeckAsync(
+            Output("deck.pdf"), new DecisionFilterSet(), new RecordingProgress(), render.Render));
+
+        Assert.Equal(TokenHonouringRender.StopAt + 1, render.Built);
+        Assert.Equal(_cts.Token, stoppedBy.CancellationToken);
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+        var stopped = _record.CancelledSnapshot();
+        Assert.Null(stopped.StoppedOutput);
+        Assert.Equal(StopStage.AfterInput, stopped.StoppedAt);
+    }
+
+    /// <summary>
+    /// The token <see cref="LocalFolderProcessor.ProcessPdfAsync"/> and
+    /// <see cref="LocalFolderProcessor.ProcessPptxAsync"/> hand the library is
+    /// the run's: Stop pressed as the render begins, the run ends with the
+    /// library's own cancellation for that token — thrown inside
+    /// BackgammonDiagram_Lib, not by the check before the create — and
+    /// nothing is written.
+    /// </summary>
+    [Theory]
+    [InlineData(OutputFormat.Pdf)]
+    [InlineData(OutputFormat.Pptx)]
+    public async Task TheDeckPathways_HandTheLibraryTheRunsToken(OutputFormat format)
+    {
+        LeaveOneInputFile();
+        var progress = new RecordingProgress(report =>
+        {
+            if (report.Phase == JobPhase.Rendering)
+                _cts.Cancel();
+        });
+        var output = Output(format == OutputFormat.Pdf ? "deck.pdf" : "deck.pptx");
+
+        var stoppedBy = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => format == OutputFormat.Pdf
+            ? Processor().ProcessPdfAsync(_folder, output, new DecisionFilterSet(), progress, _record, _cts.Token)
+            : Processor().ProcessPptxAsync(_folder, output, new DecisionFilterSet(), progress, _record, _cts.Token));
+
+        Assert.Equal(_cts.Token, stoppedBy.CancellationToken);
+        Assert.Contains("BackgammonDiagram_Lib", stoppedBy.StackTrace);
+        Assert.Empty(Directory.GetFiles(_outputFolder));
+        Assert.Equal(StopStage.AfterInput, _record.CancelledSnapshot().StoppedAt);
     }
 }

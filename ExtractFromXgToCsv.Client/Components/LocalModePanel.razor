@@ -138,12 +138,14 @@
             }
             else if (progress is { Complete: false, Phase: JobPhase.Rendering })
             {
-                // The deck pathway's atomic render. Current/Total has stopped at
+                // The deck pathway's render. Current/Total has stopped at
                 // 100% and ElapsedSec/FilesPerSec are frozen at the values they
                 // held when the last file was read — so the ordinary branch would
                 // show a full solid bar beside stale numbers for however long the
                 // render runs (minutes at corpus scale). An indeterminate bar and
                 // no figures is the honest reading of a phase with no fraction.
+                // The render takes the run's token, so Stop still works, and the
+                // notice says so (Hal's wording, chat, 2026-10-24).
                 <div class="progress mb-2" style="height:24px">
                     <div class="progress-bar progress-bar-striped progress-bar-animated"
                          role="progressbar" style="width:100%"></div>
@@ -151,7 +153,7 @@
                 <div class="small">
                     <span class="text-muted" id="renderingNotice">
                         @progress.FileName — @progress.TotalRows rows collected.
-                        This step can't report progress; it finishes in one go.
+                        This step can't report progress, but Stop still works.
                     </span>
                 </div>
             }

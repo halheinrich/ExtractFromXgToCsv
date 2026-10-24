@@ -248,8 +248,8 @@ public class LocalFolderProcessor
     /// </summary>
     /// <remarks>
     /// The run's token is checked immediately before the create, so a run
-    /// stopped by then — during a deck's render, which takes no token, or a
-    /// Diagram JSON run's serialization — creates nothing. The check narrows
+    /// stopped by then — during a Diagram JSON run's serialization, or a
+    /// deck's render that returned despite the stop — creates nothing. The check narrows
     /// the window and does not close it: a stop that lands once the file
     /// exists leaves it, recorded, as possibly incomplete.
     /// </remarks>
@@ -745,7 +745,7 @@ public class LocalFolderProcessor
             CancellationToken cancellationToken = default)
         => ProcessDeckAsync(
             folderPath, outputPath, filterSet, progress,
-            (reqs, opts) => DiagramRasterRenderer.RenderPptx(reqs, opts),
+            (reqs, opts, token) => DiagramRasterRenderer.RenderPptx(reqs, opts, cancellationToken: token),
             "PPTX", runRecord, cancellationToken);
 
     /// <summary>
@@ -764,22 +764,22 @@ public class LocalFolderProcessor
             CancellationToken cancellationToken = default)
         => ProcessDeckAsync(
             folderPath, outputPath, filterSet, progress,
-            (reqs, opts) => DiagramRasterRenderer.RenderPdf(reqs, opts),
+            (reqs, opts, token) => DiagramRasterRenderer.RenderPdf(reqs, opts, cancellationToken: token),
             "PDF", runRecord, cancellationToken);
 
     /// <summary>
     /// The deck pathway both deck formats share, with its
     /// <paramref name="renderer"/> stated: the library's PPTX or PDF render in
-    /// the application, or a test's stand-in — the render takes no token and
-    /// runs for minutes at corpus scale, and a stop pressed during it is
-    /// pinned through this.
+    /// the application, or a test's stand-in. The render runs for minutes at
+    /// corpus scale and is handed the run's token, which the library honours
+    /// as it builds; a stop pressed during it is pinned through this.
     /// </summary>
     internal async Task ProcessDeckAsync(
             string folderPath,
             string outputPath,
             DecisionFilterSet filterSet,
             IProgress<ProcessingProgress> progress,
-            Func<IEnumerable<DiagramRequest>, DiagramOptions, byte[]> renderer,
+            Func<IEnumerable<DiagramRequest>, DiagramOptions, CancellationToken, byte[]> renderer,
             string formatLabel,
             RunRecord? runRecord,
             CancellationToken cancellationToken)
@@ -814,11 +814,12 @@ public class LocalFolderProcessor
             },
             cancellationToken);
 
-        // Render and write are atomic — the renderer returns the full byte[]
-        // and mid-render cancellation isn't supported: a stop pressed during
-        // the render waits for it, and is seen at the write, before the file
-        // is created (CreateOutput). Both are the commit: a failure fails the
-        // run.
+        // The renderer returns the full byte[], and is handed the run's token:
+        // a stop pressed during the render ends it with an
+        // OperationCanceledException, and nothing is written. A renderer that
+        // returns despite a stop is caught at the write, before the file is
+        // created (CreateOutput). Render and write are the commit: a failure
+        // fails the run.
         //
         // This is the last snapshot the client sees until the run finishes, and
         // the render dominates the wall clock (minutes, at corpus scale), so it
@@ -830,7 +831,7 @@ public class LocalFolderProcessor
         if (requests.Count == 0)
             throw new InvalidOperationException(NothingToRender(record.Skips));
 
-        var deckBytes = renderer(requests, new DiagramOptions());
+        var deckBytes = renderer(requests, new DiagramOptions(), cancellationToken);
         var written = await WriteOutputAsync(record, outputPath, deckBytes, cancellationToken);
 
         run.ReportDone(written);

@@ -95,7 +95,12 @@ public class LocalModePanelBusyAffordanceTests : BunitContext
         // presented as live.
         Assert.DoesNotContain("files/sec", cut.Markup);
 
-        Assert.Contains("Rendering PPTX", cut.Find("#renderingNotice").TextContent);
+        // The render takes the run's token, and the notice says Stop still
+        // works (Hal's wording, chat, 2026-10-24).
+        var notice = System.Text.RegularExpressions.Regex.Replace(cut.Find("#renderingNotice").TextContent, @"\s+", " ").Trim();
+        Assert.Equal(
+            "Rendering PPTX (120 decisions, 240 slides)… — 120 rows collected. This step can't report progress, but Stop still works.",
+            notice);
 
         server.ReleaseStatus();
         await run.WaitAsync(CapturingProcessHandler.RunTimeout);

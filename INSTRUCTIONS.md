@@ -117,8 +117,10 @@ commit has reached the controls.
   time at the stop and what it left at its output
   (`StoppedOutput`: nothing, a CSV closed holding exactly its rows, or a file
   whose contents are uncertain). The token is checked immediately before an
-  output file is created, so a run stopped before its write — during a
-  deck's render, which takes no token, too — writes nothing. The stopped
+  output file is created, so a run stopped before its write writes nothing.
+  A deck's render takes the run's token, which BackgammonDiagram_Lib honours
+  as it builds, so a Stop ends it promptly; the check before the create still
+  catches a render that returns despite a stop. The stopped
   line composes the two facts, opening then ending, in Hal's wording (chat,
   2026-10-23, halheinrich/backgammon#424 6371257599).
 - **XGP naming.** A pattern of literals and `{token}`s (`XgpNameTokens.All`

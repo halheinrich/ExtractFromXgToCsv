@@ -28,9 +28,10 @@ public enum JobPhase
     Processing = 0,
 
     /// <summary>
-    /// The deck pathway's atomic render (PPTX/PDF). Every input file has been
-    /// read and the renderer is building the document in one uninterruptible
-    /// call, so there is no fraction to show: the file counter has stopped at
+    /// The deck pathway's render (PPTX/PDF). Every input file has been
+    /// processed and the renderer is building the document in one call — one
+    /// a Stop still ends, since it takes the run's token — with no fraction to
+    /// show: the file counter has stopped at
     /// 100% and <see cref="ProcessingProgress.ElapsedSec"/> /
     /// <see cref="ProcessingProgress.FilesPerSec"/> are frozen at their last
     /// per-file values. The client shows an indeterminate bar and suppresses
