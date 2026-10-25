@@ -2,7 +2,6 @@ using BgDataTypes_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging;
-using QuestPDF.Infrastructure;
 using XgFilter_Lib;
 using XgFilter_Lib.Filtering;
 using Xunit;
@@ -10,12 +9,13 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Real-pipeline smoke for the local-mode deck path against a file that carries
-/// XG's illegal-play marker. The producer owns the iterator's synthetic
+/// The local-mode deck walk over a real tournament file that carries XG's
+/// illegal-play marker. The producer owns the iterator's synthetic
 /// log-contract unit test (ConvertXgToJson_Lib's
 /// <c>XgDecisionIteratorIllegalPlayTests</c>); this is the consumer half — it
-/// drives the actual user-facing <see cref="LocalFolderProcessor.ProcessPdfAsync"/>
-/// over a real tournament file and asserts that:
+/// drives <see cref="LocalFolderProcessor.ProcessDeckAsync"/>, the walk both
+/// deck formats share, over that file with a <see cref="RecordingDeckRenderer"/>
+/// in place of the library's render, and asserts that:
 /// <list type="bullet">
 ///   <item>the file is not dropped wholesale (decisions still emit, nothing
 ///   on the run's skip record, no <c>"Skipping"</c> warning from the per-file
@@ -26,14 +26,13 @@ namespace ExtractFromXgToCsv.Tests;
 ///   the operation forwards it to the producer. Hand it a null logger and
 ///   this fails.</item>
 /// </list>
+/// What it pins is the deck walk over that file. The PDF wrapper's wiring to
+/// the real renderer is <see cref="LocalFolderProcessorPdfTests"/>' and
+/// <c>LocalFolderProcessorStopTests.TheDeckPathways_HandTheLibraryTheRunsToken</c>'s;
+/// rendering this file is the golden run's, whose frozen input includes it.
 /// </summary>
 public class LocalFolderProcessorIllegalPlayTests
 {
-    static LocalFolderProcessorIllegalPlayTests()
-    {
-        QuestPDF.Settings.License = LicenseType.Community;
-    }
-
     // The real tournament file whose game 6, move 25 (roll 3-3) is recorded as
     // an illegal play. Lives in the gitignored TestData/FixtureFiles set — the
     // "real" half of the keep-both convention, paired with the producer's
@@ -42,7 +41,7 @@ public class LocalFolderProcessorIllegalPlayTests
         "Avi Cohen (6.86) - Max Stockslager (10.55) 2023-02-09_18122.xg";
 
     [Fact]
-    public async Task ProcessPdfAsync_IllegalPlayFile_RendersDeckAndLogsTheIllegalPlay()
+    public async Task ProcessDeckAsync_IllegalPlayFile_WalksTheFileAndLogsTheIllegalPlay()
     {
         var fixture = Path.Combine(FixtureHelper.FixtureDir, IllegalPlayFixture);
         Assert.True(File.Exists(fixture),
@@ -64,9 +63,11 @@ public class LocalFolderProcessorIllegalPlayTests
 
             var progress = new RecordingProgress();
 
-            await processor.ProcessPdfAsync(folder, outputPath, new DecisionFilterSet(), progress);
+            await processor.ProcessDeckAsync(
+                folder, outputPath, new DecisionFilterSet(), progress, new RecordingDeckRenderer().Render, "PDF",
+                runRecord: null, CancellationToken.None);
 
-            // Deck rendered: a non-empty PDF at the requested path.
+            // The deck written: the stand-in's non-empty bytes at the requested path.
             Assert.True(File.Exists(outputPath));
             Assert.True(new FileInfo(outputPath).Length > 0);
 

@@ -437,12 +437,4 @@ public class LocalFolderProcessorNoOverwriteTests : IDisposable
                 break;
         }
     }
-
-    /// <summary>A filter that passes the run's first decision and no other.</summary>
-    private sealed class FirstDecisionOnly : IDecisionFilter
-    {
-        private int _calls;
-
-        public bool Matches(IDecisionFilterData data) => ++_calls == 1;
-    }
 }

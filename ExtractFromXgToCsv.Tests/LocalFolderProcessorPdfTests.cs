@@ -9,58 +9,64 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// Wiring test for the local-mode PDF path. Deck-conformance is owned by
-/// BackgammonDiagram_Lib's own PDF tests; this test only verifies that
-/// ExtractFromXgToCsv hands filtered decisions to the renderer and writes a
-/// well-formed .pdf at the requested path.
+/// Wiring test for the local-mode PDF path: <see cref="LocalFolderProcessor.ProcessPdfAsync"/>
+/// hands its requests to the library's real PDF renderer and writes a
+/// well-formed .pdf at the requested path. One known input filtered to one
+/// decision, so the render is small and no fixture added later changes it.
+/// Deck conformance is BackgammonDiagram_Lib's; the deck walk that prepares
+/// the requests is <see cref="LocalFolderProcessorDeckPreparationTests"/>'s;
+/// corpus-scale deck output is the golden run's.
 /// </summary>
-public class LocalFolderProcessorPdfTests
+public class LocalFolderProcessorPdfTests : IDisposable
 {
+    private const string Fixture = "MTCH4064.xg";
+
     static LocalFolderProcessorPdfTests()
     {
         QuestPDF.Settings.License = LicenseType.Community;
     }
 
+    private readonly string _root = Directory.CreateTempSubdirectory("xg-pdf-").FullName;
+    private readonly string _folder;
+
+    // The output is beside the input folder, not in it, so it is never read
+    // as an input.
+    public LocalFolderProcessorPdfTests()
+    {
+        _folder = Path.Combine(_root, "input");
+        Directory.CreateDirectory(_folder);
+        File.Copy(Path.Combine(FixtureHelper.FixtureDir, Fixture), Path.Combine(_folder, Fixture));
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
+        GC.SuppressFinalize(this);
+    }
+
     [Fact]
-    public async Task ProcessPdfAsync_WritesValidPdfFromFixtureFolder()
+    public async Task ProcessPdfAsync_OneDecision_WritesValidPdf()
     {
         var processor = new LocalFolderProcessor(NullLogger<LocalFolderProcessor>.Instance, NullLogger<FilteredDecisionIterator>.Instance, AppRanking.Ranking);
-        var outputPath = Path.Combine(Path.GetTempPath(),
-            $"pdf-test-{Guid.NewGuid():N}.pdf");
+        var outputPath = Path.Combine(_root, "out.pdf");
+        var progress = new RecordingProgress();
 
-        try
-        {
-            var progress = new RecordingProgress();
+        await processor.ProcessPdfAsync(
+            _folder,
+            outputPath,
+            new DecisionFilterSet().Add(new FirstDecisionOnly()),
+            progress);
 
-            await processor.ProcessPdfAsync(
-                FixtureHelper.FixtureDir,
-                outputPath,
-                new DecisionFilterSet(),
-                progress);
+        var lastProgress = progress.Last;
+        Assert.NotNull(lastProgress);
+        Assert.True(lastProgress!.Complete);
+        Assert.Equal(1, lastProgress.TotalRows);
+        Assert.Equal(outputPath, lastProgress.WrittenPath);
 
-            Assert.True(File.Exists(outputPath));
-            var bytes = await File.ReadAllBytesAsync(outputPath);
-            Assert.True(bytes.Length > 0);
+        var bytes = await File.ReadAllBytesAsync(outputPath);
 
-            // %PDF- — PDF magic bytes at the start of the file.
-            Assert.Equal((byte)'%', bytes[0]);
-            Assert.Equal((byte)'P', bytes[1]);
-            Assert.Equal((byte)'D', bytes[2]);
-            Assert.Equal((byte)'F', bytes[3]);
-            Assert.Equal((byte)'-', bytes[4]);
-
-            var lastProgress = progress.Last;
-            Assert.NotNull(lastProgress);
-            Assert.True(lastProgress!.Complete);
-            Assert.True(lastProgress.TotalRows > 0);
-
-            // Rows > 0 alone would pass with files dropped; nothing in the
-            // fixture folder may be skipped (halheinrich/backgammon#223).
-            Assert.Empty(lastProgress.Skipped);
-        }
-        finally
-        {
-            if (File.Exists(outputPath)) File.Delete(outputPath);
-        }
+        // %PDF- — PDF magic bytes at the start of the file.
+        Assert.True(bytes.Length > 5);
+        Assert.Equal("%PDF-"u8.ToArray(), bytes[..5]);
     }
 }
