@@ -26,9 +26,9 @@ namespace ExtractFromXgToCsv.Client.Shared;
 ///
 /// <para>
 /// <see cref="Create"/> is where the app's <see cref="XgpExportOptions"/>
-/// DTO stops: it validates the options (the single throw point for both
-/// export pathways) and copies the primitives out, so nothing below the
-/// allocator couples to the app type and the engine stays lib-ready.
+/// DTO stops: it validates the options (the single throw point) and copies
+/// the primitives out, so nothing below the allocator couples to the app type
+/// and the engine stays lib-ready.
 /// </para>
 /// </summary>
 public sealed class XgpNameAllocator
@@ -65,7 +65,7 @@ public sealed class XgpNameAllocator
     /// </summary>
     /// <exception cref="ArgumentException">
     /// <paramref name="options"/> fails <see cref="XgpExportOptions.TryValidate"/> —
-    /// the single validation throw point for both export pathways.
+    /// the single validation throw point.
     /// </exception>
     public static XgpNameAllocator Create(XgpExportOptions options, FilterConfig filters)
     {

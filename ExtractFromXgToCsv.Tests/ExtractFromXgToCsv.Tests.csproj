@@ -16,9 +16,10 @@
          types (rationale in Directory.Packages.props). -->
     <PackageReference Include="AngleSharp" />
     <PackageReference Include="coverlet.collector" />
-    <!-- WebApplicationFactory wire tests for the filterdocument endpoints —
-         the Local-mode action guard is only observable through the hosted
-         pipeline (FilterDocumentEndpointTests). -->
+    <!-- WebApplicationFactory wire tests over the real host: what only the
+         hosted pipeline can observe, such as the routes' answers and the
+         static-assets delivery (FilterDocumentEndpointTests,
+         ProcessEndpointTests, ScopedCssBundleLinkTests). -->
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

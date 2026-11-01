@@ -232,10 +232,11 @@ public class LocalFolderProcessorSkipTests
     // Diagram JSON pathway's final write takes the token and throws the
     // cancellation itself, before any snapshot shows the skip. So each test
     // also asserts that nothing logged the cancellation as a skip. (Measured
-    // against the old catches: CSV ran to a "complete" snapshot without
-    // throwing, the deck pathway threw "nothing to render", and Diagram JSON
-    // was caught by the log alone.) The Xgp pathway reports before its check
-    // and was already correct; its test pins that it stays so.
+    // against the catches f6a7e0e replaced, 2026-09-14: CSV ran to a
+    // "complete" snapshot without throwing, the deck pathway threw "nothing to
+    // render", and Diagram JSON was caught by the log alone.) The Xgp pathway
+    // reports before its check and was already correct; its test pins that it
+    // stays so.
 
     [Fact]
     public async Task ProcessAsync_CancelledInsideAFile_PropagatesAndRecordsNoSkip()

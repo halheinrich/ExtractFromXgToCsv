@@ -6,7 +6,7 @@ using Xunit;
 namespace ExtractFromXgToCsv.Tests;
 
 /// <summary>
-/// The one record type both modes keep (<c>SPEC-notices.md</c> §7.1):
+/// The one record type a run keeps (<c>SPEC-notices.md</c> §7.1):
 /// immutable, ordered, its counts derived from its entries, and on the wire
 /// the array of those entries.
 /// </summary>

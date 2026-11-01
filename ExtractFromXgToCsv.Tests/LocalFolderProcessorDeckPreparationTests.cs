@@ -98,12 +98,11 @@ public class LocalFolderProcessorDeckPreparationTests : IDisposable
     /// Over the whole fixture folder, with the empty filter: the run completes
     /// with rows, and no fixture file is skipped on the deck path
     /// (halheinrich/backgammon#223) — every file, as the controlled input
-    /// above cannot say. Known to fail while halheinrich/backgammon#419 is
-    /// open: the fixture whose container manifest lists <c>temp.xgr2</c>
+    /// above cannot say; one test for both deck formats. It includes the
+    /// fixture whose container manifest lists <c>temp.xgr2</c>
     /// (<c>Mikayel Vardanyan (2.40) - Chris Trencher (2.94) 9pt Monte Carlo
-    /// Open 8-7-2018 Cons R2 013.xg</c>) is refused by the reader, so it is
-    /// skipped, and the failure is left visible here, in one test for both
-    /// deck formats.
+    /// Open 8-7-2018 Cons R2 013.xg</c>), which the reader refused until
+    /// halheinrich/backgammon#419.
     /// </summary>
     [Fact]
     public async Task ProcessDeckAsync_FixtureFolder_SkipsNoFile()

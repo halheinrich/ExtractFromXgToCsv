@@ -676,7 +676,7 @@ public class LocalFolderProcessor
             CancellationToken cancellationToken = default)
     {
         // Create validates the options — the single options-validation throw
-        // point shared with the Web-mode pathway.
+        // point.
         var allocator = XgpNameAllocator.Create(options, filters);
         var record = RecordFor(runRecord);
         var files = DiscoverInputFiles(folderPath);

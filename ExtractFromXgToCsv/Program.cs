@@ -19,8 +19,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveWebAssemblyComponents();
 
-// The opening book is read and decoded once (~13.6 MB) and shared across
-// every job — hence singleton.
+// The opening book is read and decoded once and shared across every job —
+// hence singleton.
 builder.Services.AddSingleton<OpeningBookProvider>();
 // The processor runs under the application's one ranking, stated once in
 // AppRanking and handed in here (halheinrich/backgammon#273). Its second

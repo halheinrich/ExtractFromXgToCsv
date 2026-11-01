@@ -5,14 +5,14 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// user-editable <see cref="NamePattern"/> plus the counter state
 /// (<see cref="StartNumber"/>/<see cref="SuffixLength"/>) that drives the
 /// pattern's <c>{n}</c> token. Rendering lives in the naming engine — the
-/// WASM zip builder and the server-side Local-mode processor both name files
-/// through an <see cref="XgpNameAllocator"/> created from these options.
+/// server-side processor names files, and Home previews their names, through
+/// an <see cref="XgpNameAllocator"/> created from these options.
 ///
 /// <para>
 /// Permissive wire DTO like <see cref="ProcessRequest"/> — it crosses the
 /// Local-mode POST boundary, so validation is a separate
-/// <see cref="TryValidate"/> call (the UI gates on it; the export pathways
-/// throw <see cref="ArgumentException"/> via
+/// <see cref="TryValidate"/> call (the UI gates on it; the export pathway
+/// throws <see cref="ArgumentException"/> via
 /// <see cref="XgpNameAllocator.Create"/>) rather than throwing property
 /// initializers that would break deserialization.
 /// </para>

@@ -6,8 +6,9 @@ namespace ExtractFromXgToCsv.Services;
 /// request names. The server owns <b>safety, not policy</b>: it
 /// enforces the simple-filename rule (<see cref="IsValidFileName"/>) so a
 /// request can never escape its folder, but it knows nothing about which file
-/// names the filter store uses — those come from the client, whose
-/// <c>XgFilter_Razor</c> reference this project deliberately does not share.
+/// names the filter store uses — those come from the client. This project
+/// states no <c>XgFilter_Razor</c> reference and names none of its types; the
+/// assembly reaches it only through the client project.
 /// </summary>
 /// <remarks>
 /// Dependency-free IO glue. <c>public</c> by the same framework constraint as the other server services

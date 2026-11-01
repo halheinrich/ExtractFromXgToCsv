@@ -1,8 +1,8 @@
 namespace ExtractFromXgToCsv.Client.Shared;
 
 /// <summary>
-/// The short name this app's copy gives each <see cref="OutputFormat"/> where
-/// a sentence names an output — "The last download (XGP)" — stated once.
+/// The short name of each <see cref="OutputFormat"/>, for a sentence that
+/// names an output, stated once.
 /// </summary>
 public static class OutputFormatNames
 {
