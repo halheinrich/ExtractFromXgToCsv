@@ -11,21 +11,16 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// The local-mode deck walk over a real tournament file that carries XG's
 /// illegal-play marker. The producer owns the iterator's synthetic
-/// log-contract unit test (ConvertXgToJson_Lib's
+/// silence unit test (ConvertXgToJson_Lib's
 /// <c>XgDecisionIteratorIllegalPlayTests</c>); this is the consumer half — it
 /// drives <see cref="LocalFolderProcessor.ProcessDeckAsync"/>, the walk both
 /// deck formats share, over that file with a <see cref="RecordingDeckRenderer"/>
-/// in place of the library's render, and asserts that:
-/// <list type="bullet">
-///   <item>the file is not dropped wholesale (decisions still emit, nothing
-///   on the run's skip record, no <c>"Skipping"</c> warning from the per-file
-///   catch), and</item>
-///   <item>the illegal play surfaces as a contextual <c>Warning</c> on the
-///   filtering operation's logger — which only happens because the processor
-///   hands the run's <see cref="FilteredDecisionIterator"/> that logger, and
-///   the operation forwards it to the producer. Hand it a null logger and
-///   this fails.</item>
-/// </list>
+/// in place of the library's render. An illegal play occurs and is legit
+/// (Hal's ruling, 2026-11-02, halheinrich/backgammon#514), so its decision is
+/// skipped and nothing says so: the file is read whole, its other decisions
+/// emit, nothing lands on the run's skip record, and neither logger warns. The
+/// bad-data half of a walk's reporting is
+/// <see cref="LocalFolderProcessorOmissionTests"/>'.
 /// What it pins is the deck walk over that file. The PDF wrapper's wiring to
 /// the real renderer is <see cref="LocalFolderProcessorPdfTests"/>' and
 /// <c>LocalFolderProcessorStopTests.TheDeckPathways_HandTheLibraryTheRunsToken</c>'s;
@@ -41,7 +36,7 @@ public class LocalFolderProcessorIllegalPlayTests
         "Avi Cohen (6.86) - Max Stockslager (10.55) 2023-02-09_18122.xg";
 
     [Fact]
-    public async Task ProcessDeckAsync_IllegalPlayFile_WalksTheFileAndLogsTheIllegalPlay()
+    public async Task ProcessDeckAsync_IllegalPlayFile_WalksTheFileWhole_AndSaysNothing()
     {
         var fixture = Path.Combine(FixtureHelper.FixtureDir, IllegalPlayFixture);
         Assert.True(File.Exists(fixture),
@@ -49,7 +44,7 @@ public class LocalFolderProcessorIllegalPlayTests
             "TestData/FixtureFiles set — restore it before running this smoke.");
 
         // A folder containing only the illegal-play file, so any "Skipping"
-        // warning or absent illegal-play warning is unambiguously about it.
+        // warning or any skip entry is unambiguously about it.
         var folder = Path.Combine(Path.GetTempPath(), $"illegal-play-smoke-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         File.Copy(fixture, Path.Combine(folder, IllegalPlayFixture));
@@ -78,18 +73,15 @@ public class LocalFolderProcessorIllegalPlayTests
             Assert.True(lastProgress.TotalRows > 0);
             Assert.Empty(lastProgress.Skipped);
 
-            // The skip seam never fired — the file survived end to end.
+            // Neither seam fired — the file survived end to end.
             Assert.DoesNotContain(logger.Entries,
                 e => e.Message.Contains("Skipping", StringComparison.Ordinal));
 
-            // The illegal play surfaced as a contextual one-liner, through the
-            // logger the filtering operation hands the producer.
-            Assert.Contains(iteratorLogger.Entries, e =>
-                e.Level == LogLevel.Warning
-                && e.Message.Contains("Illegal play", StringComparison.Ordinal)
-                && e.Message.Contains("game 6", StringComparison.Ordinal)
-                && e.Message.Contains("move 25", StringComparison.Ordinal)
-                && e.Message.Contains("roll 33", StringComparison.Ordinal));
+            // And the walk said nothing of the illegal play, at any level,
+            // through the logger the filtering operation hands the producer.
+            Assert.DoesNotContain(iteratorLogger.Entries,
+                e => e.Message.Contains("llegal", StringComparison.Ordinal));
+            Assert.DoesNotContain(iteratorLogger.Entries, e => e.Level >= LogLevel.Warning);
         }
         finally
         {

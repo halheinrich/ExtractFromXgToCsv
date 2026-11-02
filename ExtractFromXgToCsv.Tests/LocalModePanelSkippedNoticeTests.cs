@@ -58,13 +58,13 @@ public class LocalModePanelSkippedNoticeTests : BunitContext
 
     private static readonly SkipRecord TwoFilesAndADecision =
     [
-        new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic."),
-        new SkippedItem(NestedFile, null, "Unexpected end of stream."),
-        new SkippedItem(
+        SkippedItem.ForFile("broken.xg", "Not a valid XG file: bad magic."),
+        SkippedItem.ForFile(NestedFile, "Unexpected end of stream."),
+        SkippedItem.ForDecision(
             NestedMatch, new XgDecisionId("match.xg", 3, 12, IsCube: true), "Access denied."),
     ];
 
-    private static readonly SkipRecord OneFile = [new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic.")];
+    private static readonly SkipRecord OneFile = [SkippedItem.ForFile("broken.xg", "Not a valid XG file: bad magic.")];
 
     [Fact]
     public async Task CompletedRunWithSkips_ShowsTheCountsAndEachNameWithItsReason()

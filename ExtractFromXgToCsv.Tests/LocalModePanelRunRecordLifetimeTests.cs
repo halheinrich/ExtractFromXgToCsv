@@ -23,8 +23,8 @@ public class LocalModePanelRunRecordLifetimeTests : BunitContext
     private const string Notice = "div.skipped-notice";
     private const string FolderB = @"D:\xg\b";
 
-    private static readonly SkipRecord BrokenA = [new SkippedItem("broken-a.xg", null, "Not a valid XG file.")];
-    private static readonly SkipRecord BrokenB = [new SkippedItem("broken-b.xg", null, "Unexpected end of stream.")];
+    private static readonly SkipRecord BrokenA = [SkippedItem.ForFile("broken-a.xg", "Not a valid XG file.")];
+    private static readonly SkipRecord BrokenB = [SkippedItem.ForFile("broken-b.xg", "Unexpected end of stream.")];
 
     private static ProcessingProgress CompletedWith(SkipRecord skips, int rows = 5) =>
         new() { Current = 2, Total = 2, Complete = true, TotalRows = rows, Skipped = skips };

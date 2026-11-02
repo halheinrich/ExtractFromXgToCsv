@@ -109,7 +109,7 @@ public class LocalModePanelNoticeTests : BunitContext
             Total = 1,
             Complete = true,
             TotalRows = 4,
-            Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file: bad magic.")],
+            Skipped = [SkippedItem.ForFile("broken.xg", "Not a valid XG file: bad magic.")],
         }))
         {
             BaseAddress = new Uri("http://localhost/"),

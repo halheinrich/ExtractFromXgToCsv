@@ -162,7 +162,7 @@ public class LocalModePanelRunLineTests : BunitContext
     public async Task ARunWithSkipsStoppedAfterItsInput_SaysAllWereProcessed_ClaimsNothingAboutReading_AndShowsTheSkip()
     {
         var panel = await RunAsync(
-            StoppedAfterTheInput() with { Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file.")] },
+            StoppedAfterTheInput() with { Skipped = [SkippedItem.ForFile("broken.xg", "Not a valid XG file.")] },
             OutputFormat.Pdf);
 
         var line = Shown(panel, "#stoppedLine");

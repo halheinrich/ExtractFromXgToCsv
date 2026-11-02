@@ -20,10 +20,13 @@ whole UI. Nothing consumes this repo.
 Depends on:
 
 - **ConvertXgToJson_Lib**: `XgSourceReader`, the one read of a source;
-  discovery; the XGP slice and anonymize-copy; the opening book.
+  discovery; the XGP slice and anonymize-copy; the opening book;
+  `XgIteratorState`, whose `XgOmission`s are what the walk left out of a file.
+  BgMoveGen comes with it: nothing here names it, and the solution lists it
+  because the solution lists what its references reach.
 - **XgFilter_Lib**: `FilterConfig.Build`, which the server calls on the filter
   a run sends, and `FilteredDecisionIterator`, which filters every decoded
-  file.
+  file under that file's own state.
 - **BgDataTypes_Lib**: `DecisionRow`, the decision records, `PlayRanking`, the
   strict enum converter.
 - **XgFilter_Razor**: the filter surface and its app-scoped owner
@@ -69,7 +72,8 @@ Depends on:
   a test can fault, a `FileGate` that holds a run at its next create, and
   `LocalPage`), `LocalPanelHost` and `CapturingProcessHandler` (the panel
   over a stub server), `HomeTesting`, `ScriptedDestination`,
-  `RecordingProgress`, `RecordingDeckRenderer`, `LocalGoldenBaseline`.
+  `RecordingProgress`, `RecordingDeckRenderer`, `SyntheticXg`,
+  `LocalGoldenBaseline`.
 
 ## How it works
 
@@ -104,10 +108,21 @@ commit has reached the controls.
   "Stopping…" until the terminal result.
 - **The processor's one walk** (`ForEachFileAsync`) is where the boundaries of
   `../SPEC-notices.md` §7.1 live, and all four pathways share it: a pathway
-  supplies only its stage and its commit, and every skip goes through one seam
-  (`RecordSkip`) onto the run's `RunRecord`. The files it writes follow §7.5's
-  create-new under ` (n)`; "Done" names the file as created (`WrittenPath`),
-  and for XGP, whose output path is a folder, the folder.
+  supplies only its stage and its commit. An entry reaches the run's
+  `RunRecord` through one of two seams: a failure through `RecordSkip`, and
+  what the walk left out of a file it read through `RecordOmissions`. The
+  second reads the file's own `XgIteratorState` when its stage ends, however
+  it ended, so a file's omissions precede its conversion skip and outlive a
+  stop or a failed commit, and it logs nothing, since the producer's warning
+  is the one line an omission gets. A file with omissions is read and
+  finished like any other, and contributes what it has. A forced play and an
+  illegal play are no entry, and `ForcedPlayCount` goes unread (Hal's rulings,
+  2026-11-02, halheinrich/backgammon#514). The record covers what the run
+  examined: a game a filter's early exit skipped says nothing, so a filtered
+  run can list less than an unfiltered one, and an empty record does not show
+  that the inputs are clean. The files it writes follow §7.5's create-new
+  under ` (n)`; "Done" names the file as created (`WrittenPath`), and for XGP,
+  whose output path is a folder, the folder.
 - **A run's accounting is its record's.** The pathways report every tenth
   file and a run-ending exception reports nothing, so the job runner builds
   the stopped and failed snapshots from the `RunRecord` alone: the skips, the
@@ -200,7 +215,12 @@ every pathway over `TestData/Golden/input` into a new
 `TestData/Golden/<label>/` with a manifest of each output's size and hash.
 Compare with an earlier label: CSV, Diagram JSON and XGP byte for byte;
 PPTX by its entries' hashes and slide count, PDF by its date-masked hash and
-page count, since both decks embed render timestamps.
+page count, since both decks embed render timestamps. A change in which
+decisions a run yields moves everything after the first one, so byte equality
+says nothing there: compare CSV and Diagram JSON by decision, XGP by each
+file's content, since its names are numbered in output order, and the decks
+by slide and page count and by what repeats. The manifest's `Skips` counts
+entries of every unit.
 
 ## Pitfalls
 

@@ -12,9 +12,11 @@ namespace ExtractFromXgToCsv.Tests;
 /// with <c>ReadFromJsonAsync</c> — so both sides are
 /// <see cref="JsonSerializerDefaults.Web"/>. The risk is silent: a
 /// <see cref="SkippedItem"/> constructor parameter that stopped matching its
-/// property would bind to null rather than fail, and a
-/// <see cref="DecisionId"/> without its bundled converter would not
-/// round-trip at all. The record's own contract is <see cref="SkipRecordTests"/>'.
+/// property would bind to null rather than fail, an entry whose unit went
+/// unread would pass as a file, and a <see cref="DecisionId"/> without its
+/// bundled converter would not round-trip at all. So an entry that states no
+/// unit, or claims two, is refused here. The record's own contract is
+/// <see cref="SkipRecordTests"/>'.
 /// </summary>
 public class ProcessingProgressWireTests
 {
@@ -29,9 +31,11 @@ public class ProcessingProgressWireTests
             TotalRows = 7,
             Skipped =
             [
-                new SkippedItem("bad.xg", null, "Not a valid XG file."),
-                new SkippedItem(
+                SkippedItem.ForFile("bad.xg", "Not a valid XG file."),
+                SkippedItem.ForGame("match.xg", "Invalid standing in match.xg, game 1: refused.\r\nActual value was 0."),
+                SkippedItem.ForDecision(
                     "match.xg", new XgDecisionId("match.xg", 2, 14, IsCube: false), "Disk full."),
+                SkippedItem.ForDecision("match.xg", decisionId: null, "Corrupt candidate in match.xg, game 3, move 1, roll 31: bad."),
             ],
         };
 
@@ -40,13 +44,66 @@ public class ProcessingProgressWireTests
 
         Assert.Equal(sent.Skipped, received.Skipped);
         Assert.Equal(1, received.Skipped.FileCount);
-        Assert.Equal(1, received.Skipped.DecisionCount);
+        Assert.Equal(1, received.Skipped.GameCount);
+        Assert.Equal(2, received.Skipped.DecisionCount);
 
         // The record is the array of its entries on the wire, and the decision
         // crosses in the library's canonical form, not as an object graph of
         // its own fields.
         Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(json).RootElement.GetProperty("skipped").ValueKind);
         Assert.Contains("\"match.xg:g2:m14:play\"", json, StringComparison.Ordinal);
+    }
+
+    /// <summary>Each unit crosses as a name, as a stopped snapshot's stage does, and reads back.</summary>
+    [Theory]
+    [InlineData(SkipUnit.File, "File")]
+    [InlineData(SkipUnit.Game, "Game")]
+    [InlineData(SkipUnit.Decision, "Decision")]
+    public void AUnit_CrossesAsAName(SkipUnit unit, string name)
+    {
+        var sent = unit switch
+        {
+            SkipUnit.File => SkippedItem.ForFile("a.xg", "Why."),
+            SkipUnit.Game => SkippedItem.ForGame("a.xg", "Why."),
+            _ => SkippedItem.ForDecision("a.xg", decisionId: null, "Why."),
+        };
+
+        var json = JsonSerializer.Serialize(sent, Web);
+
+        Assert.Contains($"\"unit\":\"{name}\"", json, StringComparison.Ordinal);
+        Assert.Equal(sent, JsonSerializer.Deserialize<SkippedItem>(json, Web));
+    }
+
+    /// <summary>Only a decision carries an id, however the body says otherwise.</summary>
+    [Theory]
+    [InlineData("File")]
+    [InlineData("Game")]
+    public void AnEntryClaimingAnIdWithoutBeingADecision_IsRefused(string unit)
+    {
+        var json = $$"""{"unit":"{{unit}}","fileName":"a.xg","decisionId":"a.xg:g1:m1:play","reason":"Why."}""";
+
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<SkippedItem>(json, Web));
+    }
+
+    /// <summary>
+    /// An entry that states no unit is refused, never read as the first one:
+    /// that would call a game or a decision a file, the very miscount the unit
+    /// exists to end.
+    /// </summary>
+    [Fact]
+    public void AnEntryThatNamesNoUnit_IsRefused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => JsonSerializer.Deserialize<SkippedItem>("""{"fileName":"a.xg","reason":"Why."}""", Web));
+    }
+
+    /// <summary>So is a unit outside the three, by name or by number.</summary>
+    [Theory]
+    [InlineData("""{"unit":"Match","fileName":"a.xg","reason":"Why."}""")]
+    [InlineData("""{"unit":1,"fileName":"a.xg","reason":"Why."}""")]
+    public void AnEntryNamingNoneOfTheThreeUnits_IsRefused(string json)
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SkippedItem>(json, Web));
     }
 
     /// <summary>

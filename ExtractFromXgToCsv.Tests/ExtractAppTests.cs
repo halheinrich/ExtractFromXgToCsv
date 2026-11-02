@@ -217,7 +217,7 @@ public class ExtractAppTests : BunitContext
             Total = 1,
             Complete = true,
             TotalRows = 2,
-            Skipped = [new SkippedItem("broken.xg", null, "Not a valid XG file.")],
+            Skipped = [SkippedItem.ForFile("broken.xg", "Not a valid XG file.")],
             XgpCommit = new XgpExportCommit(new XgpExportOptions(), 2),
         }));
         await ReadyAsync(OutputFormat.Xgp, XgpOutputFolder);

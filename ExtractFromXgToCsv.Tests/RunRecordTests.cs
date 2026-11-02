@@ -47,7 +47,7 @@ public class RunRecordTests
     public void AStoppedSnapshot_TakesWhereTheRunStood_ItsTimeAndWhatItDid_FromTheRecord()
     {
         var record = RecordAtTheEighthFile();
-        record.Skip(new SkippedItem("bad.xg", null, "Not a valid XG file."));
+        record.Skip(SkippedItem.ForFile("bad.xg", "Not a valid XG file."));
 
         var terminal = record.CancelledSnapshot();
 
@@ -195,7 +195,7 @@ public class RunRecordTests
     public void FailedSnapshot_CarriesTheErrorWithWhatTheRunSkippedAndCommitted()
     {
         var record = new RunRecord();
-        record.Skip(new SkippedItem("bad.xg", null, "Not a valid XG file."));
+        record.Skip(SkippedItem.ForFile("bad.xg", "Not a valid XG file."));
         record.Commit(new XgpExportCommit(Options, 3));
 
         var terminal = record.FailedSnapshot("Disk full.");

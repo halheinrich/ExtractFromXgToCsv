@@ -94,9 +94,10 @@ public sealed record ProcessingProgress
 
     /// <summary>
     /// Every unit the run has skipped so far, in the order skipped — a file it
-    /// could not read or convert, or a decision whose payload it could not
-    /// prepare; on a terminal snapshot, the run's whole record. Empty when
-    /// nothing was skipped.
+    /// could not read or convert, a game or decision the walk left out of a
+    /// file it read, or a decision whose payload it could not prepare; on a
+    /// terminal snapshot, the run's whole record. Empty when nothing was
+    /// skipped.
     /// </summary>
     /// <remarks>
     /// A skip never ends a run — one bad file must not kill a batch — so this is

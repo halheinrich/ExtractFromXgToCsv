@@ -7,8 +7,9 @@ namespace ExtractFromXgToCsv.Services;
 /// <see cref="SkipRecord"/>; for an XGP run, what it has committed; and where
 /// the run stands — its clock, the file it has reached, the rows it has
 /// produced, and the one output file it has created.
-/// <see cref="LocalFolderProcessor"/> writes it — skips only through its one
-/// skip seam — and every snapshot it reports carries it as it stands.
+/// <see cref="LocalFolderProcessor"/> writes it — skips only through its two
+/// seams, one for a failure and one for a file's omissions — and every
+/// snapshot it reports carries it as it stands.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -73,7 +74,7 @@ public sealed class RunRecord
     /// </summary>
     internal int FileReached { get; private set; }
 
-    /// <summary>The input files the run has finished — read and committed, or skipped.</summary>
+    /// <summary>The input files the run has finished — read and committed, whatever the walk omitted from them, or skipped.</summary>
     internal int FilesDone { get; private set; }
 
     /// <summary>
@@ -88,7 +89,7 @@ public sealed class RunRecord
     /// <summary>Whether the run has recorded nothing yet.</summary>
     internal bool IsFresh => Skips.IsEmpty && XgpCommit is null && _began is null && _outputPath is null;
 
-    /// <summary>Records one skip. The processor's skip seam is the only caller.</summary>
+    /// <summary>Records one skip. The processor's two skip seams are the only callers.</summary>
     internal void Skip(SkippedItem item) => Skips = Skips.With(item);
 
     /// <summary>Records what the XGP run has committed, as it stands.</summary>

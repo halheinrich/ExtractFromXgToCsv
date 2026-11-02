@@ -22,12 +22,14 @@
         {
             <div class="skip-list-label fw-semibold">@Label</div>
         }
-        <div class="fw-bold">⚠ @Headline(Record)</div>
+        <div class="fw-bold">⚠ Skipped @Record.CountPhrase — not in the output:</div>
         <ul class="mb-0">
             @foreach (var item in Record)
             {
-                // The file as the user named it; a decision adds its canonical
-                // id, which carries only the bare filename.
+                // The file as the user named it; a decision with an id adds
+                // it, canonical, carrying only the bare filename. An omission
+                // has none, and says where in the file in its reason, which
+                // may hold a line break and stays in this one item.
                 <li>
                     <code>@item.FileName</code>@if (item.DecisionId is { } id)
                     {
@@ -64,15 +66,4 @@
         AdditionalAttributes is not null && AdditionalAttributes.TryGetValue("class", out var extra)
             ? $"{MarkerClass} {extra}"
             : MarkerClass;
-
-    // Only the non-zero counts — e.g. "Skipped 2 files and 1 decision".
-    private static string Headline(SkipRecord record)
-    {
-        var parts = new List<string>(2);
-        if (record.FileCount > 0) parts.Add(Counted(record.FileCount, "file"));
-        if (record.DecisionCount > 0) parts.Add(Counted(record.DecisionCount, "decision"));
-        return $"Skipped {string.Join(" and ", parts)} — not in the output:";
-
-        static string Counted(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
-    }
 }

@@ -102,6 +102,34 @@ public class ProcessEndpointTests : IDisposable
     }
 
     /// <summary>
+    /// A deck run whose every game the walk omitted has nothing to render, read
+    /// every file, and skipped none of them: the message says what was skipped,
+    /// never that the filter matched nothing, and never that a file was
+    /// (halheinrich/backgammon#514). The job runner's own failed snapshot
+    /// carries the list that message points to.
+    /// </summary>
+    [Fact]
+    public async Task DeckRunWhoseEveryGameIsOmitted_SaysTheGamesWereSkipped_AndCarriesTheList()
+    {
+        SyntheticXg.Write(
+            Path.Combine(_folder, "club", "match.xg"),
+            SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
+
+        var terminal = await RunToTerminalAsync(new ProcessRequest
+        {
+            FolderPath = _folder,
+            OutputPath = Path.Combine(_folder, "deck.pdf"),
+            Filters = new FilterConfig(),
+            OutputFormat = OutputFormat.Pdf,
+        });
+
+        Assert.Equal("No decisions to render — 2 games were skipped; see the list below.", terminal.ErrorMessage);
+        Assert.Equal(2, terminal.Skipped.GameCount);
+        Assert.Equal(0, terminal.Skipped.FileCount);
+        Assert.All(terminal.Skipped, entry => Assert.Equal(Path.Combine("club", "match.xg"), entry.FileName));
+    }
+
+    /// <summary>
     /// The control: every file read, and a filter that matches nothing — the
     /// filter is what left nothing to render, and the message says so.
     /// </summary>

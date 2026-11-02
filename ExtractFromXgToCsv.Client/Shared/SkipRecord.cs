@@ -21,9 +21,9 @@ namespace ExtractFromXgToCsv.Client.Shared;
 /// holds no null entry.
 /// </para>
 /// <para>
-/// The two counts are derived from the entries — a file skip is an entry with
-/// no <see cref="SkippedItem.DecisionId"/>, a decision skip one with — so they
-/// cannot disagree with the list, and this is the one place that rule is
+/// The three counts are derived from the entries, each by the unit it states
+/// (<see cref="SkippedItem.Unit"/>), so they cannot disagree with the list.
+/// <see cref="CountPhrase"/> words them, and this is the one place that is
 /// stated.
 /// </para>
 /// <para>
@@ -40,8 +40,9 @@ public sealed class SkipRecord : IReadOnlyList<SkippedItem>, IEquatable<SkipReco
     private SkipRecord(ImmutableArray<SkippedItem> items)
     {
         _items = items;
-        FileCount = items.Count(item => item.DecisionId is null);
-        DecisionCount = items.Length - FileCount;
+        FileCount = items.Count(item => item.Unit == SkipUnit.File);
+        GameCount = items.Count(item => item.Unit == SkipUnit.Game);
+        DecisionCount = items.Count(item => item.Unit == SkipUnit.Decision);
     }
 
     /// <summary>The record with no entries.</summary>
@@ -82,11 +83,36 @@ public sealed class SkipRecord : IReadOnlyList<SkippedItem>, IEquatable<SkipReco
     /// <summary>The entry at <paramref name="index"/>.</summary>
     public SkippedItem this[int index] => _items[index];
 
-    /// <summary>Whole files skipped: entries with no decision.</summary>
+    /// <summary>Whole files skipped.</summary>
     public int FileCount { get; }
 
-    /// <summary>Single decisions skipped: entries naming a decision.</summary>
+    /// <summary>Games skipped: each one a game the walk omitted from a file it read.</summary>
+    public int GameCount { get; }
+
+    /// <summary>Single decisions skipped: an export skip and an omitted play alike.</summary>
     public int DecisionCount { get; }
+
+    /// <summary>
+    /// The non-zero counts for a reader, in the unit order — <c>"2 files and 1
+    /// decision"</c>, <c>"1 file, 2 games and 3 decisions"</c> — and empty for
+    /// an empty record. The one wording of them: every sentence that counts
+    /// what a run skipped takes it from here.
+    /// </summary>
+    public string CountPhrase
+    {
+        get
+        {
+            var parts = new List<string>(3);
+            if (FileCount > 0) parts.Add(Counted(FileCount, "file"));
+            if (GameCount > 0) parts.Add(Counted(GameCount, "game"));
+            if (DecisionCount > 0) parts.Add(Counted(DecisionCount, "decision"));
+            return parts.Count < 2
+                ? string.Concat(parts)
+                : $"{string.Join(", ", parts.SkipLast(1))} and {parts[^1]}";
+
+            static string Counted(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+        }
+    }
 
     /// <inheritdoc />
     public IEnumerator<SkippedItem> GetEnumerator() => ((IEnumerable<SkippedItem>)_items).GetEnumerator();

@@ -49,11 +49,20 @@ namespace ExtractFromXgToCsv.Services;
 /// no number) and written outside it.
 /// </para>
 /// <para>
-/// Every skip is recorded through one seam, <see cref="RecordSkip"/>, onto
-/// the run's <see cref="RunRecord"/>, whose skips every snapshot carries as
-/// <see cref="ProcessingProgress.Skipped"/>; a caller passes its own record to
-/// read it after a run-ending failure. Cancellation is never a skip: the read
-/// propagates it, and every skip catch excludes
+/// <b>What the walk leaves out of a decoded file is an omission</b>: a game
+/// whose standing is refused, or a decision with a corrupt candidate. It is
+/// the producer's to find, on the file's own <see cref="XgIteratorState"/>,
+/// and no failure: the file stays read, contributes what it has, and goes on
+/// to its commit. A forced play or an illegal play is neither skip nor
+/// omission, and this processor never reads the forced count.
+/// </para>
+/// <para>
+/// Every entry reaches the run's <see cref="RunRecord"/> through one of two
+/// seams — a failure through <see cref="RecordSkip"/>, a file's omissions
+/// through <see cref="RecordOmissions"/> — and every snapshot carries the
+/// record as <see cref="ProcessingProgress.Skipped"/>; a caller passes its own
+/// record to read it after a run-ending failure. Cancellation is never a skip:
+/// the read propagates it, and every skip catch excludes
 /// <see cref="OperationCanceledException"/>.
 /// </para>
 /// </remarks>
@@ -66,8 +75,8 @@ public class LocalFolderProcessor
 
     /// <summary>
     /// The filtering operation's logger, which it also hands the producer, so
-    /// the producer's per-decision warnings (an illegal play, say) surface on
-    /// every pathway.
+    /// the producer's warning for each omission (a refused game, say) surfaces
+    /// on every pathway.
     /// </summary>
     private readonly ILogger<FilteredDecisionIterator> _iteratorLogger;
 
@@ -94,7 +103,7 @@ public class LocalFolderProcessor
     /// <summary>
     /// Creates the processor. <paramref name="logger"/> records per-file skip
     /// warnings; <paramref name="iteratorLogger"/> is the filtering
-    /// operation's, which carries the producer's per-decision warnings;
+    /// operation's, which carries the producer's omission warnings;
     /// <paramref name="ranking"/> is the ranking every run is interpreted
     /// under — the application passes its one ranking,
     /// <see cref="AppRanking.Ranking"/>, from the composition root;
@@ -410,10 +419,11 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
-    /// The one skip seam: every read, conversion and payload failure in this
-    /// processor comes here, and nothing logs a skip on its own. Appends the
-    /// skip to <paramref name="record"/>, the run's record, which every
-    /// snapshot the run reports carries as it stands
+    /// The one failure seam: every read, conversion and payload failure in
+    /// this processor comes here, and nothing logs one on its own; what the
+    /// walk omitted is <see cref="RecordOmissions"/>'. Appends the skip to
+    /// <paramref name="record"/>, the run's record, which every snapshot the
+    /// run reports carries as it stands
     /// (<see cref="ProcessingProgress.Skipped"/>), and then logs it. The
     /// exception's message is the recorded reason. A skip never ends a run,
     /// and nor does logging one: a logger that fails is contained here, after
@@ -441,7 +451,10 @@ public class LocalFolderProcessor
         string file,
         DecisionId? decisionId = null)
     {
-        record.Skip(new SkippedItem(Path.GetRelativePath(folderPath, file), decisionId, ex.Message));
+        var name = Path.GetRelativePath(folderPath, file);
+        record.Skip(decisionId is null
+            ? SkippedItem.ForFile(name, ex.Message)
+            : SkippedItem.ForDecision(name, decisionId, ex.Message));
 
         var fileName = Path.GetFileName(file);
         try
@@ -459,9 +472,37 @@ public class LocalFolderProcessor
     }
 
     /// <summary>
+    /// The one omission seam: appends what the walk left out of
+    /// <paramref name="file"/>, as <paramref name="state"/> holds it, to
+    /// <paramref name="record"/>, in walk order. Each entry is a game or a
+    /// decision by the omission's own say, named by the path relative to
+    /// <paramref name="folderPath"/> as every entry is, with
+    /// <see cref="XgOmission.ToString"/> as its reason, unparsed and
+    /// unshortened. An omitted decision has no id: none was built. It logs
+    /// nothing, since the producer logged each omission through the
+    /// iterator's logger.
+    /// </summary>
+    /// <param name="record">The current run's record.</param>
+    /// <param name="state">The observer of the file's walk.</param>
+    /// <param name="folderPath">The run's input folder, which the recorded name is relative to.</param>
+    /// <param name="file">The source file's full path, as discovered.</param>
+    private static void RecordOmissions(RunRecord record, XgIteratorState state, string folderPath, string file)
+    {
+        var name = Path.GetRelativePath(folderPath, file);
+        foreach (var omission in state.Omissions)
+        {
+            record.Skip(omission.IsWholeGame
+                ? SkippedItem.ForGame(name, omission.ToString())
+                : SkippedItem.ForDecision(name, decisionId: null, omission.ToString()));
+        }
+    }
+
+    /// <summary>
     /// The one walk every pathway runs: for each file, the read, the staged
     /// conversion within the file's boundary, and the commit outside it (see
-    /// the class remarks).
+    /// the class remarks). A file's omissions reach the record however its
+    /// stage ended, and before its commit, so a conversion failure, a stop and
+    /// a failed commit all leave them there.
     /// </summary>
     /// <param name="folderPath">The run's input folder.</param>
     /// <param name="files">The discovered files, in discovery order.</param>
@@ -469,8 +510,9 @@ public class LocalFolderProcessor
     /// <param name="run">The run's progress, reported as the walk goes.</param>
     /// <param name="retainBytes">Whether the read keeps each file's exact bytes, for a pathway that copies a source verbatim.</param>
     /// <param name="stage">
-    /// Converts a decoded file, by its bare name, to its whole contribution.
-    /// A failure is the file's conversion skip.
+    /// Converts a decoded file, by its bare name, to its whole contribution,
+    /// walking it under the file's own <see cref="XgIteratorState"/>. A
+    /// failure is the file's conversion skip.
     /// </param>
     /// <param name="commit">
     /// Commits a staged contribution, given the file's full path. A failure is
@@ -483,7 +525,7 @@ public class LocalFolderProcessor
         RunRecord record,
         RunProgress run,
         bool retainBytes,
-        Func<XgSourceDecoded, string, TStaged> stage,
+        Func<XgSourceDecoded, string, XgIteratorState, TStaged> stage,
         Func<TStaged, string, Task> commit,
         CancellationToken cancellationToken)
     {
@@ -516,11 +558,22 @@ public class LocalFolderProcessor
                 continue;
 
             // The file's whole contribution, staged within its boundary: a
-            // file that fails midway contributes nothing.
+            // file that fails midway contributes nothing. What its walk left
+            // out is recorded however the stage ended, so the finally sits
+            // inside the try: the omissions precede this file's conversion
+            // skip, and reach the record before the commit.
+            var state = new XgIteratorState();
             TStaged staged;
             try
             {
-                staged = stage(decoded, fileName);
+                try
+                {
+                    staged = stage(decoded, fileName, state);
+                }
+                finally
+                {
+                    RecordOmissions(record, state, folderPath, file);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -574,7 +627,7 @@ public class LocalFolderProcessor
             await ForEachFileAsync(
                 folderPath, files, record, run,
                 retainBytes: false,
-                stage: (decoded, fileName) => filtering.IterateFile(decoded.File, fileName).ToList(),
+                stage: (decoded, fileName, state) => filtering.IterateFile(decoded.File, fileName, state).ToList(),
                 commit: async (rows, _) =>
                 {
                     foreach (var row in rows)
@@ -613,7 +666,7 @@ public class LocalFolderProcessor
         await ForEachFileAsync(
             folderPath, files, record, run,
             retainBytes: false,
-            stage: (decoded, fileName) => filtering.IterateFileDiagrams(decoded.File, fileName).ToList(),
+            stage: (decoded, fileName, state) => filtering.IterateFileDiagrams(decoded.File, fileName, state).ToList(),
             commit: (items, _) =>
             {
                 allItems.AddRange(items);
@@ -695,7 +748,7 @@ public class LocalFolderProcessor
             // A source copied verbatim needs its exact bytes; an anonymized
             // copy is re-emitted from the decoded file instead.
             retainBytes: !anonymize,
-            stage: (decoded, fileName) => (Source: decoded, Rows: filtering.IterateFile(decoded.File, fileName).ToList()),
+            stage: (decoded, fileName, state) => (Source: decoded, Rows: filtering.IterateFile(decoded.File, fileName, state).ToList()),
             commit: async (staged, file) =>
             {
                 foreach (var row in staged.Rows)
@@ -799,7 +852,7 @@ public class LocalFolderProcessor
             // considers the problem slide, then advances to the solution
             // slide for the answer. The diagram orders and scores the
             // candidates by the ranking the decision was just filtered under.
-            stage: (decoded, fileName) => filtering.IterateFileDiagrams(decoded.File, fileName)
+            stage: (decoded, fileName, state) => filtering.IterateFileDiagrams(decoded.File, fileName, state)
                 .Select(item => DiagramRequest.ForDecision(item, _ranking).ToProblemSolutionPair())
                 .ToList(),
             commit: (pairs, _) =>
@@ -840,16 +893,13 @@ public class LocalFolderProcessor
     /// <summary>
     /// Why a deck run has nothing to render, in Hal's wording (chat,
     /// 2026-10-23, halheinrich/backgammon#399). The filter is blamed only when
-    /// every file was read — the panel's own rule for its zero-match notice: a
-    /// skipped file may have held the decisions, so with skips the message
-    /// says files were skipped, and the skip record says why.
+    /// the record is empty — the panel's own rule for its zero-match notice: a
+    /// skipped unit may have held the decisions, so with any entry the message
+    /// says what was skipped, and the skip record says why.
     /// </summary>
-    private static string NothingToRender(SkipRecord skips) => skips.FileCount switch
-    {
-        0 => "No decisions matched the filter — nothing to render.",
-        1 => "No decisions to render — 1 file was skipped; see the list below.",
-        var files => $"No decisions to render — {files} files were skipped; see the list below.",
-    };
+    private static string NothingToRender(SkipRecord skips) => skips.IsEmpty
+        ? "No decisions matched the filter — nothing to render."
+        : $"No decisions to render — {skips.CountPhrase} {(skips.Count == 1 ? "was" : "were")} skipped; see the list below.";
 
     /// <summary>
     /// One run's progress: the snapshots it reports, each read off the run's

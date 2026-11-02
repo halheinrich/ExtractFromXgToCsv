@@ -118,8 +118,17 @@ public class LocalFolderProcessorDeckPreparationTests : IDisposable
         Assert.True(lastProgress!.Complete);
         Assert.True(lastProgress.TotalRows > 0);
 
-        // Rows > 0 alone would pass with files dropped; nothing in the
-        // fixture folder may be skipped (halheinrich/backgammon#223).
-        Assert.Empty(lastProgress.Skipped);
+        // Rows > 0 alone would pass with files dropped; no file in the
+        // fixture folder may be skipped (halheinrich/backgammon#223). What the
+        // walk left out of the files it read is listed beside that: the games
+        // of Hal's three files (halheinrich/backgammon#514).
+        Assert.Equal(0, lastProgress.Skipped.FileCount);
+        Assert.Equal(0, lastProgress.Skipped.DecisionCount);
+        Assert.Equal(5, lastProgress.Skipped.GameCount);
+        Assert.Equal(
+            ["2024-07-03_Jonathan_Hardigree_vs_Michael_Mesich_29046.xg",
+             "2024-11-30_Johan_Norberg_vs_Konrad_Fröschl_34083.xg",
+             "MTCH2987.xg"],
+            lastProgress.Skipped.Select(skip => skip.FileName).Distinct());
     }
 }
