@@ -342,8 +342,8 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [MemberData(nameof(Pathways))]
     public async Task TwoFilesWithOmissions_AreEntriesInWalkOrder_AndNothingLeaksBetweenFiles(Pathway pathway)
     {
-        // A clean file between the two: a state kept across files would hand
-        // it, or the last, the first file's omissions.
+        // Each file's entries come in walk order, and the clean file between
+        // them adds none.
         var first = SyntheticXg.WithCorruptCandidate(
             SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1), game: 2, move: 1);
         var last = SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 2);
