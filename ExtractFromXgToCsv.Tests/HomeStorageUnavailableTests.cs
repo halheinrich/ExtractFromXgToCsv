@@ -116,7 +116,7 @@ public class HomeStorageUnavailableTests : BunitContext
 
         var cut = this.RenderHome();
 
-        Assert.Equal(RuledWording, Normalize(TheNotice(cut).Content.TextContent));
+        Assert.Equal(RuledWording, NoticeTesting.Normalize(TheNotice(cut).Content.TextContent));
         _storage.Verify();
     }
 
@@ -361,9 +361,4 @@ public class HomeStorageUnavailableTests : BunitContext
         TheNotice(secondVisit);
         _storage.Verify();
     }
-
-    // Collapses the markup's line breaks and indentation into the single
-    // spaces a reader sees.
-    private static string Normalize(string text) =>
-        string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

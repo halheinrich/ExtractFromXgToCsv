@@ -39,6 +39,13 @@ internal static class NoticeTesting
     public static TimeSpan OperationBound { get; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Collapses the markup's line breaks and indentation into the single
+    /// spaces a reader sees.
+    /// </summary>
+    public static string Normalize(string text) =>
+        string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
     /// Dismisses <paramref name="box"/> by <paramref name="gesture"/>, then
     /// waits until the dispatcher has run the dismissal.
     /// </summary>

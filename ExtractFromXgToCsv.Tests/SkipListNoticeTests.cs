@@ -106,35 +106,36 @@ public class SkipListNoticeTests : BunitContext
     /// A walk's omission is one line, the rule owner's own refusal; a failure's
     /// message may not be. So the file's reason here is a real failure message
     /// that holds a line break, and the game's is a real omission's text from
-    /// the walk. Each stays one list item, whole, with nothing after it.
+    /// the walk, and so is an omitted decision's, which has no id and so
+    /// renders none. Each stays one list item, whole, with nothing after it.
     /// </summary>
     [Fact]
     public void AFailuresMessageWithALineBreak_AndAnOmissionsLine_AreEachOneListItem_Whole()
     {
         var failure = new ArgumentOutOfRangeException("away1", -1, "Away must be positive.").Message;
         Assert.Contains('\n', failure);
-        var omission = Assert.Single(WalkOmissions.Of(
+        var game = Assert.Single(WalkOmissions.Of(
             XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 1), 1), "match.xg"));
-        Assert.DoesNotContain('\n', omission);
+        var decision = Assert.Single(WalkOmissions.Of(
+            XgFileEdits.WithCorruptCandidate(SyntheticXg.Match(games: 1, moves: 2), game: 1, move: 1), "match.xg"));
+        Assert.DoesNotContain('\n', game);
+        Assert.DoesNotContain('\n', decision);
         var file = Path.Combine("club", "match.xg");
         SkipRecord record =
         [
             SkippedItem.ForFile(file, failure),
-            SkippedItem.ForGame(file, omission),
+            SkippedItem.ForGame(file, game),
+            SkippedItem.ForDecision(file, decisionId: null, decision),
         ];
 
         var cut = Render<SkipListNotice>(p => p.Add(c => c.Record, record));
 
         var items = NoticeBox.ByMarkerClass(cut, "skipped-notice").Content.QuerySelectorAll("li");
-        Assert.Equal(2, items.Length);
-        Assert.Equal($"{file} — {Normalize(failure)}", Normalize(items[0].TextContent));
-        Assert.Equal($"{file} — {omission}", Normalize(items[1].TextContent));
+        Assert.Equal(3, items.Length);
+        Assert.Equal($"{file} — {NoticeTesting.Normalize(failure)}", NoticeTesting.Normalize(items[0].TextContent));
+        Assert.Equal($"{file} — {game}", NoticeTesting.Normalize(items[1].TextContent));
+        Assert.Equal($"{file} — {decision}", NoticeTesting.Normalize(items[2].TextContent));
     }
-
-    // Collapses the markup's line breaks and indentation into the single
-    // spaces a reader sees (as HomeStorageUnavailableTests does).
-    private static string Normalize(string text) =>
-        string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     [Fact]
     public void Label_NamesTheListsOwner_AboveTheHeadline()
