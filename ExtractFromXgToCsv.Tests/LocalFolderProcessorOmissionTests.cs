@@ -3,6 +3,7 @@ using BgDataTypes_Lib;
 using BgDataTypes_Lib.TestSupport;
 using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
+using ConvertXgToJson_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.Extensions.Logging;
@@ -154,7 +155,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [MemberData(nameof(Pathways))]
     public async Task ARefusedGame_BetweenValidOnes_IsOneGameEntry_AndTheGamesAroundItKeepTheirIdentifiers(Pathway pathway)
     {
-        var file = SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 3), 2);
+        var file = XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 3), 2);
         Write(Nested, file);
         var record = new RunRecord();
         var progress = new RecordingProgress();
@@ -185,7 +186,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [MemberData(nameof(Pathways))]
     public async Task ACorruptCandidate_IsOneDecisionEntryWithNoId_AndTheDecisionsAroundItStay(Pathway pathway)
     {
-        var file = SyntheticXg.WithCorruptCandidate(SyntheticXg.Match(games: 2, moves: 3), game: 1, move: 2);
+        var file = XgFileEdits.WithCorruptCandidate(SyntheticXg.Match(games: 2, moves: 3), game: 1, move: 2);
         Write(Nested, file);
         var record = new RunRecord();
 
@@ -251,7 +252,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [MemberData(nameof(PathwaysThatCompleteAtZero))]
     public async Task EveryGameOmitted_CompletesAtZero_AndTheEntriesSurvive(Pathway pathway)
     {
-        Write(Nested, SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
+        Write(Nested, XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
         var record = new RunRecord();
         var progress = new RecordingProgress();
 
@@ -268,7 +269,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [Fact]
     public async Task EveryGameOmitted_FailsTheDeck_SayingSo_WithTheEntriesOnItsRecord()
     {
-        Write(Nested, SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
+        Write(Nested, XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
         var record = new RunRecord();
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(Pathway.Deck, record));
@@ -292,9 +293,9 @@ public class LocalFolderProcessorOmissionTests : IDisposable
         // one-move game holds the corrupt decision when both are asked for.
         var file = SyntheticXg.Match(games: refusedGames + corruptDecisions, moves: 1);
         if (corruptDecisions > 0)
-            file = SyntheticXg.WithCorruptCandidate(file, game: refusedGames + 1, move: 1);
+            file = XgFileEdits.WithCorruptCandidate(file, game: refusedGames + 1, move: 1);
         if (refusedGames > 0)
-            file = SyntheticXg.WithRefusedGames(file, 1);
+            file = XgFileEdits.WithRefusedGames(file, 1);
         Write(Bare, file);
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(Pathway.Deck));
@@ -315,8 +316,8 @@ public class LocalFolderProcessorOmissionTests : IDisposable
         builder.AddGame().WithMoves(2);
         builder.AddGame(score1: 1).WithMoves(2);
         builder.AddGame().WithMoves(2);
-        var file = SyntheticXg.WithRefusedGames(
-            SyntheticXg.WithCorruptCandidate(builder.Build(), game: 2, move: 1), 3);
+        var file = XgFileEdits.WithRefusedGames(
+            XgFileEdits.WithCorruptCandidate(builder.Build(), game: 2, move: 1), 3);
         Write(Nested, file);
         var filter = new FilterConfig { MatchScores = { "5a5a" } }.Build();
 
@@ -344,9 +345,9 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     {
         // Each file's entries come in walk order, and the clean file between
         // them adds none.
-        var first = SyntheticXg.WithCorruptCandidate(
-            SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1), game: 2, move: 1);
-        var last = SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 2);
+        var first = XgFileEdits.WithCorruptCandidate(
+            XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1), game: 2, move: 1);
+        var last = XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 2);
         Write("a.xg", first);
         Write("b.xg", SyntheticXg.Match(games: 1));
         Write(Path.Combine("c", "z.xg"), last);
@@ -373,7 +374,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     {
         // The filter's first call is the first decision after a's refused
         // game, so a's stage fails having omitted it.
-        Write("a.xg", SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
+        Write("a.xg", XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
         Write("b.xg", SyntheticXg.Match(games: 1));
         var record = new RunRecord();
 
@@ -389,7 +390,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [MemberData(nameof(Pathways))]
     public async Task ACancellationOutOfAStage_LeavesTheFilesOmissions_AndIsNoSkip(Pathway pathway)
     {
-        Write("a.xg", SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
+        Write("a.xg", XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
         var record = new RunRecord();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RunAsync(
@@ -404,8 +405,8 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     {
         // The stop lands inside a's conversion, so a is committed and the walk
         // sees the stop before b, whose omission is never found.
-        Write("a.xg", SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
-        Write("b.xg", SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 2));
+        Write("a.xg", XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
+        Write("b.xg", XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 2));
         var record = new RunRecord();
         using var cts = new CancellationTokenSource();
 
@@ -423,7 +424,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     {
         // XGP commits inside the walk, so this fails while that file's commit
         // is under way: its omissions reached the record before it began.
-        Write(Nested, SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
+        Write(Nested, XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
         var record = new RunRecord();
         var destination = new ScriptedDestination { FailWriteOf = "pos001.xgp" };
 
@@ -438,7 +439,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [Fact]
     public async Task AFailedWriteAfterTheWalk_LeavesTheOmissionsOnTheFailedSnapshot()
     {
-        Write(Nested, SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
+        Write(Nested, XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1));
         var record = new RunRecord();
         var destination = new ScriptedDestination { FailWriteOf = "out.json" };
 
@@ -454,8 +455,8 @@ public class LocalFolderProcessorOmissionTests : IDisposable
     [MemberData(nameof(Pathways))]
     public async Task EachOmission_IsOneWarning_FromTheIteratorsLogger_AndNoneFromTheProcessors(Pathway pathway)
     {
-        Write(Bare, SyntheticXg.WithCorruptCandidate(
-            SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1), game: 2, move: 1));
+        Write(Bare, XgFileEdits.WithCorruptCandidate(
+            XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1), game: 2, move: 1));
         var record = new RunRecord();
 
         await RunAsync(pathway, record);

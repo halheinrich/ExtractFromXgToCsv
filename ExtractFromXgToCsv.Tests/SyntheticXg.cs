@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json.Nodes;
 using BgDataTypes_Lib;
 using ConvertXgToJson_Lib;
 using ConvertXgToJson_Lib.Models;
@@ -9,10 +7,9 @@ namespace ExtractFromXgToCsv.Tests;
 /// <summary>
 /// The inputs the omission tests need, synthesized through the producer's
 /// public builder and written as the <c>.xg</c> bytes a run reads, so they
-/// depend on nothing in <c>TestData</c>. XgFilter_Lib.Tests'
-/// <c>SyntheticSources</c> is the worked form: a refused game and a corrupt
-/// candidate have no public builder door, which is rightly so, and are made by
-/// editing a built file's JSON document and reading it back.
+/// depend on nothing in <c>TestData</c>. A refused game and a corrupt candidate
+/// have no public builder door, which is rightly so; <c>XgFileEdits</c>, in
+/// ConvertXgToJson_Lib.TestSupport, makes them from a built file.
 /// </summary>
 internal static class SyntheticXg
 {
@@ -85,56 +82,10 @@ internal static class SyntheticXg
         return builder.Build();
     }
 
-    /// <summary>
-    /// <paramref name="file"/> with the 1-based <paramref name="games"/>'
-    /// headers saying player 1 has already won the match, a standing the
-    /// session refuses, so the walk omits each of those games whole and keeps
-    /// the numbers of the rest.
-    /// </summary>
-    public static XgFile WithRefusedGames(XgFile file, params int[] games) => Edited(file, records =>
-    {
-        var headers = records.Where(record => TypeOf(record) == "HeaderGame").ToList();
-        int length = (int)records.Single(record => TypeOf(record) == "HeaderMatch")!["matchLength"]!;
-        foreach (int game in games)
-            headers[game - 1]!["score1"] = length;
-    });
-
-    /// <summary>
-    /// <paramref name="file"/> with the first candidate of the 1-based
-    /// <paramref name="move"/> of the 1-based <paramref name="game"/> opening
-    /// from the 2-point, where the opening has no checker, so the walk omits
-    /// that move and keeps the decisions around it.
-    /// </summary>
-    public static XgFile WithCorruptCandidate(XgFile file, int game, int move) => Edited(file, records =>
-    {
-        var header = records.Where(record => TypeOf(record) == "HeaderGame").ElementAt(game - 1);
-        var candidate = records
-            .SkipWhile(record => record != header)
-            .Skip(1)
-            .TakeWhile(record => TypeOf(record) != "HeaderGame")
-            .Where(record => TypeOf(record) == "Move")
-            .ElementAt(move - 1)!["analysis"]!["moves"]![0]!;
-        candidate[0] = 1;
-        candidate[1] = 0;
-    });
-
     /// <summary>Writes <paramref name="file"/> as an <c>.xg</c> at <paramref name="path"/>, creating its folder if needed.</summary>
     public static void Write(string path, XgFile file)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, XgFileWriter.ToBytes(file));
     }
-
-    /// <summary><paramref name="file"/> with <paramref name="edit"/> applied to its JSON document's records, read back.</summary>
-    private static XgFile Edited(XgFile file, Action<JsonArray> edit)
-    {
-        var document = JsonNode.Parse(XgFileReader.ToJson(file))!;
-        edit(document["records"]!.AsArray());
-
-        var edited = new MemoryStream(Encoding.UTF8.GetBytes(document.ToJsonString()));
-        return XgSourceReader.ReadStream("edited.json", edited, XgSourceFormat.Json)
-            .Match(decoded => decoded.File, failed => throw failed.Exception);
-    }
-
-    private static string? TypeOf(JsonNode? record) => (string?)record!["$type"];
 }

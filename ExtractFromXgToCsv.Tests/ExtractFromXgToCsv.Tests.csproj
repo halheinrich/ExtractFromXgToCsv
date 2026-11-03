@@ -59,6 +59,11 @@
          unsupported on the browser platform, so the Client could not use it
          even by mistake, and no app-graph project references it. -->
     <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib.TestSupport\BgDataTypes_Lib.TestSupport.csproj" />
+    <!-- ConvertXgToJson_Lib's test-support assembly (halheinrich/backgammon#514):
+         XgFileEdits, the malformed-file edits (a refused game, a corrupt
+         candidate), so no test here edits a file's JSON document itself. Test
+         projects only, like the references above. -->
+    <ProjectReference Include="..\..\ConvertXgToJson_Lib\ConvertXgToJson_Lib.TestSupport\ConvertXgToJson_Lib.TestSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>

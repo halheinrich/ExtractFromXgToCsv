@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using ConvertXgToJson_Lib.TestSupport;
 using ExtractFromXgToCsv.Client.Shared;
 using ExtractFromXgToCsv.Services;
 using Microsoft.AspNetCore.Hosting;
@@ -113,7 +114,7 @@ public class ProcessEndpointTests : IDisposable
     {
         SyntheticXg.Write(
             Path.Combine(_folder, "club", "match.xg"),
-            SyntheticXg.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
+            XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 2), 1, 2));
 
         var terminal = await RunToTerminalAsync(new ProcessRequest
         {
