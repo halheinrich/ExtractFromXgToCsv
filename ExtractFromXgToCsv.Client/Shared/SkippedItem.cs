@@ -82,9 +82,9 @@ public sealed record SkippedItem
     public DecisionId? DecisionId { get; }
 
     /// <summary>
-    /// Why it was skipped: the message of the failure that skipped it, or what
-    /// the walk says of its omission, whole. Text for a reader, which can hold
-    /// a line break; nothing parses it.
+    /// Why it was skipped. For a failure, its message, which can hold a line
+    /// break; for an omission, what <c>XgOmission.ToString</c> says (see its
+    /// doc for what the text is). Text for a reader; nothing parses it.
     /// </summary>
     public string Reason { get; }
 }

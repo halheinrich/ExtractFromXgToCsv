@@ -1,6 +1,7 @@
 using BgUiPrimitives_Razor;
 using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
+using ConvertXgToJson_Lib.TestSupport;
 using ExtractFromXgToCsv.Client;
 using ExtractFromXgToCsv.Client.Components;
 using ExtractFromXgToCsv.Client.Shared;
@@ -102,32 +103,38 @@ public class SkipListNoticeTests : BunitContext
     }
 
     /// <summary>
-    /// A refused standing's reason is the exception's whole message, which runs
-    /// to two lines (Hal's ruling, "C: keep full message"). It stays one list
-    /// item, with nothing of it dropped.
+    /// A walk's omission is one line, the rule owner's own refusal; a failure's
+    /// message may not be. So the file's reason here is a real failure message
+    /// that holds a line break, and the game's is a real omission's text from
+    /// the walk. Each stays one list item, whole, with nothing after it.
     /// </summary>
     [Fact]
-    public void AReasonWithALineBreak_IsOneListItem_AndKeepsAllOfItsText()
+    public void AFailuresMessageWithALineBreak_AndAnOmissionsLine_AreEachOneListItem_Whole()
     {
-        const string Reason = "Invalid standing in match.xg, game 1: refused. (Parameter 'Away1')\r\nActual value was -1.";
+        var failure = new ArgumentOutOfRangeException("away1", -1, "Away must be positive.").Message;
+        Assert.Contains('\n', failure);
+        var omission = Assert.Single(WalkOmissions.Of(
+            XgFileEdits.WithRefusedGames(SyntheticXg.Match(games: 1), 1), "match.xg"));
+        Assert.DoesNotContain('\n', omission);
+        var file = Path.Combine("club", "match.xg");
         SkipRecord record =
         [
-            SkippedItem.ForGame(Path.Combine("club", "match.xg"), Reason),
-            SkippedItem.ForDecision(Path.Combine("club", "match.xg"), decisionId: null, "Corrupt candidate in match.xg, game 2, move 1, roll 31: bad."),
+            SkippedItem.ForFile(file, failure),
+            SkippedItem.ForGame(file, omission),
         ];
 
         var cut = Render<SkipListNotice>(p => p.Add(c => c.Record, record));
 
         var items = NoticeBox.ByMarkerClass(cut, "skipped-notice").Content.QuerySelectorAll("li");
         Assert.Equal(2, items.Length);
-        Assert.Contains(Path.Combine("club", "match.xg"), items[0].QuerySelector("code")!.TextContent);
-        Assert.Contains("(Parameter 'Away1')", items[0].TextContent);
-        Assert.Contains("Actual value was -1.", items[0].TextContent);
-        Assert.Contains("Corrupt candidate", items[1].TextContent);
-
-        // An omitted decision was never built, so it renders no id.
-        Assert.Equal(1, items[1].QuerySelectorAll("code").Length);
+        Assert.Equal($"{file} — {Normalize(failure)}", Normalize(items[0].TextContent));
+        Assert.Equal($"{file} — {omission}", Normalize(items[1].TextContent));
     }
+
+    // Collapses the markup's line breaks and indentation into the single
+    // spaces a reader sees (as HomeStorageUnavailableTests does).
+    private static string Normalize(string text) =>
+        string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     [Fact]
     public void Label_NamesTheListsOwner_AboveTheHeadline()

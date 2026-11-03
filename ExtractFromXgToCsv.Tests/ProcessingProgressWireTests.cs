@@ -31,8 +31,8 @@ public class ProcessingProgressWireTests
             TotalRows = 7,
             Skipped =
             [
-                SkippedItem.ForFile("bad.xg", "Not a valid XG file."),
-                SkippedItem.ForGame("match.xg", "Invalid standing in match.xg, game 1: refused.\r\nActual value was 0."),
+                SkippedItem.ForFile("bad.xg", "Not a valid XG file.\r\nThe header ends at byte 12."),
+                SkippedItem.ForGame("match.xg", "Invalid standing in match.xg, game 1: A player in a match needs ... The standing is 19-away/19-away. The match length is 17."),
                 SkippedItem.ForDecision(
                     "match.xg", new XgDecisionId("match.xg", 2, 14, IsCube: false), "Disk full."),
                 SkippedItem.ForDecision("match.xg", decisionId: null, "Corrupt candidate in match.xg, game 3, move 1, roll 31: bad."),

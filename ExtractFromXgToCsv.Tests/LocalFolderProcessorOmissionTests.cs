@@ -139,15 +139,7 @@ public class LocalFolderProcessorOmissionTests : IDisposable
         SyntheticXg.Write(Path.Combine(_folder, relativePath), file);
 
     /// <summary>What the producer says of <paramref name="file"/>, read directly: an entry's reason is this, whole.</summary>
-    private static IReadOnlyList<string> OmissionsOf(XgFile file)
-    {
-        var state = new XgIteratorState();
-        _ = new FilteredDecisionIterator(
-                new DecisionFilterSet(), AppRanking.Ranking, NullLogger<FilteredDecisionIterator>.Instance)
-            .IterateFile(file, Bare, state)
-            .ToList();
-        return [.. state.Omissions.Select(omission => omission.ToString())];
-    }
+    private static IReadOnlyList<string> OmissionsOf(XgFile file) => WalkOmissions.Of(file, Bare);
 
     // ── A refused game ──────────────────────────────────────────────────────
 
